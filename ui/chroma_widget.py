@@ -3,14 +3,168 @@
 from __future__ import annotations
 
 from collections import deque
+import math
+import re
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from analysis.chroma import PITCH_CLASSES
 from audio.metronome import TapTempoTracker
 from core.models import AnalysisSnapshot
+
+
+_FLAT_TO_SHARP = {
+    "DB": "C#",
+    "EB": "D#",
+    "FB": "E",
+    "GB": "F#",
+    "AB": "G#",
+    "BB": "A#",
+    "E#": "F",
+    "B#": "C",
+    "CB": "B",
+}
+
+_CHORD_INTERVALS: dict[str, tuple[int, ...]] = {
+    "": (0, 4, 7),
+    "maj": (0, 4, 7),
+    "m": (0, 3, 7),
+    "min": (0, 3, 7),
+    "maj7": (0, 4, 7, 11),
+    "m7": (0, 3, 7, 10),
+    "min7": (0, 3, 7, 10),
+    "7": (0, 4, 7, 10),
+    "sus4": (0, 5, 7),
+    "sus2": (0, 2, 7),
+    "dim": (0, 3, 6),
+    "aug": (0, 4, 8),
+}
+
+_CHORD_RE = re.compile(r"^([A-Ga-g])([#b♯♭]?)(.*)$")
+
+
+def spell_chord_tones(chord_name: str) -> str:
+    """Return chromatic note spelling (e.g. `'A · C · E'`) for detected chord symbols, or `'-'`."""
+    raw = (chord_name or "").strip()
+    if not raw or raw in ("-", "N", "N (静音)", "Unknown", "结束"):
+        return "-"
+    base = raw.split("/", 1)[0].strip()
+    m = _CHORD_RE.match(base)
+    if not m:
+        return "-"
+    letter = m.group(1).upper()
+    acc = m.group(2).replace("♯", "#").replace("♭", "b")
+    suffix = (m.group(3) or "").strip()
+
+    token = letter + acc
+    norm_root = _FLAT_TO_SHARP.get(token.upper(), token)
+    if norm_root not in PITCH_CLASSES:
+        return "-"
+
+    intervals = _CHORD_INTERVALS.get(suffix)
+    if intervals is None:
+        intervals = _CHORD_INTERVALS.get(suffix.lower())
+    if intervals is None:
+        return "-"
+
+    root_idx = PITCH_CLASSES.index(norm_root)
+    return " · ".join(PITCH_CLASSES[(root_idx + iv) % 12] for iv in intervals)
+
+
+class TuningCentsBar(QtWidgets.QWidget):
+    """Lightweight horizontal -50c..+50c pitch-accuracy needle indicator for instrument/vocal tuning."""
+
+    COLOR_IN_TUNE = "#2EC27E"
+    COLOR_SLIGHT = "#F5A623"
+    COLOR_OFF = "#FF6B6B"
+    COLOR_IDLE = "#5A6370"
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._has_signal: bool = False
+        self._cents: float = 0.0
+        self.setFixedHeight(18)
+        self.setMinimumWidth(140)
+        self.setToolTip("实时主音高音准偏离条 (-50 ~ +50 cents；绿色 ±10c 为准音区间)")
+
+    @property
+    def has_signal(self) -> bool:
+        return self._has_signal
+
+    @property
+    def cents_offset(self) -> float:
+        return self._cents
+
+    @property
+    def zone_color(self) -> str:
+        if not self._has_signal:
+            return self.COLOR_IDLE
+        ac = abs(self._cents)
+        if ac <= 10.0:
+            return self.COLOR_IN_TUNE
+        if ac <= 25.0:
+            return self.COLOR_SLIGHT
+        return self.COLOR_OFF
+
+    def set_pitch(self, frequency_hz: float | None, cents_offset: float = 0.0) -> None:
+        if frequency_hz is None:
+            self._has_signal = False
+            self._cents = 0.0
+            self.update()
+            return
+        freq = float(frequency_hz)
+        if not math.isfinite(freq) or freq <= 0.0:
+            self._has_signal = False
+            self._cents = 0.0
+            self.update()
+            return
+        cents = float(cents_offset)
+        if not math.isfinite(cents):
+            cents = 0.0
+        self._has_signal = True
+        self._cents = max(-50.0, min(50.0, cents))
+        self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        rect = self.rect()
+        if rect.width() <= 6 or rect.height() <= 4:
+            return
+
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+
+        pad = 6
+        track = QtCore.QRectF(pad, 3.0, max(1.0, rect.width() - 2 * pad), max(4.0, rect.height() - 6.0))
+        p.setPen(QtGui.QPen(QtGui.QColor("#2C323C"), 1.0))
+        p.setBrush(QtGui.QColor("#1C2026"))
+        p.drawRoundedRect(track, 4.0, 4.0)
+
+        # Green center ±10 cents band
+        band_w = track.width() * 0.20
+        center_x = track.center().x()
+        band_rect = QtCore.QRectF(center_x - band_w * 0.5, track.top() + 1.0, band_w, max(2.0, track.height() - 2.0))
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
+        p.setBrush(QtGui.QColor(46, 194, 126, 48))
+        p.drawRect(band_rect)
+
+        # Center 0c tick & side ticks
+        p.setPen(QtGui.QPen(QtGui.QColor("#9AA4B2"), 1.0))
+        p.drawLine(QtCore.QPointF(center_x, track.top() + 1.0), QtCore.QPointF(center_x, track.bottom() - 1.0))
+
+        if self._has_signal:
+            ratio = (self._cents + 50.0) / 100.0
+            nx = track.left() + ratio * track.width()
+            col = QtGui.QColor(self.zone_color)
+            p.setPen(QtGui.QPen(col, 2.0))
+            p.drawLine(QtCore.QPointF(nx, track.top() + 1.0), QtCore.QPointF(nx, track.bottom() - 1.0))
+            p.setBrush(col)
+            p.setPen(QtCore.Qt.PenStyle.NoPen)
+            p.drawEllipse(QtCore.QPointF(nx, track.center().y()), 4.0, 4.0)
+
+        p.end()
 
 
 class ChromaAndHarmonyWidget(QtWidgets.QWidget):
@@ -21,6 +175,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     metronome_beats_changed = QtCore.Signal(int)
     metronome_overlay_toggled = QtCore.Signal(bool)
     metronome_standalone_toggled = QtCore.Signal(bool)
+    metronome_count_in_toggled = QtCore.Signal(bool)
+    metronome_volume_changed = QtCore.Signal(float)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -38,9 +194,12 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         chord_l = QtWidgets.QVBoxLayout(chord_box)
         self.chord_primary_lbl = QtWidgets.QLabel("N (静音)")
         self.chord_primary_lbl.setStyleSheet("font-size: 24px; font-weight: 700; color: #7EE2B8;")
+        self.chord_tones_lbl = QtWidgets.QLabel("构成音: -")
+        self.chord_tones_lbl.setStyleSheet("color: #B8C2D0; font-weight: 600;")
         self.chord_secondary_lbl = QtWidgets.QLabel("第二候选: -")
         self.chord_stability_lbl = QtWidgets.QLabel("稳定度: Silent | 相关度: 0.00")
         chord_l.addWidget(self.chord_primary_lbl)
+        chord_l.addWidget(self.chord_tones_lbl)
         chord_l.addWidget(self.chord_secondary_lbl)
         chord_l.addWidget(self.chord_stability_lbl)
         cards.addWidget(chord_box, 1)
@@ -71,6 +230,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.bpm_lbl.setStyleSheet("font-size: 22px; font-weight: 700; color: #FFD166;")
         self.bpm_stab_lbl = QtWidgets.QLabel("节拍稳定度: Unknown")
         self.pitch_lbl = QtWidgets.QLabel("主音高: -")
+        self.tuning_bar = TuningCentsBar()
 
         met_row = QtWidgets.QHBoxLayout()
         self.tap_tempo_btn = QtWidgets.QPushButton("Tap 定速")
@@ -101,18 +261,36 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.metronome_overlay_chk.setToolTip("在 A/B 回放或分轨混音（含变速练习）中混入同步节拍器 Click")
         self.metronome_overlay_chk.toggled.connect(self.metronome_overlay_toggled.emit)
 
+        self.metronome_count_in_chk = QtWidgets.QCheckBox("预备拍 (1小节)")
+        self.metronome_count_in_chk.setToolTip("开始 A/B 回放或分轨混音前，先打一小节纯 CPU 预备拍再进入音乐")
+        self.metronome_count_in_chk.toggled.connect(self.metronome_count_in_toggled.emit)
+
         self.metronome_standalone_btn = QtWidgets.QPushButton("独立节拍器")
         self.metronome_standalone_btn.setCheckable(True)
         self.metronome_standalone_btn.setToolTip("单独播放纯 CPU 节拍器 Click 用于跟练（播放 A/B 或分轨时会自动切回随播模式）")
         self.metronome_standalone_btn.toggled.connect(self.metronome_standalone_toggled.emit)
 
+        self.metronome_vol_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.metronome_vol_slider.setRange(0, 150)
+        self.metronome_vol_slider.setValue(70)
+        self.metronome_vol_slider.setMinimumWidth(80)
+        self.metronome_vol_slider.setMaximumWidth(120)
+        self.metronome_vol_slider.setToolTip("调节练习节拍器（含预备拍/独立/随播）Click 音量 (0% - 150%)")
+        self.metronome_vol_lbl = QtWidgets.QLabel("音量: 70%")
+        self.metronome_vol_lbl.setMinimumWidth(68)
+        self.metronome_vol_slider.valueChanged.connect(self._on_metronome_vol_slider_changed)
+
         met_row.addWidget(self.tap_tempo_btn)
         met_row.addWidget(self.adopt_bpm_btn)
         met_row.addWidget(self.metronome_bpm_spin)
         met_row.addWidget(self.metronome_sig_combo)
+
         met_row2 = QtWidgets.QHBoxLayout()
         met_row2.addWidget(self.metronome_overlay_chk)
+        met_row2.addWidget(self.metronome_count_in_chk)
         met_row2.addWidget(self.metronome_standalone_btn)
+        met_row2.addWidget(self.metronome_vol_slider)
+        met_row2.addWidget(self.metronome_vol_lbl)
         self.tap_status_lbl = QtWidgets.QLabel("")
         self.tap_status_lbl.setStyleSheet("color: #9AA4B2; font-size: 11px;")
         met_row2.addWidget(self.tap_status_lbl, 1)
@@ -120,6 +298,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         rhythm_l.addWidget(self.bpm_lbl)
         rhythm_l.addWidget(self.bpm_stab_lbl)
         rhythm_l.addWidget(self.pitch_lbl)
+        rhythm_l.addWidget(self.tuning_bar)
         rhythm_l.addLayout(met_row)
         rhythm_l.addLayout(met_row2)
         cards.addWidget(rhythm_box, 2)
@@ -192,7 +371,18 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.metronome_bpm_spin.setValue(round(self._latest_detected_bpm, 1))
             self.tap_status_lbl.setText(f"已同步 {self._latest_detected_bpm:.1f} BPM")
 
-    def sync_metronome_ui(self, *, overlay_enabled: bool | None = None, standalone_playing: bool | None = None) -> None:
+    def _on_metronome_vol_slider_changed(self, value: int) -> None:
+        self.metronome_vol_lbl.setText(f"音量: {int(value)}%")
+        self.metronome_volume_changed.emit(float(value) / 100.0)
+
+    def sync_metronome_ui(
+        self,
+        *,
+        overlay_enabled: bool | None = None,
+        standalone_playing: bool | None = None,
+        count_in_enabled: bool | None = None,
+        volume: float | None = None,
+    ) -> None:
         if overlay_enabled is not None:
             self.metronome_overlay_chk.blockSignals(True)
             self.metronome_overlay_chk.setChecked(bool(overlay_enabled))
@@ -202,6 +392,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.metronome_standalone_btn.setChecked(bool(standalone_playing))
             self.metronome_standalone_btn.setText("停止独立节拍器" if standalone_playing else "独立节拍器")
             self.metronome_standalone_btn.blockSignals(False)
+        if count_in_enabled is not None:
+            self.metronome_count_in_chk.blockSignals(True)
+            self.metronome_count_in_chk.setChecked(bool(count_in_enabled))
+            self.metronome_count_in_chk.blockSignals(False)
+        if volume is not None:
+            pct = max(0, min(150, int(round(float(volume) * 100.0))))
+            self.metronome_vol_slider.blockSignals(True)
+            self.metronome_vol_slider.setValue(pct)
+            self.metronome_vol_slider.blockSignals(False)
+            self.metronome_vol_lbl.setText(f"音量: {pct}%")
 
     def _on_reset_clicked(self) -> None:
         self.clear_progression()
@@ -215,6 +415,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.tap_status_lbl.setText("")
         self.chord_progression_lbl.setText("最近和弦进行 (最多 12 步): -")
         self.chord_primary_lbl.setText("N (静音)")
+        self.chord_tones_lbl.setText("构成音: -")
         self.chord_secondary_lbl.setText("第二候选: -")
         self.chord_stability_lbl.setText("稳定度: Silent | 相关度: 0.00")
         self.key_primary_lbl.setText("Unknown")
@@ -223,10 +424,13 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.bpm_lbl.setText("BPM: Unknown")
         self.bpm_stab_lbl.setText("节拍稳定度: Unknown")
         self.pitch_lbl.setText("主音高: -")
+        self.tuning_bar.set_pitch(None, 0.0)
 
     def update_analysis(self, snap: AnalysisSnapshot, chroma_history: np.ndarray | None = None) -> None:
         ch = snap.chord
         self.chord_primary_lbl.setText(ch.primary)
+        tones = "-" if ch.is_silent else spell_chord_tones(ch.primary)
+        self.chord_tones_lbl.setText(f"构成音: {tones}")
         self.chord_secondary_lbl.setText(f"第二候选: {ch.secondary}")
         self.chord_stability_lbl.setText(
             f"稳定度: {ch.stability} | 相关度: {ch.correlation:.2f} | 领先差值: {ch.margin:.2f}"
@@ -263,8 +467,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.pitch_lbl.setText(
                 f"主音高: {pt.note_name} ({pt.frequency_hz:.1f} Hz, {pt.cents_offset:+.1f} cents)"
             )
+            self.tuning_bar.set_pitch(pt.frequency_hz, pt.cents_offset)
         else:
             self.pitch_lbl.setText(f"主音高: {pt.note_name}")
+            self.tuning_bar.set_pitch(None, 0.0)
 
         if snap.chroma_12:
             self._bar_item.setOpts(height=np.asarray(snap.chroma_12, dtype=np.float32))

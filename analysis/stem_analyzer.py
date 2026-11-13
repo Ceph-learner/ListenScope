@@ -42,7 +42,8 @@ MAX_EVENTS_CAP = 2000
 
 
 def _midi_to_name(midi_num: int) -> str:
-    return f"{PITCH_CLASSES[midi_num % 12]}{(midi_num // 12) - 1}"
+    clamped = max(0, min(127, int(midi_num)))
+    return f"{PITCH_CLASSES[clamped % 12]}{(clamped // 12) - 1}"
 
 
 def _open_audio_reader(path: Path) -> tuple[str, object, int, int, int]:
@@ -256,6 +257,8 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
     cand_bins = np.arange(min_bin, max_bin + 1)
 
     for center_sec, frame in frames_iter:
+        if not np.all(np.isfinite(frame)):
+            frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         rms = float(np.sqrt(np.mean(np.square(frame))))
         if rms < 0.012:
             raw_obs.append((max(0.0, center_sec - hop_sec * 0.5), -1, 0.0, 0.0))
@@ -272,7 +275,7 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
         peak_val = float(score[rel_idx])
         med_val = float(np.median(score)) + 1e-9
         conf = min(1.0, max(0.0, (peak_val / med_val - 1.0) / 14.0))
-        if conf < 0.20:
+        if not np.isfinite(conf) or conf < 0.20:
             raw_obs.append((max(0.0, center_sec - hop_sec * 0.5), -1, 0.0, 0.0))
             continue
 
@@ -280,9 +283,10 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
         beta = peak_val
         gamma = float(score[rel_idx + 1]) if rel_idx + 1 < score.shape[0] else peak_val
         denom = alpha - 2.0 * beta + gamma
-        delta = 0.5 * (alpha - gamma) / denom if abs(denom) > 1e-9 else 0.0
+        raw_delta = 0.5 * (alpha - gamma) / denom if abs(denom) > 1e-9 else 0.0
+        delta = max(-0.5, min(0.5, raw_delta))
         freq = max(25.0, float((peak_bin + delta) * bin_hz))
-        midi = int(round(69.0 + 12.0 * np.log2(freq / 440.0)))
+        midi = max(0, min(127, int(round(69.0 + 12.0 * np.log2(freq / 440.0)))))
         raw_obs.append((max(0.0, center_sec - hop_sec * 0.5), midi, freq, conf))
 
     events = _coalesce_note_frames(raw_obs, hop_sec=hop_sec, min_note_duration_sec=0.08)
@@ -348,6 +352,8 @@ def _pick_band_onsets(
 
 
 def _estimate_offline_bpm_from_flux(flux: np.ndarray, rate_hz: float) -> TempoEstimate:
+    if flux.size > 0 and not np.all(np.isfinite(flux)):
+        flux = np.nan_to_num(flux, nan=0.0, posinf=0.0, neginf=0.0)
     if flux.size < max(16, int(round(1.8 * rate_hz))) or float(np.max(flux)) < 1e-4:
         return TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0)
     smoothed = np.convolve(flux, np.array([0.25, 0.5, 0.25], dtype=np.float32), mode="same")
@@ -369,15 +375,15 @@ def _estimate_offline_bpm_from_flux(flux: np.ndarray, rate_hz: float) -> TempoEs
     best_rel = int(np.argmax(weighted))
     best_lag = min_lag + best_rel
     raw_acf = float(acf[best_lag])
-    if raw_acf < 0.14:
-        return TempoEstimate(bpm=None, stability="Unknown", confidence_score=raw_acf)
+    if not np.isfinite(raw_acf) or raw_acf < 0.14:
+        return TempoEstimate(bpm=None, stability="Unknown", confidence_score=raw_acf if np.isfinite(raw_acf) else 0.0)
 
     refined = float(best_lag)
     if 0 < best_rel < weighted.shape[0] - 1:
         y0, y1, y2 = float(weighted[best_rel - 1]), float(weighted[best_rel]), float(weighted[best_rel + 1])
         denom = y0 - 2.0 * y1 + y2
         if abs(denom) > 1e-9:
-            refined += 0.5 * (y0 - y2) / denom
+            refined += max(-0.5, min(0.5, 0.5 * (y0 - y2) / denom))
     bpm = round(60.0 * rate_hz / max(1.0, refined), 1)
     stability = "High" if raw_acf >= 0.35 else ("Medium" if raw_acf >= 0.2 else "Low")
     return TempoEstimate(bpm=bpm, stability=stability, confidence_score=round(raw_acf, 3))
@@ -410,6 +416,8 @@ def analyze_drums_stem(drums_wav_path: Path | str, *, max_seconds: float = 120.0
     times: list[float] = []
 
     for center_sec, frame in frames_iter:
+        if not np.all(np.isfinite(frame)):
+            frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         mag = np.abs(np.fft.rfft(frame * win)).astype(np.float32)
         log_mag = np.log1p(mag)
         mk = log_mag[kick_mask]
@@ -492,18 +500,26 @@ def analyze_melody_stem(
 
     for center_sec, frame in frames_iter:
         total_frames += 1
+        if not np.all(np.isfinite(frame)):
+            frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         rms = float(np.sqrt(np.mean(np.square(frame))))
         t_start = max(0.0, center_sec - hop_sec * 0.5)
-        if rms < 0.01:
+        if not np.isfinite(rms) or rms < 0.01:
             raw_obs.append((t_start, -1, 0.0, 0.0))
             continue
         mag = np.abs(np.fft.rfft(frame * win)).astype(np.float32)
         p = est.estimate_from_magnitude(mag, is_silent=False)
-        if p.frequency_hz is None or p.confidence < 0.22 or p.frequency_hz < 75.0 or p.frequency_hz > 1450.0:
+        if (
+            p.frequency_hz is None
+            or not np.isfinite(p.frequency_hz)
+            or p.confidence < 0.22
+            or p.frequency_hz < 75.0
+            or p.frequency_hz > 1450.0
+        ):
             raw_obs.append((t_start, -1, 0.0, 0.0))
             continue
         voiced_frames += 1
-        midi = int(round(69.0 + 12.0 * np.log2(p.frequency_hz / 440.0)))
+        midi = max(0, min(127, int(round(69.0 + 12.0 * np.log2(p.frequency_hz / 440.0)))))
         raw_obs.append((t_start, midi, p.frequency_hz, p.confidence))
 
     events = _coalesce_note_frames(raw_obs, hop_sec=hop_sec, min_note_duration_sec=0.08)
@@ -561,13 +577,16 @@ def analyze_harmony_and_chords(
     raw_segments: list[ChordTimelineSegment] = []
 
     for idx, (center_sec, frame) in enumerate(frames_iter):
+        if not np.all(np.isfinite(frame)):
+            frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         rms = float(np.sqrt(np.mean(np.square(frame))))
-        is_silent = rms < 0.008
+        is_silent = (not np.isfinite(rms)) or rms < 0.008
         fft_mag, _fft_db, log_db = spec.analyze_frame(frame)
         c12 = chroma_ext.extract_from_magnitude(fft_mag, record_history=True, is_silent=is_silent)
 
-        mag_like = np.power(10.0, log_db / 20.0)
-        if prev_mag_like is None or is_silent:
+        log_safe = np.clip(np.nan_to_num(log_db, nan=-120.0, posinf=20.0, neginf=-120.0), -120.0, 20.0)
+        mag_like = np.power(10.0, log_safe / 20.0)
+        if prev_mag_like is None or is_silent or prev_mag_like.shape != mag_like.shape:
             flux_vals.append(0.0)
             prev_mag_like = None if is_silent else mag_like.astype(np.float32, copy=True)
         else:
@@ -722,29 +741,35 @@ def export_transcription_sheet(
     """Export chord progression, bass, drums groove, melody, and optional MIDI notes to Markdown or CSV."""
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out.with_name(out.name + ".tmp")
 
     if out.suffix.lower() == ".csv":
-        with out.open("w", newline="", encoding="utf-8-sig") as fh:
-            writer = csv.writer(fh)
-            writer.writerow(["section", "start_sec", "end_sec", "label", "detail_1", "detail_2", "confidence_or_corr"])
-            for seg in report.chord_timeline:
-                writer.writerow(["chord", seg.start_sec, seg.end_sec, seg.chord, seg.secondary, seg.stability, seg.correlation])
-            if report.bass is not None:
-                for n in report.bass.notes:
-                    writer.writerow(["bass", n.start_sec, n.end_sec, n.note_name, n.pitch_midi, f"{n.frequency_hz}Hz", n.confidence])
-            if report.drums is not None:
-                for t in report.drums.kick_times_sec:
-                    writer.writerow(["drum_kick", t, t, "Kick", "", "", ""])
-                for t in report.drums.snare_times_sec:
-                    writer.writerow(["drum_snare", t, t, "Snare", "", "", ""])
-                for t in report.drums.hihat_times_sec:
-                    writer.writerow(["drum_hihat", t, t, "HiHat", "", "", ""])
-            if report.melody is not None:
-                for n in report.melody.notes:
-                    writer.writerow(["melody", n.start_sec, n.end_sec, n.note_name, n.pitch_midi, f"{n.frequency_hz}Hz", n.confidence])
-            if midi_result is not None:
-                for n in midi_result.notes:
-                    writer.writerow(["midi", n.start_sec, n.end_sec, n.note_name, n.pitch_midi, f"vel={n.velocity}", n.confidence])
+        try:
+            with tmp_path.open("w", newline="", encoding="utf-8-sig") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["section", "start_sec", "end_sec", "label", "detail_1", "detail_2", "confidence_or_corr"])
+                for seg in report.chord_timeline:
+                    writer.writerow(["chord", seg.start_sec, seg.end_sec, seg.chord, seg.secondary, seg.stability, seg.correlation])
+                if report.bass is not None:
+                    for n in report.bass.notes:
+                        writer.writerow(["bass", n.start_sec, n.end_sec, n.note_name, n.pitch_midi, f"{n.frequency_hz}Hz", n.confidence])
+                if report.drums is not None:
+                    for t in report.drums.kick_times_sec:
+                        writer.writerow(["drum_kick", t, t, "Kick", "", "", ""])
+                    for t in report.drums.snare_times_sec:
+                        writer.writerow(["drum_snare", t, t, "Snare", "", "", ""])
+                    for t in report.drums.hihat_times_sec:
+                        writer.writerow(["drum_hihat", t, t, "HiHat", "", "", ""])
+                if report.melody is not None:
+                    for n in report.melody.notes:
+                        writer.writerow(["melody", n.start_sec, n.end_sec, n.note_name, n.pitch_midi, f"{n.frequency_hz}Hz", n.confidence])
+                if midi_result is not None:
+                    for n in midi_result.notes:
+                        writer.writerow(["midi", n.start_sec, n.end_sec, n.note_name, n.pitch_midi, f"vel={n.velocity}", n.confidence])
+            tmp_path.replace(out)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
         return out
 
     bpm_str = f"{report.estimated_bpm.bpm:.1f} ({report.estimated_bpm.stability})" if report.estimated_bpm.bpm else "Unknown"
@@ -827,5 +852,10 @@ def export_transcription_sheet(
         for n in midi_result.notes[:200]:
             lines.append(f"| `{n.note_name}` | {n.pitch_midi} | {n.start_sec:.2f} | {n.end_sec:.2f} | {n.velocity} |")
 
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp_path.replace(out)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return out

@@ -63,7 +63,11 @@ def inspect_wav_header(wav_path: Path | str, ai_config: Optional[AIConfig] = Non
             sw = int(wf.getsampwidth())
             nframes = int(wf.getnframes())
 
-    duration = nframes / float(max(1, sr))
+    sr = max(1, int(sr))
+    ch = max(1, int(ch))
+    sw = max(1, int(sw))
+    nframes = max(0, int(nframes))
+    duration = nframes / float(sr)
     exceeds = duration > cfg.default_max_history_ai_seconds
     chunk_bytes_f32 = int(cfg.long_audio_chunk_seconds * sr * ch * 4)
     note = (
@@ -191,6 +195,12 @@ def stream_chunked_separation(
             ch = int(in_wf.getnchannels())
             sw = int(in_wf.getsampwidth())
             total_frames = int(in_wf.getnframes())
+
+        sr = max(1, int(sr))
+        ch = max(1, int(ch))
+        total_frames = int(total_frames)
+        if total_frames <= 0:
+            raise ValueError(f"输入音频不包含有效音频帧 (frames={total_frames}): {src_path.name}")
 
         chunk_frames = max(sr, int(round(chunk_seconds * sr)))
         overlap_frames = max(0, min(chunk_frames // 4, int(round(overlap_seconds * sr))))

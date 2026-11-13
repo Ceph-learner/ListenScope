@@ -37,19 +37,30 @@ def normalize_to_canonical_pcm(
 
         dtype_key = src_dtype.lower()
         if dtype_key in ("float32", "f32"):
-            arr = np.frombuffer(data, dtype=np.float32)
+            usable_b = (len(data) // 4) * 4
+            if usable_b == 0:
+                return np.empty((0, dst_channels), dtype=np.float32)
+            arr = np.frombuffer(memoryview(data)[:usable_b], dtype=np.float32)
         elif dtype_key in ("int16", "s16"):
-            raw = np.frombuffer(data, dtype=np.int16)
+            usable_b = (len(data) // 2) * 2
+            if usable_b == 0:
+                return np.empty((0, dst_channels), dtype=np.float32)
+            raw = np.frombuffer(memoryview(data)[:usable_b], dtype=np.int16)
             arr = raw.astype(np.float32) / 32768.0
         elif dtype_key in ("int24", "s24"):
             raw_u8 = np.frombuffer(data, dtype=np.uint8)
             usable_b = (raw_u8.size // 3) * 3
+            if usable_b == 0:
+                return np.empty((0, dst_channels), dtype=np.float32)
             triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
             signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
             signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
             arr = signed.astype(np.float32) / 8388608.0
         elif dtype_key in ("int32", "s32"):
-            raw = np.frombuffer(data, dtype=np.int32)
+            usable_b = (len(data) // 4) * 4
+            if usable_b == 0:
+                return np.empty((0, dst_channels), dtype=np.float32)
+            raw = np.frombuffer(memoryview(data)[:usable_b], dtype=np.int32)
             arr = raw.astype(np.float32) / 2147483648.0
         else:
             raise ValueError(f"Unsupported src_dtype: {src_dtype}")
@@ -110,8 +121,13 @@ def compute_rms_and_peak(pcm_f32: np.ndarray) -> tuple[float, float, float, floa
     if pcm_f32.size == 0:
         return 0.0, DBFS_FLOOR, 0.0, DBFS_FLOOR
 
-    peak = float(np.max(np.abs(pcm_f32)))
-    rms = float(np.sqrt(np.mean(np.square(pcm_f32, dtype=np.float32))))
+    clean = pcm_f32 if np.all(np.isfinite(pcm_f32)) else np.nan_to_num(pcm_f32, nan=0.0, posinf=0.0, neginf=0.0)
+    peak = float(np.max(np.abs(clean)))
+    rms = float(np.sqrt(np.mean(np.square(clean, dtype=np.float32))))
+    if not np.isfinite(rms):
+        rms = 0.0
+    if not np.isfinite(peak):
+        peak = 0.0
 
     rms_db = float(20.0 * np.log10(max(rms, MIN_AMP)))
     peak_db = float(20.0 * np.log10(max(peak, MIN_AMP)))

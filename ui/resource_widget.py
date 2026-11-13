@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtWidgets
 
 from core.logging import PerformanceRecord
 from core.models import ResourceSnapshot, ResourceStatus
+from core.paths import default_export_dir
 
 
 def _status_badge_style(status: ResourceStatus) -> str:
@@ -131,7 +132,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "导出 ListenScope 诊断排障压缩包 (.zip)",
-            str(Path("exports") / f"listenscope_diag_{stamp}.zip"),
+            str(default_export_dir() / f"listenscope_diag_{stamp}.zip"),
             "ZIP Archives (*.zip)",
         )
         if file_path:

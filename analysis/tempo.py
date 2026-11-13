@@ -39,13 +39,14 @@ class TempoEstimator:
 
     def update(self, log_spectrum_db: np.ndarray, *, is_silent: bool) -> TempoEstimate:
         with self._lock:
-            if is_silent or log_spectrum_db.size == 0:
+            if is_silent or log_spectrum_db.size == 0 or not np.all(np.isfinite(log_spectrum_db)):
                 self._onsets.append(0.0)
                 self._prev_log_spec = None
             else:
-                # Positive spectral flux across log bands
-                mag_like = np.power(10.0, log_spectrum_db / 20.0)
-                if self._prev_log_spec is None:
+                # Positive spectral flux across log bands (clipped dB avoids 10**x overflow)
+                clipped_db = np.clip(log_spectrum_db, -120.0, 20.0)
+                mag_like = np.power(10.0, clipped_db / 20.0)
+                if self._prev_log_spec is None or self._prev_log_spec.shape != mag_like.shape:
                     flux = 0.0
                 else:
                     diff = mag_like - self._prev_log_spec
@@ -89,13 +90,14 @@ class TempoEstimator:
         if raw_acf < 0.12:
             return TempoEstimate(bpm=None, stability="Unknown", confidence_score=raw_acf)
 
-        # Parabolic refinement around best lag
+        # Parabolic refinement around best lag (clamped strictly to +/- 0.5 bin)
         refined_lag = float(best_lag)
         if 0 < best_rel < weighted.shape[0] - 1:
             y0, y1, y2 = float(weighted[best_rel - 1]), float(weighted[best_rel]), float(weighted[best_rel + 1])
             denom = y0 - 2.0 * y1 + y2
             if abs(denom) > 1e-9:
-                refined_lag += 0.5 * (y0 - y2) / denom
+                delta = max(-0.5, min(0.5, 0.5 * (y0 - y2) / denom))
+                refined_lag += delta
 
         bpm = round(60.0 * self._rate_hz / max(1.0, refined_lag), 1)
         stability = "High" if raw_acf >= 0.35 else ("Medium" if raw_acf >= 0.2 else "Low")

@@ -24,7 +24,7 @@ class FixedRingBuffer:
         self.audio_config = audio_config or AudioConfig()
         self.sample_rate = self.audio_config.sample_rate
         self.channels = self.audio_config.channels
-        self.capacity_frames = self.sample_rate * self.audio_config.ring_buffer_seconds
+        self.capacity_frames = max(1, int(round(self.sample_rate * float(self.audio_config.ring_buffer_seconds))))
 
         # Single preallocated buffer: 120s * 48000 * 2 * 4 = 46,080,000 bytes
         self._buffer = np.zeros((self.capacity_frames, self.channels), dtype=np.float32)
@@ -67,9 +67,16 @@ class FixedRingBuffer:
             return 0
         arr = np.asarray(chunk, dtype=np.float32)
         if arr.ndim == 1:
-            arr = arr.reshape(-1, self.channels)
+            usable = (arr.size // self.channels) * self.channels
+            if usable == 0:
+                return 0
+            arr = arr[:usable].reshape(-1, self.channels)
+        elif arr.ndim != 2:
+            raise ValueError(f"Expected 1D or 2D array, got shape {arr.shape}")
         if arr.shape[1] != self.channels:
             raise ValueError(f"Expected {self.channels} channels, got {arr.shape[1]}")
+        if not np.all(np.isfinite(arr)):
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
 
         n = int(arr.shape[0])
         with self._lock:
@@ -187,21 +194,27 @@ class FixedRingBuffer:
             raise ValueError("Selected time range is empty or already overwritten in the 120s ring buffer.")
 
         total_written = 0
-        with wave.open(str(path), "wb") as wf:
-            wf.setnchannels(self.channels)
-            wf.setsampwidth(2)  # 16-bit PCM WAV for broad audio-separator/Cubase compatibility
-            wf.setframerate(self.sample_rate)
+        tmp_path = path.with_name(path.name + ".tmp")
+        try:
+            with wave.open(str(tmp_path), "wb") as wf:
+                wf.setnchannels(self.channels)
+                wf.setsampwidth(2)  # 16-bit PCM WAV for broad audio-separator/Cubase compatibility
+                wf.setframerate(self.sample_rate)
 
-            cursor = s
-            while cursor < e:
-                stop = min(e, cursor + chunk_frames)
-                chunk = self.read_range(cursor, stop)
-                if chunk.shape[0] == 0:
-                    break
-                pcm_i16 = (np.clip(chunk, -1.0, 1.0) * 32767.0).astype(np.int16)
-                wf.writeframes(pcm_i16.tobytes())
-                total_written += int(chunk.shape[0])
-                cursor = stop
+                cursor = s
+                while cursor < e:
+                    stop = min(e, cursor + chunk_frames)
+                    chunk = self.read_range(cursor, stop)
+                    if chunk.shape[0] == 0:
+                        break
+                    pcm_i16 = (np.clip(chunk, -1.0, 1.0) * 32767.0).astype(np.int16)
+                    wf.writeframes(pcm_i16.tobytes())
+                    total_written += int(chunk.shape[0])
+                    cursor = stop
+            tmp_path.replace(path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
         return path, total_written / float(self.sample_rate)
 
@@ -293,6 +306,9 @@ class FixedRingBuffer:
                 raw = wf.readframes(take)
                 if not raw:
                     break
+                actual_src_frames = len(raw) // max(1, src_ch * sw)
+                if actual_src_frames <= 0:
+                    break
                 if sw == 1:
                     u8 = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
                     arr = u8[: (u8.size // src_ch) * src_ch].reshape(-1, src_ch)
@@ -312,7 +328,7 @@ class FixedRingBuffer:
                         dst_rate=self.sample_rate,
                         dst_channels=self.channels,
                     )
-                read_so_far += take
+                read_so_far += actual_src_frames
                 remain = max_dst_frames - total_dst_frames
                 if canon.shape[0] > remain:
                     canon = canon[:remain]

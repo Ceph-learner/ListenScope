@@ -408,10 +408,38 @@ def spawn_worker_entry(
     cfg = AIConfig(**ai_cfg_dict)
 
     def _emit(prog: AIJobProgress) -> None:
+        item = {"type": "progress", "payload": _serialize_dataclass(prog)}
         try:
-            msg_queue.put({"type": "progress", "payload": _serialize_dataclass(prog)})
+            put_nowait = getattr(msg_queue, "put_nowait", None)
+            if callable(put_nowait):
+                put_nowait(item)
+            else:
+                msg_queue.put(item, timeout=0.05)
         except Exception:
             pass
+
+    def _send_terminal(item: dict[str, Any]) -> None:
+        try:
+            msg_queue.put(item, timeout=2.0)
+            return
+        except Exception:
+            pass
+        get_nowait = getattr(msg_queue, "get_nowait", None)
+        put_nowait = getattr(msg_queue, "put_nowait", None)
+        for _ in range(16):
+            if callable(get_nowait):
+                try:
+                    get_nowait()
+                except Exception:
+                    pass
+            try:
+                if callable(put_nowait):
+                    put_nowait(item)
+                else:
+                    msg_queue.put(item, timeout=0.2)
+                return
+            except Exception:
+                pass
 
     try:
         res = execute_worker_job(
@@ -420,9 +448,9 @@ def spawn_worker_entry(
             emit_progress=_emit,
             ai_config=cfg,
         )
-        msg_queue.put({"type": "result", "payload": _serialize_dataclass(res)})
+        _send_terminal({"type": "result", "payload": _serialize_dataclass(res)})
     except Exception as exc:
-        msg_queue.put(
+        _send_terminal(
             {
                 "type": "result",
                 "payload": _serialize_dataclass(

@@ -21,6 +21,7 @@ from core.models import (
     OOMRecoveryAction,
     StemDeepAnalysisReport,
 )
+from ui.chroma_widget import spell_chord_tones
 
 
 def _fmt_sec(sec: float) -> str:
@@ -496,12 +497,14 @@ class StemMixerWidget(QtWidgets.QWidget):
                 active_idx = len(self._chord_segments) - 1
             if 0 <= active_idx < len(self._chord_segments):
                 cur = self._chord_segments[active_idx]
+                tones = spell_chord_tones(cur.chord)
+                cur_disp = f"{cur.chord} ({tones})" if tones != "-" else cur.chord
                 nxt = (
                     self._chord_segments[active_idx + 1].chord
                     if active_idx + 1 < len(self._chord_segments)
                     else "结束"
                 )
-                self.live_chord_hud_lbl.setText(f"当前和弦: {cur.chord}  |  下一和弦: {nxt}")
+                self.live_chord_hud_lbl.setText(f"当前和弦: {cur_disp}  |  下一和弦: {nxt}")
                 if self.mixer_engine.is_playing and self.chord_timeline_table.currentRow() != active_idx:
                     self.chord_timeline_table.blockSignals(True)
                     self.chord_timeline_table.selectRow(active_idx)
@@ -520,10 +523,12 @@ class StemMixerWidget(QtWidgets.QWidget):
                 self.midi_table.blockSignals(False)
 
     def _on_export_clicked(self) -> None:
+        from core.paths import default_export_dir
+
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "导出混合音轨 WAV",
-            str(Path("exports") / "listenscope_mix.wav"),
+            str(default_export_dir() / "listenscope_mix.wav"),
             "WAV Audio (*.wav)",
         )
         if file_path:
@@ -534,20 +539,24 @@ class StemMixerWidget(QtWidgets.QWidget):
             self.deep_analyze_requested.emit(dict(self._stem_paths))
 
     def _on_export_sheet_clicked(self) -> None:
+        from core.paths import default_export_dir
+
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "导出扒谱与分析报告",
-            str(Path("exports") / "listenscope_transcription.md"),
+            str(default_export_dir() / "listenscope_transcription.md"),
             "Markdown 报告 (*.md);;CSV 明细表 (*.csv)",
         )
         if file_path:
             self.export_sheet_requested.emit(file_path)
 
     def _on_save_midi_clicked(self) -> None:
+        from core.paths import default_export_dir
+
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "另存转录 MIDI 文件",
-            str(Path("exports") / "listenscope_stem.mid"),
+            str(default_export_dir() / "listenscope_stem.mid"),
             "MIDI File (*.mid)",
         )
         if file_path:

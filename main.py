@@ -26,7 +26,7 @@ _SRC_DIR = Path(__file__).resolve().parent
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from core.paths import get_bundle_root, subprocess_no_window_kwargs
+from core.paths import default_work_dir, get_bundle_root, subprocess_no_window_kwargs
 
 ROOT = get_bundle_root()
 if str(ROOT) not in sys.path:
@@ -140,14 +140,14 @@ class ListenScopeController:
         *,
         use_mock_ai_for_demo: bool = False,
         ai_python_executable: Optional[str] = None,
-        work_dir: Path | str = Path("workspace_outputs"),
+        work_dir: Optional[Path | str] = None,
         settings_path: Optional[Path | str] = None,
     ) -> None:
-        self.work_dir = Path(work_dir)
+        self.work_dir = Path(work_dir) if work_dir is not None else default_work_dir()
         self.use_mock_ai_for_demo = use_mock_ai_for_demo
         if settings_path is not None:
             self._settings_path = Path(settings_path)
-        elif self.work_dir != Path("workspace_outputs"):
+        elif work_dir is not None and Path(work_dir) != Path("workspace_outputs"):
             self._settings_path = self.work_dir / "settings.json"
         else:
             self._settings_path = default_settings_path()
@@ -350,6 +350,8 @@ class ListenScopeController:
         w.chroma_widget.metronome_beats_changed.connect(self.metronome.set_beats_per_bar)
         w.chroma_widget.metronome_overlay_toggled.connect(self._on_metronome_overlay_toggled)
         w.chroma_widget.metronome_standalone_toggled.connect(self._on_metronome_standalone_toggled)
+        w.chroma_widget.metronome_count_in_toggled.connect(self.metronome.set_count_in_enabled)
+        w.chroma_widget.metronome_volume_changed.connect(self.metronome.set_volume)
         w.mixer_widget.metronome_overlay_toggled.connect(self._on_metronome_overlay_toggled)
         w.resource_panel.export_diagnostics_requested.connect(self._on_export_diagnostic_bundle)
 
@@ -732,17 +734,28 @@ class ListenScopeController:
         except Exception as exc:
             self.window.show_banner_message(f"导出混音失败: {exc}")
 
+    def _ensure_live_separator_stopped_for_ring_reset(self, reason: str) -> None:
+        if self.live_separator.is_active or self.live_separator.is_starting:
+            self.live_separator.stop(status_message=reason)
+            self._put_latest(self._ui_live_pending_q, False)
+        else:
+            self.live_separator.close_output_stream()
+
     def _on_import_audio_file(self, file_path: str) -> None:
         """Stream up to 120s of a local WAV/FLAC/OGG file into the bounded ring buffer."""
         if not file_path:
+            return
+        src_path = Path(file_path)
+        if not src_path.exists():
+            self.window.show_banner_message(f"导入本地音频失败: 文件不存在 ({src_path})")
             return
         try:
             self.stop_capture()
             self.ab_player.stop()
             self.mixer_engine.pause()
-            self.live_separator.close_output_stream()
+            self._ensure_live_separator_stopped_for_ring_reset("已导入本地音频，自动停止实验性实时分轨")
             imported_sec, truncated = self.ring_buffer.import_audio_file_streaming(
-                file_path,
+                src_path,
                 max_seconds=float(self.audio_config.ring_buffer_seconds),
             )
             self.analysis_worker.reset_harmony()
@@ -775,14 +788,6 @@ class ListenScopeController:
     def _on_send_stem_to_analysis(self, stem_name: str, stem_path: str) -> None:
         """Load selected stem WAV excerpt cleanly into canonical 48kHz stereo ring buffer."""
         try:
-            self.stop_capture()
-            self.ab_player.stop()
-            self.ring_buffer.clear()
-            self.ab_player.set_ab_range(0, 0)
-            self.bookmark_manager.clear()
-            self._sync_ab_bookmarks()
-            self.analysis_worker.reset_harmony()
-            self.window.chroma_widget.clear_progression()
             arr, sr, ch = _read_wav_excerpt_f32(Path(stem_path), max_seconds=30.0)
             canon = normalize_to_canonical_pcm(
                 arr,
@@ -791,6 +796,19 @@ class ListenScopeController:
                 dst_rate=self.audio_config.sample_rate,
                 dst_channels=self.audio_config.channels,
             )
+            if canon.shape[0] == 0:
+                self.window.show_banner_message(f"单轨 `{stem_name}` 不包含有效音频帧。")
+                return
+            self.stop_capture()
+            self.ab_player.stop()
+            self.mixer_engine.pause()
+            self._ensure_live_separator_stopped_for_ring_reset("已载入单轨分析，自动停止实验性实时分轨")
+            self.ring_buffer.clear()
+            self.ab_player.set_ab_range(0, 0)
+            self.bookmark_manager.clear()
+            self._sync_ab_bookmarks()
+            self.analysis_worker.reset_harmony()
+            self.window.chroma_widget.clear_progression()
             self.ring_buffer.write(canon)
             avail = self.ring_buffer.available_seconds
             if avail >= 0.5:

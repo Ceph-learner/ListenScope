@@ -159,6 +159,26 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 self._stats.set_error(f"启动 Process Loopback 失败: {exc}")
                 raise RuntimeError(f"启动 WASAPI Process Loopback 失败: {exc}") from exc
 
+            # Re-query format and native loopback isolation AFTER tap.start(), as WASAPI format/fallback
+            # may finalize only once the capture stream starts.
+            try:
+                post_fmt = tap.get_format()
+                if isinstance(post_fmt, dict) and post_fmt:
+                    self._cached_fmt = dict(post_fmt)
+            except Exception:
+                pass
+
+            post_proc_specific = self._check_is_process_specific(tap)
+            if post_proc_specific is not None:
+                is_proc_specific = post_proc_specific
+            if is_proc_specific is False:
+                self._stats.set_mode_and_warning(
+                    CaptureMode.SYSTEM_LOOPBACK,
+                    "⚠️ 底层 WASAPI 退回全系统 Loopback：其他应用声音可能被混入。",
+                )
+            elif is_proc_specific is True:
+                self._stats.set_mode_and_warning(CaptureMode.PROCESS_LOOPBACK, None)
+
             self._tap = tap
             self._stats.set_error(None)
             self._stats.set_running(True)
@@ -200,11 +220,11 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 if gap_ms > self.audio_config.underrun_gap_threshold_ms:
                     self._stats.record_underrun(1)
 
-            # Use cached format captured safely in start() (avoids lock-free _tap deref during teardown)
+            # Use cached format captured cleanly in start() (avoids lock-free _tap deref during teardown)
             fmt = self._cached_fmt
-            src_rate = int(fmt.get("sample_rate", self.audio_config.sample_rate))
-            src_channels = int(fmt.get("channels", self.audio_config.channels))
-            src_dtype = str(fmt.get("sample_format", self.audio_config.dtype))
+            src_rate = max(1, int(fmt.get("sample_rate", self.audio_config.sample_rate) or self.audio_config.sample_rate))
+            src_channels = max(1, int(fmt.get("channels", self.audio_config.channels) or self.audio_config.channels))
+            src_dtype = str(fmt.get("sample_format", self.audio_config.dtype) or self.audio_config.dtype)
 
             if (
                 src_rate == self.audio_config.sample_rate
@@ -212,7 +232,10 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 and src_dtype == "float32"
             ):
                 # View bytes directly, then copy single bounded chunk into queue
-                arr = np.frombuffer(pcm_bytes, dtype=np.float32)
+                usable_b = (len(pcm_bytes) // 4) * 4
+                if usable_b == 0:
+                    return
+                arr = np.frombuffer(memoryview(pcm_bytes)[:usable_b], dtype=np.float32)
                 usable = (arr.size // 2) * 2
                 if usable == 0:
                     return

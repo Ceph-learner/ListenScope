@@ -67,8 +67,14 @@ class ChordDetector:
         self._smoothed_chroma = None
 
     def update(self, chroma_12: np.ndarray, *, is_silent: bool) -> ChordEstimate:
-        if is_silent or float(np.linalg.norm(chroma_12)) < 1e-6:
-            # Decay smoother slightly on silence so stale chords do not linger
+        arr = np.asarray(chroma_12, dtype=np.float32)
+        if (
+            is_silent
+            or arr.shape != (12,)
+            or not np.all(np.isfinite(arr))
+            or float(np.linalg.norm(arr)) < 1e-6
+        ):
+            # Decay smoother slightly on silence or invalid frames so stale chords do not linger
             if self._smoothed_chroma is not None:
                 self._smoothed_chroma *= 0.5
             return ChordEstimate(
@@ -81,10 +87,10 @@ class ChordDetector:
             )
 
         if self._smoothed_chroma is None:
-            self._smoothed_chroma = chroma_12.astype(np.float32, copy=True)
+            self._smoothed_chroma = arr.copy()
         else:
             self._smoothed_chroma = (
-                self._ema_alpha * chroma_12 + (1.0 - self._ema_alpha) * self._smoothed_chroma
+                self._ema_alpha * arr + (1.0 - self._ema_alpha) * self._smoothed_chroma
             ).astype(np.float32)
 
         norm = float(np.linalg.norm(self._smoothed_chroma))

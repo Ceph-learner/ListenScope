@@ -64,13 +64,18 @@ class ChromaExtractor:
             self._history.clear()
 
     def extract_from_magnitude(self, fft_mag: np.ndarray, *, record_history: bool = True, is_silent: bool = False) -> np.ndarray:
-        if is_silent or fft_mag.size == 0:
+        if (
+            is_silent
+            or fft_mag.size == 0
+            or fft_mag.shape[0] != self._chroma_fb.shape[1]
+            or not np.all(np.isfinite(fft_mag))
+        ):
             chroma = np.zeros(12, dtype=np.float32)
         else:
             power = np.square(fft_mag, dtype=np.float32)
             raw = self._chroma_fb @ power
             norm = float(np.linalg.norm(raw))
-            chroma = (raw / norm).astype(np.float32) if norm > 1e-9 else np.zeros(12, dtype=np.float32)
+            chroma = (raw / norm).astype(np.float32) if np.isfinite(norm) and norm > 1e-9 else np.zeros(12, dtype=np.float32)
 
         if record_history:
             with self._lock:

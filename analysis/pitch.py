@@ -10,9 +10,14 @@ from .chroma import PITCH_CLASSES
 
 
 def freq_to_note_and_cents(freq_hz: float) -> tuple[str, float]:
+    if not np.isfinite(freq_hz) or freq_hz <= 0.0:
+        return "-", 0.0
     midi = 69.0 + 12.0 * np.log2(freq_hz / 440.0)
-    nearest = int(round(midi))
-    cents = float((midi - nearest) * 100.0)
+    if not np.isfinite(midi):
+        return "-", 0.0
+    nearest_raw = int(round(midi))
+    nearest = max(0, min(127, nearest_raw))
+    cents = float((midi - nearest_raw) * 100.0)
     note_name = f"{PITCH_CLASSES[nearest % 12]}{(nearest // 12) - 1}"
     return note_name, cents
 
@@ -27,7 +32,7 @@ class PitchEstimator:
         self._bin_hz = sample_rate / float(fft_size)
 
     def estimate_from_magnitude(self, fft_mag: np.ndarray, *, is_silent: bool) -> PitchEstimate:
-        if is_silent or fft_mag.size == 0:
+        if is_silent or fft_mag.size == 0 or not np.all(np.isfinite(fft_mag)):
             return PitchEstimate(frequency_hz=None, note_name="-", cents_offset=0.0, confidence=0.0)
 
         min_bin = max(1, int(round(40.0 / self._bin_hz)))
@@ -51,13 +56,16 @@ class PitchEstimator:
         if prominence < 0.15:
             return PitchEstimate(frequency_hz=None, note_name="Unknown", cents_offset=0.0, confidence=prominence)
 
-        # Parabolic interpolation around peak bin
+        # Parabolic interpolation around peak bin (clamped strictly to +/- 0.5 bin)
         alpha = float(score[rel_idx - 1]) if rel_idx > 0 else peak_val
         beta = peak_val
         gamma = float(score[rel_idx + 1]) if rel_idx + 1 < score.shape[0] else peak_val
         denom = alpha - 2.0 * beta + gamma
-        delta = 0.5 * (alpha - gamma) / denom if abs(denom) > 1e-9 else 0.0
+        raw_delta = 0.5 * (alpha - gamma) / denom if abs(denom) > 1e-9 else 0.0
+        delta = max(-0.5, min(0.5, raw_delta))
         freq = float((peak_bin + delta) * self._bin_hz)
+        if not np.isfinite(freq) or freq <= 0.0:
+            return PitchEstimate(frequency_hz=None, note_name="-", cents_offset=0.0, confidence=0.0)
 
         note_name, cents = freq_to_note_and_cents(freq)
         return PitchEstimate(

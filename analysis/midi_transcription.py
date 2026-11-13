@@ -23,7 +23,8 @@ from .pitch import PitchEstimator
 
 
 def _midi_to_name(midi_num: int) -> str:
-    return f"{PITCH_CLASSES[midi_num % 12]}{(midi_num // 12) - 1}"
+    clamped = max(0, min(127, int(midi_num)))
+    return f"{PITCH_CLASSES[clamped % 12]}{(clamped // 12) - 1}"
 
 
 def _read_audio_mono_f32(audio_path: Path, *, max_seconds: float = 120.0) -> tuple[np.ndarray, int]:
@@ -32,15 +33,18 @@ def _read_audio_mono_f32(audio_path: Path, *, max_seconds: float = 120.0) -> tup
         import soundfile as sf  # type: ignore[import-untyped]
 
         with sf.SoundFile(str(audio_path), "r") as sf_file:
-            sr = int(sf_file.samplerate)
+            sr = max(1, int(sf_file.samplerate))
             nframes = min(int(sf_file.frames), max(1, int(sr * max_seconds)))
             data = sf_file.read(nframes, dtype="float32", always_2d=True)
         if data.size == 0:
             return np.empty(0, dtype=np.float32), sr
-        return np.mean(np.asarray(data, dtype=np.float32), axis=1), sr
+        mono = np.mean(np.asarray(data, dtype=np.float32), axis=1)
+        if not np.all(np.isfinite(mono)):
+            mono = np.nan_to_num(mono, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+        return mono, sr
     except Exception:
         with wave.open(str(audio_path), "rb") as wf:
-            sr = int(wf.getframerate())
+            sr = max(1, int(wf.getframerate()))
             ch = max(1, int(wf.getnchannels()))
             sw = int(wf.getsampwidth())
             nframes = min(int(wf.getnframes()), max(1, int(sr * max_seconds)))
@@ -61,8 +65,14 @@ def _read_audio_mono_f32(audio_path: Path, *, max_seconds: float = 120.0) -> tup
             arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
         if arr.size == 0:
             return np.empty(0, dtype=np.float32), sr
-        arr = arr[: (arr.size // ch) * ch].reshape(-1, ch)
-        return np.mean(arr, axis=1), sr
+        usable = (arr.size // ch) * ch
+        if usable == 0:
+            return np.empty(0, dtype=np.float32), sr
+        arr = arr[:usable].reshape(-1, ch)
+        mono = np.mean(arr, axis=1)
+        if not np.all(np.isfinite(mono)):
+            mono = np.nan_to_num(mono, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+        return mono, sr
 
 
 def _write_notes_to_midi(
@@ -98,7 +108,13 @@ def _write_notes_to_midi(
         last_tick = tick
 
     track.append(mido.MetaMessage("end_of_track", time=0))
-    mid.save(str(output_midi_path))
+    tmp_path = output_midi_path.with_name(output_midi_path.name + ".tmp")
+    try:
+        mid.save(str(tmp_path))
+        tmp_path.replace(output_midi_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return output_midi_path
 
 

@@ -927,6 +927,15 @@ class ExperimentalLiveSeparator:
                 return
 
             newest = self.ring_buffer.total_written_frames
+            oldest = self.ring_buffer.oldest_abs_frame
+            if newest < self._last_read_abs_frame:
+                # Ring buffer was cleared/reset; resync OLA state and cursor cleanly
+                self._overlap_add.reset()
+                self._last_read_abs_frame = max(oldest, newest - self._chunk_frames)
+            elif self._last_read_abs_frame < oldest:
+                self._overlap_add.reset()
+                self._last_read_abs_frame = oldest
+
             backlog_frames = newest - self._last_read_abs_frame
             max_buf_frames = int(round(self.ai_config.live_max_buffer_seconds * sr))
 
@@ -935,11 +944,11 @@ class ExperimentalLiveSeparator:
                 with self._lock:
                     self._dropped_chunks += 1
                 self._overlap_add.reset()
-                self._last_read_abs_frame = max(0, newest - self._chunk_frames)
+                self._last_read_abs_frame = max(oldest, newest - self._chunk_frames)
                 backlog_frames = newest - self._last_read_abs_frame
 
             if backlog_frames >= self._chunk_frames and self._req_q is not None:
-                read_start = max(self.ring_buffer.oldest_abs_frame, self._last_read_abs_frame)
+                read_start = max(oldest, self._last_read_abs_frame)
                 read_end = min(newest, read_start + self._chunk_frames)
                 pcm = self.ring_buffer.read_range(read_start, read_end)
                 if pcm.shape[0] >= self._chunk_frames:
@@ -951,7 +960,7 @@ class ExperimentalLiveSeparator:
                         with self._lock:
                             self._dropped_chunks += 1
                         self._overlap_add.reset()
-                        self._last_read_abs_frame = max(0, newest - self._overlap_frames)
+                        self._last_read_abs_frame = max(oldest, newest - self._overlap_frames)
 
             backlog_sec = max(0.0, (newest - self._last_read_abs_frame) / float(sr))
             self.resource_manager.update_runtime_state(

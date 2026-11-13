@@ -179,6 +179,10 @@ class HistoryABPlayer:
             self._b_frame = b
             self._cursor_frame = a
             self._stretcher.reset(0.0)
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
+                if self.metronome.overlay_enabled:
+                    self.metronome.reset_phase()
         return a, b
 
     def set_ab_range(self, a_frame: int, b_frame: int) -> tuple[int, int]:
@@ -191,6 +195,10 @@ class HistoryABPlayer:
             self._b_frame = b
             self._cursor_frame = a
             self._stretcher.reset(0.0)
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
+                if self.metronome.overlay_enabled:
+                    self.metronome.reset_phase()
         return a, b
 
     def set_loop(self, enabled: bool) -> None:
@@ -210,8 +218,10 @@ class HistoryABPlayer:
         with self._lock:
             self._cursor_frame = max(self._a_frame, min(int(abs_frame), self._b_frame))
             self._stretcher.reset(float(max(0, self._cursor_frame - self._a_frame)))
-            if self.metronome is not None and self.metronome.overlay_enabled:
-                self.metronome.reset_phase()
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
+                if self.metronome.overlay_enabled:
+                    self.metronome.reset_phase()
 
     def start_playback(self, *, open_audio_device: bool = True) -> str:
         """Start A/B playback and return user-facing QQ Music pause reminder."""
@@ -226,8 +236,11 @@ class HistoryABPlayer:
                 self._cursor_frame = effective_a
                 self._stretcher.reset(0.0)
             self._is_playing = True
-            if self.metronome is not None and self.metronome.overlay_enabled:
-                self.metronome.reset_phase()
+            if self.metronome is not None:
+                if self.metronome.count_in_enabled:
+                    self.metronome.begin_count_in(rate_scale=self._speed)
+                elif self.metronome.overlay_enabled:
+                    self.metronome.reset_phase()
 
         if open_audio_device:
             self._ensure_output_stream()
@@ -237,6 +250,8 @@ class HistoryABPlayer:
         with self._lock:
             self._is_playing = False
             self._stretcher.reset(float(max(0, self._cursor_frame - self._a_frame)))
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
         self._close_output_stream()
 
     def stop(self) -> None:
@@ -244,6 +259,8 @@ class HistoryABPlayer:
             self._is_playing = False
             self._cursor_frame = self._a_frame
             self._stretcher.reset(0.0)
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
         self._close_output_stream()
 
     def close_if_finished(self) -> None:
@@ -257,7 +274,8 @@ class HistoryABPlayer:
         """Pull exact PCM block of shape (num_frames, 2) float32 with optional pitch-preserved speed & A/B wrap."""
         out = np.zeros((num_frames, self.audio_config.channels), dtype=np.float32)
         did_render = False
-        rendered_frames = num_frames
+        rendered_frames = 0
+        music_offset = 0
         speed_snapshot = 1.0
         with self._lock:
             if not self._is_playing or self._b_frame <= self._a_frame:
@@ -271,6 +289,19 @@ class HistoryABPlayer:
                 return out
 
             speed_snapshot = self._speed
+            rem_frames = num_frames
+            if self.metronome is not None and self.metronome.is_counting_in:
+                ci_block, ci_n = self.metronome.consume_count_in_block(rem_frames, rate_scale=speed_snapshot)
+                if ci_n > 0:
+                    if ci_block.shape[1] >= self.audio_config.channels:
+                        out[:ci_n] = ci_block[:, : self.audio_config.channels]
+                    else:
+                        out[:ci_n] = np.repeat(ci_block[:, :1], self.audio_config.channels, axis=1)
+                    music_offset = ci_n
+                    rem_frames -= ci_n
+            if rem_frames <= 0:
+                return out
+
             if abs(self._speed - 1.0) >= 1e-3:
                 span = b - a
                 if self._cursor_frame < a or self._cursor_frame >= b:
@@ -291,7 +322,7 @@ class HistoryABPlayer:
                     return self.ring_buffer.read_range(s_abs, e_abs)
 
                 stretched, new_rel, hit_eof = self._stretcher.render_block(
-                    num_frames,
+                    rem_frames,
                     speed=self._speed,
                     span_frames=span,
                     rel_cursor=rel_cursor,
@@ -302,12 +333,13 @@ class HistoryABPlayer:
                 if hit_eof and not self._loop_enabled:
                     self._is_playing = False
                     self._cursor_frame = b
-                out = stretched
-                rendered_frames = int(out.shape[0])
-                did_render = rendered_frames > 0
+                rendered_frames = min(rem_frames, int(stretched.shape[0]))
+                if rendered_frames > 0:
+                    out[music_offset : music_offset + rendered_frames] = stretched[:rendered_frames]
+                    did_render = True
             else:
                 written = 0
-                while written < num_frames:
+                while written < rem_frames:
                     if self._cursor_frame < a or self._cursor_frame >= b:
                         if self._loop_enabled:
                             self._cursor_frame = a
@@ -315,7 +347,7 @@ class HistoryABPlayer:
                             self._is_playing = False
                             break
 
-                    take = min(num_frames - written, b - self._cursor_frame)
+                    take = min(rem_frames - written, b - self._cursor_frame)
                     seg = self.ring_buffer.read_range(self._cursor_frame, self._cursor_frame + take)
                     if seg.shape[0] == 0:
                         if self._loop_enabled:
@@ -324,7 +356,7 @@ class HistoryABPlayer:
                         self._is_playing = False
                         break
                     actual = int(seg.shape[0])
-                    out[written : written + actual] = seg
+                    out[music_offset + written : music_offset + written + actual] = seg
                     written += actual
                     self._cursor_frame += actual
                     if self._cursor_frame >= b and not self._loop_enabled:
@@ -334,7 +366,10 @@ class HistoryABPlayer:
                 did_render = written > 0
 
         if did_render and rendered_frames > 0 and self.metronome is not None:
-            self.metronome.overlay_into(out[:rendered_frames], rate_scale=speed_snapshot)
+            self.metronome.overlay_into(
+                out[music_offset : music_offset + rendered_frames],
+                rate_scale=speed_snapshot,
+            )
         return out
 
     def _ensure_output_stream(self) -> None:
@@ -495,6 +530,10 @@ class StemMixerEngine:
             if self._position_frame < s_f or self._position_frame >= e_f:
                 self._position_frame = s_f
             self._stretcher.reset(float(max(0, self._position_frame - s_f)))
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
+                if self.metronome.overlay_enabled:
+                    self.metronome.reset_phase()
             return s_f / float(sr), e_f / float(sr)
 
     def clear_loop_region(self) -> None:
@@ -502,6 +541,10 @@ class StemMixerEngine:
             self._loop_start_frame = None
             self._loop_end_frame = None
             self._stretcher.reset(float(self._position_frame))
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
+                if self.metronome.overlay_enabled:
+                    self.metronome.reset_phase()
 
     def clear(self) -> None:
         self.stop()
@@ -594,8 +637,10 @@ class StemMixerEngine:
                     self._loop_end_frame = None
             ws, _ = self._active_window_locked()
             self._stretcher.reset(float(max(0, pos - ws)))
-            if self.metronome is not None and self.metronome.overlay_enabled:
-                self.metronome.reset_phase()
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
+                if self.metronome.overlay_enabled:
+                    self.metronome.reset_phase()
 
     def play(self, *, open_audio_device: bool = True) -> None:
         with self._lock:
@@ -606,8 +651,11 @@ class StemMixerEngine:
                 self._position_frame = ws
                 self._stretcher.reset(0.0)
             self._is_playing = True
-            if self.metronome is not None and self.metronome.overlay_enabled:
-                self.metronome.reset_phase()
+            if self.metronome is not None:
+                if self.metronome.count_in_enabled:
+                    self.metronome.begin_count_in(rate_scale=self._speed)
+                elif self.metronome.overlay_enabled:
+                    self.metronome.reset_phase()
         if open_audio_device:
             self._ensure_output_stream()
 
@@ -616,6 +664,8 @@ class StemMixerEngine:
             self._is_playing = False
             ws, _ = self._active_window_locked()
             self._stretcher.reset(float(max(0, self._position_frame - ws)))
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
         self._close_output_stream()
 
     def stop(self) -> None:
@@ -624,6 +674,8 @@ class StemMixerEngine:
             ws, _ = self._active_window_locked()
             self._position_frame = ws
             self._stretcher.reset(0.0)
+            if self.metronome is not None:
+                self.metronome.cancel_count_in()
         self._close_output_stream()
 
     def close_if_finished(self) -> None:
@@ -700,16 +752,20 @@ class StemMixerEngine:
 
     def render_block(self, num_frames: int, *, advance: bool = True) -> np.ndarray:
         """Render synchronized mixed audio block across active stems with optional stretch and sub-region loop."""
-        mix = np.zeros((num_frames, self.channels), dtype=np.float32)
+        req_frames = max(0, int(num_frames))
+        mix = np.zeros((req_frames, self.channels), dtype=np.float32)
+        if req_frames == 0:
+            return mix
         did_render = False
-        rendered_frames = num_frames
+        rendered_frames = 0
+        music_offset = 0
         speed_snapshot = 1.0
         with self._lock:
             if self._max_frames <= 0 or (advance and not self._is_playing):
                 return mix
 
             if not advance:
-                mix = self._mix_range_locked(self._position_frame, num_frames)
+                mix = self._mix_range_locked(self._position_frame, req_frames)
                 np.clip(mix, -1.0, 1.0, out=mix)
                 return mix
 
@@ -732,6 +788,20 @@ class StemMixerEngine:
                     return mix
 
             speed_snapshot = self._speed
+            rem_frames = req_frames
+            if self.metronome is not None and self.metronome.is_counting_in:
+                ci_block, ci_n = self.metronome.consume_count_in_block(rem_frames, rate_scale=speed_snapshot)
+                if ci_n > 0:
+                    if ci_block.shape[1] >= self.channels:
+                        mix[:ci_n] = ci_block[:, : self.channels]
+                    else:
+                        mix[:ci_n] = np.repeat(ci_block[:, :1], self.channels, axis=1)
+                    music_offset = ci_n
+                    rem_frames -= ci_n
+            if rem_frames <= 0:
+                np.clip(mix, -1.0, 1.0, out=mix)
+                return mix
+
             if abs(self._speed - 1.0) >= 1e-3:
                 rel_cursor = max(0, min(span - 1, self._position_frame - win_start))
 
@@ -743,7 +813,7 @@ class StemMixerEngine:
                     return self._mix_range_locked(s_abs, take)
 
                 stretched, new_rel, hit_eof = self._stretcher.render_block(
-                    num_frames,
+                    rem_frames,
                     speed=self._speed,
                     span_frames=span,
                     rel_cursor=rel_cursor,
@@ -754,12 +824,13 @@ class StemMixerEngine:
                 if hit_eof and not self._loop_enabled:
                     self._is_playing = False
                     self._position_frame = win_end
-                mix = stretched
-                rendered_frames = int(mix.shape[0])
-                did_render = rendered_frames > 0
+                rendered_frames = min(rem_frames, int(stretched.shape[0]))
+                if rendered_frames > 0:
+                    mix[music_offset : music_offset + rendered_frames] = stretched[:rendered_frames]
+                    did_render = True
             else:
                 written = 0
-                while written < num_frames:
+                while written < rem_frames:
                     if self._position_frame >= win_end:
                         if self._loop_enabled:
                             self._position_frame = win_start
@@ -767,8 +838,10 @@ class StemMixerEngine:
                             self._is_playing = False
                             self._position_frame = win_end
                             break
-                    take = min(num_frames - written, win_end - self._position_frame)
-                    mix[written : written + take] = self._mix_range_locked(self._position_frame, take)
+                    take = min(rem_frames - written, win_end - self._position_frame)
+                    mix[music_offset + written : music_offset + written + take] = self._mix_range_locked(
+                        self._position_frame, take
+                    )
                     written += take
                     self._position_frame += take
                     if self._position_frame >= win_end:
@@ -783,7 +856,10 @@ class StemMixerEngine:
 
         np.clip(mix, -1.0, 1.0, out=mix)
         if did_render and rendered_frames > 0 and self.metronome is not None:
-            self.metronome.overlay_into(mix[:rendered_frames], rate_scale=speed_snapshot)
+            self.metronome.overlay_into(
+                mix[music_offset : music_offset + rendered_frames],
+                rate_scale=speed_snapshot,
+            )
         return mix
 
     def export_mix_streaming(self, out_path: Path | str, *, chunk_frames: int = 48000) -> Path:
@@ -802,11 +878,12 @@ class StemMixerEngine:
                     export_specs.append((StemTrackState(**track.__dict__), gain))
 
         local_handles: list[tuple[_StemHandle, StemTrackState, float]] = []
+        tmp_path = path.with_name(path.name + ".tmp")
         try:
             for track, gain in export_specs:
                 local_handles.append((_StemHandle(track.path), track, gain))
 
-            with wave.open(str(path), "wb") as out_wf:
+            with wave.open(str(tmp_path), "wb") as out_wf:
                 out_wf.setnchannels(self.channels)
                 out_wf.setsampwidth(2)
                 out_wf.setframerate(self.sample_rate)
@@ -820,6 +897,10 @@ class StemMixerEngine:
                     np.clip(mix, -1.0, 1.0, out=mix)
                     out_wf.writeframes((mix * 32767.0).astype(np.int16).tobytes())
                     cursor += n
+            tmp_path.replace(path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
         finally:
             for handle, _, _ in local_handles:
                 handle.close()

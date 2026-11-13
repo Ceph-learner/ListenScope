@@ -87,6 +87,9 @@ class PracticeMetronome:
         self._beats_per_bar: int = 4
         self._volume: float = 0.70
         self._overlay_enabled: bool = False
+        self._count_in_enabled: bool = False
+        self._count_in_remaining: int = 0
+        self._count_in_beats_started: int = 0
         self._standalone_playing: bool = False
         self._stream: Any = None
 
@@ -136,6 +139,21 @@ class PracticeMetronome:
             return self._overlay_enabled
 
     @property
+    def count_in_enabled(self) -> bool:
+        with self._lock:
+            return self._count_in_enabled
+
+    @property
+    def is_counting_in(self) -> bool:
+        with self._lock:
+            return self._count_in_remaining > 0
+
+    @property
+    def count_in_remaining_frames(self) -> int:
+        with self._lock:
+            return self._count_in_remaining
+
+    @property
     def standalone_playing(self) -> bool:
         with self._lock:
             return self._standalone_playing
@@ -167,8 +185,48 @@ class PracticeMetronome:
         with self._lock:
             prev = self._overlay_enabled
             self._overlay_enabled = bool(enabled)
-            if enabled and not prev:
+            if enabled and not prev and self._count_in_remaining <= 0:
                 self._reset_phase_locked()
+
+    def set_count_in_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._count_in_enabled = bool(enabled)
+            if not self._count_in_enabled:
+                self._count_in_remaining = 0
+                self._count_in_beats_started = 0
+
+    def count_in_bar_frames(self, *, rate_scale: float = 1.0) -> int:
+        raw_scale = float(rate_scale)
+        if not math.isfinite(raw_scale):
+            raw_scale = 1.0
+        with self._lock:
+            scale = max(0.25, min(2.0, raw_scale))
+            eff_bpm = max(15.0, min(480.0, self._bpm * scale))
+            period_samples = (60.0 / eff_bpm) * float(self.sample_rate)
+            return max(1, int(round(max(1, self._beats_per_bar) * period_samples)))
+
+    def begin_count_in(self, *, rate_scale: float = 1.0) -> int:
+        with self._lock:
+            if not self._count_in_enabled:
+                self._count_in_remaining = 0
+                self._count_in_beats_started = 0
+                return 0
+            self._reset_phase_locked()
+            raw_scale = float(rate_scale)
+            if not math.isfinite(raw_scale):
+                raw_scale = 1.0
+            scale = max(0.25, min(2.0, raw_scale))
+            eff_bpm = max(15.0, min(480.0, self._bpm * scale))
+            period_samples = (60.0 / eff_bpm) * float(self.sample_rate)
+            bar_frames = max(1, int(round(max(1, self._beats_per_bar) * period_samples)))
+            self._count_in_remaining = bar_frames
+            self._count_in_beats_started = 0
+            return bar_frames
+
+    def cancel_count_in(self) -> None:
+        with self._lock:
+            self._count_in_remaining = 0
+            self._count_in_beats_started = 0
 
     def reset_phase(self) -> None:
         with self._lock:
@@ -181,8 +239,13 @@ class PracticeMetronome:
         self._active_click = None
         self._active_pos = 0
 
-    def render_click_block(self, num_frames: int, *, rate_scale: float = 1.0) -> np.ndarray:
-        """Render exact `(num_frames, channels)` float32 click audio aligned to `bpm * rate_scale`."""
+    def _render_clicks_locked(
+        self,
+        num_frames: int,
+        *,
+        rate_scale: float = 1.0,
+        max_total_beats: Optional[int] = None,
+    ) -> np.ndarray:
         n = max(0, int(num_frames))
         out = np.zeros((n, self.channels), dtype=np.float32)
         if n == 0:
@@ -192,49 +255,78 @@ class PracticeMetronome:
         if not math.isfinite(raw_scale):
             raw_scale = 1.0
 
-        with self._lock:
-            gain = self._volume
-            scale = max(0.25, min(2.0, raw_scale))
-            eff_bpm = max(15.0, min(480.0, self._bpm * scale))
-            period_samples = (60.0 / eff_bpm) * float(self.sample_rate)
-            beats_bar = max(1, self._beats_per_bar)
+        gain = self._volume
+        scale = max(0.25, min(2.0, raw_scale))
+        eff_bpm = max(15.0, min(480.0, self._bpm * scale))
+        period_samples = (60.0 / eff_bpm) * float(self.sample_rate)
+        beats_bar = max(1, self._beats_per_bar)
 
-            pos = 0
-            while pos < n:
-                if self._first_beat_pending:
+        pos = 0
+        while pos < n:
+            if self._first_beat_pending:
+                if max_total_beats is None or self._count_in_beats_started < max_total_beats:
                     self._active_click = self._accent_click if (self._beat_idx % beats_bar == 0) else self._beat_click
                     self._active_pos = 0
                     self._beat_idx = (self._beat_idx + 1) % beats_bar
-                    self._sample_in_beat = 0.0
-                    self._first_beat_pending = False
+                    self._count_in_beats_started += 1
+                self._sample_in_beat = 0.0
+                self._first_beat_pending = False
 
-                rem_to_next_beat = max(1.0, period_samples - self._sample_in_beat)
-                step = min(n - pos, int(np.ceil(rem_to_next_beat)))
-                if step <= 0:
-                    step = 1
+            rem_to_next_beat = max(1.0, period_samples - self._sample_in_beat)
+            step = min(n - pos, int(np.ceil(rem_to_next_beat)))
+            if step <= 0:
+                step = 1
 
-                if self._active_click is not None and gain > 1e-6:
-                    avail_tail = int(self._active_click.shape[0]) - self._active_pos
-                    copy_n = min(step, max(0, avail_tail))
-                    if copy_n > 0:
-                        out[pos : pos + copy_n] += (
-                            self._active_click[self._active_pos : self._active_pos + copy_n] * gain
-                        )
-                        self._active_pos += copy_n
-                    if self._active_pos >= self._active_click.shape[0]:
-                        self._active_click = None
-                        self._active_pos = 0
+            if self._active_click is not None and gain > 1e-6:
+                avail_tail = int(self._active_click.shape[0]) - self._active_pos
+                copy_n = min(step, max(0, avail_tail))
+                if copy_n > 0:
+                    out[pos : pos + copy_n] += (
+                        self._active_click[self._active_pos : self._active_pos + copy_n] * gain
+                    )
+                    self._active_pos += copy_n
+                if self._active_pos >= self._active_click.shape[0]:
+                    self._active_click = None
+                    self._active_pos = 0
 
-                pos += step
-                self._sample_in_beat += float(step)
-                if self._sample_in_beat >= period_samples - 1e-5:
-                    self._sample_in_beat %= period_samples
+            pos += step
+            self._sample_in_beat += float(step)
+            if self._sample_in_beat >= period_samples - 1e-5:
+                self._sample_in_beat %= period_samples
+                if max_total_beats is None or self._count_in_beats_started < max_total_beats:
                     self._active_click = self._accent_click if (self._beat_idx % beats_bar == 0) else self._beat_click
                     self._active_pos = 0
                     self._beat_idx = (self._beat_idx + 1) % beats_bar
+                    self._count_in_beats_started += 1
 
         np.clip(out, -1.0, 1.0, out=out)
         return out
+
+    def render_click_block(self, num_frames: int, *, rate_scale: float = 1.0) -> np.ndarray:
+        """Render exact `(num_frames, channels)` float32 click audio aligned to `bpm * rate_scale`."""
+        with self._lock:
+            return self._render_clicks_locked(num_frames, rate_scale=rate_scale, max_total_beats=None)
+
+    def consume_count_in_block(self, num_frames: int, *, rate_scale: float = 1.0) -> tuple[np.ndarray, int]:
+        """Consume up to `num_frames` of active 1-bar count-in pre-roll, returning `(pcm, consumed_frames)`."""
+        req = max(0, int(num_frames))
+        if req == 0:
+            return np.empty((0, self.channels), dtype=np.float32), 0
+        with self._lock:
+            if self._count_in_remaining <= 0:
+                return np.empty((0, self.channels), dtype=np.float32), 0
+            take = min(req, self._count_in_remaining)
+            block = self._render_clicks_locked(
+                take,
+                rate_scale=rate_scale,
+                max_total_beats=max(1, self._beats_per_bar),
+            )
+            self._count_in_remaining -= take
+            if self._count_in_remaining <= 0:
+                self._count_in_remaining = 0
+                self._count_in_beats_started = 0
+                self._reset_phase_locked()
+            return block, take
 
     def overlay_into(self, pcm_block: np.ndarray, *, rate_scale: float = 1.0) -> np.ndarray:
         """Mix synchronized beat click in-place into an existing PCM block when overlay is enabled."""

@@ -48,7 +48,7 @@ class KeyDetector:
         return best_idx, second_idx, float(corrs[best_idx]), float(corrs[second_idx])
 
     def estimate(self, chroma_window: np.ndarray) -> KeyEstimate:
-        if chroma_window.size == 0:
+        if chroma_window.size == 0 or chroma_window.ndim != 2 or chroma_window.shape[1] != 12:
             return KeyEstimate(
                 primary="Unknown",
                 secondary="-",
@@ -58,8 +58,20 @@ class KeyDetector:
                 relation_note="等待有效音频输入",
             )
 
-        norms = np.linalg.norm(chroma_window, axis=1)
-        active = chroma_window[norms > 1e-4]
+        finite_mask = np.all(np.isfinite(chroma_window), axis=1)
+        clean_window = chroma_window[finite_mask]
+        if clean_window.shape[0] == 0:
+            return KeyEstimate(
+                primary="Unknown",
+                secondary="-",
+                stability="Insufficient",
+                correlation=0.0,
+                margin=0.0,
+                relation_note="等待有效音频输入",
+            )
+
+        norms = np.linalg.norm(clean_window, axis=1)
+        active = clean_window[norms > 1e-4]
         if active.shape[0] < self._min_active_frames:
             return KeyEstimate(
                 primary="Unknown",

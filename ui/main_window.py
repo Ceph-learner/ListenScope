@@ -9,10 +9,11 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ai.models import list_models
+from ai.models import MODEL_REGISTRY, list_models
 from audio.playback import StemMixerEngine
 from core.config import AIConfig, ResourceLimits
 from core.logging import PerformanceRecord
+from core.paths import default_export_dir
 from core.models import (
     AIJobProgress,
     AIJobResult,
@@ -381,6 +382,20 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.apply_ab_btn = QtWidgets.QPushButton("设定 A/B 区间")
         self.apply_ab_btn.clicked.connect(self._on_apply_ab_clicked)
 
+        self.ab_a_back_btn = QtWidgets.QPushButton("A-1s")
+        self.ab_a_back_btn.setToolTip("将 A 点提前 1 秒（区间起点向左扩展 1s）")
+        self.ab_a_back_btn.clicked.connect(lambda: self._nudge_ab("a", -1.0))
+        self.ab_a_fwd_btn = QtWidgets.QPushButton("A+1s")
+        self.ab_a_fwd_btn.setToolTip("将 A 点延后 1 秒（至少保留 0.5s 片段）")
+        self.ab_a_fwd_btn.clicked.connect(lambda: self._nudge_ab("a", +1.0))
+        self.ab_b_back_btn = QtWidgets.QPushButton("B-1s")
+        self.ab_b_back_btn.setToolTip("将 B 点提前 1 秒（至少保留 0.5s 片段）")
+        self.ab_b_back_btn.clicked.connect(lambda: self._nudge_ab("b", -1.0))
+        self.ab_b_fwd_btn = QtWidgets.QPushButton("B+1s")
+        self.ab_b_fwd_btn.setToolTip("将 B 点延后 1 秒（最晚至 0.0s 最新位置）")
+        self.ab_b_fwd_btn.clicked.connect(lambda: self._nudge_ab("b", +1.0))
+
+        row_a_transport = QtWidgets.QHBoxLayout()
         self.ab_play_btn = QtWidgets.QPushButton("A/B 播放")
         self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
         self.ab_loop_chk = QtWidgets.QCheckBox("A/B 循环")
@@ -410,14 +425,21 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_a.addWidget(self.start_ago_spin)
         row_a.addWidget(self.end_ago_spin)
         row_a.addWidget(self.apply_ab_btn)
-        row_a.addWidget(self.ab_play_btn)
-        row_a.addWidget(self.ab_stop_btn)
-        row_a.addWidget(self.ab_loop_chk)
-        row_a.addWidget(self.ab_speed_combo)
-        row_a.addWidget(self.ab_export_wav_btn)
-        row_a.addWidget(self.import_audio_btn)
+        row_a.addWidget(self.ab_a_back_btn)
+        row_a.addWidget(self.ab_a_fwd_btn)
+        row_a.addWidget(self.ab_b_back_btn)
+        row_a.addWidget(self.ab_b_fwd_btn)
         row_a.addStretch(1)
+
+        row_a_transport.addWidget(self.ab_play_btn)
+        row_a_transport.addWidget(self.ab_stop_btn)
+        row_a_transport.addWidget(self.ab_loop_chk)
+        row_a_transport.addWidget(self.ab_speed_combo)
+        row_a_transport.addWidget(self.ab_export_wav_btn)
+        row_a_transport.addWidget(self.import_audio_btn)
+        row_a_transport.addStretch(1)
         bottom_l.addLayout(row_a)
+        bottom_l.addLayout(row_a_transport)
 
         # Interactive 120s Waveform Overview + Draggable A/B Selector + Live Playhead
         self.history_overview_plot = pg.PlotWidget()
@@ -590,8 +612,30 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_set_range_sec_requested.emit(start_ago, end_ago)
 
     def _on_apply_ab_clicked(self) -> None:
-        start_ago = float(self.start_ago_spin.value())
-        end_ago = float(self.end_ago_spin.value())
+        start_ago = max(0.5, min(120.0, float(self.start_ago_spin.value())))
+        end_ago = max(0.0, min(start_ago - 0.5, float(self.end_ago_spin.value())))
+        self.start_ago_spin.blockSignals(True)
+        self.end_ago_spin.blockSignals(True)
+        self.start_ago_spin.setValue(round(start_ago, 2))
+        self.end_ago_spin.setValue(round(end_ago, 2))
+        self.start_ago_spin.blockSignals(False)
+        self.end_ago_spin.blockSignals(False)
+        self._set_ab_region_from_ago(start_ago, end_ago)
+        self.ab_set_range_sec_requested.emit(start_ago, end_ago)
+
+    def _nudge_ab(self, which: str, delta_song_sec: float) -> None:
+        start_ago = max(0.5, min(120.0, float(self.start_ago_spin.value())))
+        end_ago = max(0.0, min(start_ago - 0.5, float(self.end_ago_spin.value())))
+        if which == "a":
+            start_ago = max(end_ago + 0.5, min(120.0, start_ago - float(delta_song_sec)))
+        else:
+            end_ago = max(0.0, min(start_ago - 0.5, end_ago - float(delta_song_sec)))
+        self.start_ago_spin.blockSignals(True)
+        self.end_ago_spin.blockSignals(True)
+        self.start_ago_spin.setValue(round(start_ago, 2))
+        self.end_ago_spin.setValue(round(end_ago, 2))
+        self.start_ago_spin.blockSignals(False)
+        self.end_ago_spin.blockSignals(False)
         self._set_ab_region_from_ago(start_ago, end_ago)
         self.ab_set_range_sec_requested.emit(start_ago, end_ago)
 
@@ -674,7 +718,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
     def _on_sep_2stem(self) -> None:
         model_id = str(self.ai_2stem_combo.currentData() or "mdx_low_vram_2stem")
-        self.ai_separate_requested.emit("2stem", model_id, 256, self.ai_gpu_chk.isChecked())
+        spec = MODEL_REGISTRY.get(model_id)
+        segment = spec.default_segment_sec if spec is not None else 256
+        self.ai_separate_requested.emit("2stem", model_id, segment, self.ai_gpu_chk.isChecked())
 
     def _on_sep_4stem(self) -> None:
         self.ai_separate_requested.emit("4stem", "htdemucs_4stem", self.segment_spin.value(), self.ai_gpu_chk.isChecked())
@@ -687,7 +733,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "导出 A/B 历史片段 WAV",
-            str(Path("exports") / "ab_excerpt.wav"),
+            str(default_export_dir() / "ab_excerpt.wav"),
             "WAV Audio (*.wav)",
         )
         if file_path:

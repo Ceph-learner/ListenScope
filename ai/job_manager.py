@@ -245,7 +245,10 @@ class AIJobManager:
             if not allowed:
                 return False, reason
 
-            meta = inspect_wav_header(request.input_wav_path, ai_config=self.ai_config)
+            try:
+                meta = inspect_wav_header(request.input_wav_path, ai_config=self.ai_config)
+            except Exception as exc:
+                return False, f"输入音频无效或不可读: {exc}"
 
             self._active_request = request
             self._result_dispatched = False
@@ -478,7 +481,7 @@ class AIJobManager:
             except Exception:
                 pass
 
-    def _terminate_and_cleanup_ipc(self, grace_timeout: float) -> None:
+    def _terminate_workers_only(self, grace_timeout: float) -> None:
         self._signal_worker_cancel()
         deadline = time.monotonic() + max(0.05, grace_timeout)
         while self._is_worker_alive() and time.monotonic() < deadline:
@@ -529,6 +532,7 @@ class AIJobManager:
             self._subproc_stderr_thread.join(timeout=0.4)
         self._subproc_stderr_thread = None
 
+    def _cleanup_ipc_handles(self) -> None:
         if self._msg_queue is not None:
             try:
                 while True:
@@ -551,6 +555,10 @@ class AIJobManager:
             except Exception:
                 pass
             self._subproc_tmp = None
+
+    def _terminate_and_cleanup_ipc(self, grace_timeout: float) -> None:
+        self._terminate_workers_only(grace_timeout)
+        self._cleanup_ipc_handles()
 
     def _cleanup_task_staging(self, req: AIJobRequest) -> None:
         cleanup_temp_outputs(Path(req.output_dir) / f".tmp_{req.task_id}")
@@ -660,6 +668,7 @@ class AIJobManager:
         """Gracefully cancel the active AI separation job, escalating to terminate if needed."""
         with self._lock:
             req = self._active_request
+            mon = self._monitor_thread
             if req is None or self._done_event.is_set():
                 return self._last_result
             self._signal_worker_cancel()
@@ -669,16 +678,22 @@ class AIJobManager:
         if not self._done_event.is_set():
             with self._lock:
                 self._stop_monitor.set()
-            self._terminate_and_cleanup_ipc(grace_timeout=0.3)
+                if self._monitor_thread is not None:
+                    mon = self._monitor_thread
+            self._terminate_workers_only(grace_timeout=0.3)
+            if mon is not None and mon.is_alive() and mon is not threading.current_thread():
+                mon.join(timeout=1.0)
+            self._cleanup_ipc_handles()
             self._cleanup_task_staging(req)
             res = AIJobResult(
                 task_id=req.task_id,
                 state=AIJobState.CANCELLED,
                 model_id=req.model_id,
+                device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
                 error="AI 分轨任务已取消并清理临时文件",
             )
             self._dispatch_result(req, res)
-            return res
+            return self.last_result() or res
         return self._last_result
 
     def emergency_stop(self, reason: str = "用户触发紧急停止 AI") -> ResourceSnapshot:
@@ -701,9 +716,10 @@ class AIJobManager:
 
             try:
                 if req is not None:
-                    self._terminate_and_cleanup_ipc(grace_timeout=min(0.6, self.ai_config.worker_graceful_cancel_timeout_sec))
+                    self._terminate_workers_only(grace_timeout=min(0.6, self.ai_config.worker_graceful_cancel_timeout_sec))
                     if mon is not None and mon.is_alive() and mon is not threading.current_thread():
                         mon.join(timeout=1.0)
+                    self._cleanup_ipc_handles()
                     self._cleanup_task_staging(req)
                     res = AIJobResult(
                         task_id=req.task_id,
