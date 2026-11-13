@@ -1,6 +1,6 @@
 # ListenScope 系统与硬件检测报告 (Phase 0)
 
-- **检测时间**: `2026-11-13 09:19:00 UTC`
+- **检测时间**: `2026-11-13 09:28:05 UTC`
 
 ## 1. 目标用户真机硬性规格（不可更改）
 
@@ -27,7 +27,7 @@
 | Git 版本 | `git version 2.39.5` | 已安装 |
 | CPU | `Intel(R) Xeon(R) Platinum 8481C` (2 逻辑核) | Windows PC CPU (实时分析默认 CPU 运行) |
 | 系统总 RAM | `7947.7 MB` (7.76 GB) | **16GB RAM** |
-| 当前可用 RAM (`psutil.available`) | `7170.4 MB` (7.00 GB) | AI 前建议 >= 5GB，低于 3GB 拒绝启动 |
+| 当前可用 RAM (`psutil.available`) | `7195.4 MB` (7.03 GB) | AI 前建议 >= 5GB，低于 3GB 拒绝启动 |
 | NVML (`pynvml`) | `不可用` | 可用 (用于监控 8GB VRAM) |
 | `nvidia-smi` | `未找到` | 可用 |
 | NVIDIA 驱动 | `未检测到` | 支持 CUDA >= 12.8 |

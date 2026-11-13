@@ -36,7 +36,9 @@ from ai.job_manager import AIJobManager
 from analysis.midi_transcription import transcribe_stem_to_midi
 from analysis.stem_analyzer import analyze_stems_offline, export_transcription_sheet
 from analysis.worker import AnalysisWorker
+from audio.bookmarks import ABBookmarkManager
 from audio.capture_base import AudioCaptureBackend
+from audio.metronome import PracticeMetronome
 from audio.pcm_utils import normalize_to_canonical_pcm
 from audio.playback import AB_PAUSE_PLAYER_HINT, HistoryABPlayer, StemMixerEngine
 from audio.process_enum import enumerate_audio_processes
@@ -48,6 +50,7 @@ from audio.system_loopback import (
     WasapiSystemLoopbackBackend,
 )
 from core.config import AIConfig, AnalysisConfig, AudioConfig, ResourceLimits
+from core.diagnostics import export_diagnostic_bundle
 from core.logging import BoundedMemoryLogHandler, PerformanceLogger
 from core.models import (
     AIJobProgress,
@@ -176,8 +179,21 @@ class ListenScopeController:
             audio_config=self.audio_config,
             analysis_config=self.analysis_config,
         )
-        self.ab_player = HistoryABPlayer(self.ring_buffer, audio_config=self.audio_config)
-        self.mixer_engine = StemMixerEngine(sample_rate=self.audio_config.sample_rate, channels=self.audio_config.channels)
+        self.metronome = PracticeMetronome(
+            sample_rate=self.audio_config.sample_rate,
+            channels=self.audio_config.channels,
+        )
+        self.bookmark_manager = ABBookmarkManager(max_bookmarks=12)
+        self.ab_player = HistoryABPlayer(
+            self.ring_buffer,
+            audio_config=self.audio_config,
+            metronome=self.metronome,
+        )
+        self.mixer_engine = StemMixerEngine(
+            sample_rate=self.audio_config.sample_rate,
+            channels=self.audio_config.channels,
+            metronome=self.metronome,
+        )
         self.perf_logger = PerformanceLogger(log_dir=self.work_dir / "logs" / "performance")
 
         self.ai_job_manager = AIJobManager(
@@ -327,6 +343,15 @@ class ListenScopeController:
         w.live_widget.stop_requested.connect(self._on_live_stop)
         w.live_widget.balance_changed.connect(self.live_separator.set_gains)
         w.settings_applied.connect(self._on_settings_applied)
+        w.ab_bookmark_save_requested.connect(self._on_ab_bookmark_save)
+        w.ab_bookmark_select_requested.connect(self._on_ab_bookmark_select)
+        w.ab_bookmark_delete_requested.connect(self._on_ab_bookmark_delete)
+        w.chroma_widget.metronome_bpm_changed.connect(self.metronome.set_bpm)
+        w.chroma_widget.metronome_beats_changed.connect(self.metronome.set_beats_per_bar)
+        w.chroma_widget.metronome_overlay_toggled.connect(self._on_metronome_overlay_toggled)
+        w.chroma_widget.metronome_standalone_toggled.connect(self._on_metronome_standalone_toggled)
+        w.mixer_widget.metronome_overlay_toggled.connect(self._on_metronome_overlay_toggled)
+        w.resource_panel.export_diagnostics_requested.connect(self._on_export_diagnostic_bundle)
 
     def refresh_sources(self) -> None:
         procs = enumerate_audio_processes(include_all_running=False)
@@ -433,6 +458,8 @@ class ListenScopeController:
     def _on_ab_play(self) -> None:
         if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
             self.ab_player.select_recent_seconds(min(30.0, max(1.0, self.ring_buffer.available_seconds)))
+        self.metronome.stop_standalone()
+        self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
         self.mixer_engine.pause()
         self.live_separator.close_output_stream()
         try:
@@ -457,8 +484,125 @@ class ListenScopeController:
             self.window.show_banner_message(f"导出 A/B 片段失败: {exc}")
 
     def _on_mixer_before_play(self) -> None:
+        self.metronome.stop_standalone()
+        self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
         self.ab_player.pause()
         self.live_separator.close_output_stream()
+
+    def _on_metronome_overlay_toggled(self, enabled: bool) -> None:
+        self.metronome.set_overlay_enabled(bool(enabled))
+        self.window.chroma_widget.sync_metronome_ui(overlay_enabled=bool(enabled))
+        self.window.mixer_widget.sync_metronome_ui(bool(enabled))
+
+    def _on_metronome_standalone_toggled(self, enabled: bool) -> None:
+        if enabled:
+            self.ab_player.pause()
+            self.mixer_engine.pause()
+            self.live_separator.close_output_stream()
+            self.metronome.start_standalone(open_audio_device=True)
+            self.window.chroma_widget.sync_metronome_ui(standalone_playing=True)
+            self.window.show_banner_message(
+                f"✅ 纯 CPU 独立练习节拍器已开启 ({self.metronome.bpm:.1f} BPM, {self.metronome.beats_per_bar} 拍/小节)。"
+            )
+        else:
+            self.metronome.stop_standalone()
+            self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
+
+    def _sync_ab_bookmarks(self) -> None:
+        items = self.bookmark_manager.list_bookmarks(
+            oldest_abs_frame=self.ring_buffer.oldest_abs_frame,
+            newest_abs_frame=self.ring_buffer.total_written_frames,
+            sample_rate=self.ring_buffer.sample_rate,
+        )
+        self.window.update_ab_bookmarks(items)
+
+    def _on_ab_bookmark_save(self, label: str) -> None:
+        avail = self.ring_buffer.available_seconds
+        if avail < 0.5:
+            self.window.show_banner_message("当前 120s 环形缓冲可用音频不足 0.5s，无法保存 A/B 书签。")
+            return
+        if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
+            self.ab_player.select_recent_seconds(min(30.0, avail))
+        a, b = self.ab_player.loop_range
+        oldest = self.ring_buffer.oldest_abs_frame
+        a = max(oldest, a)
+        if b <= a:
+            self.window.show_banner_message("当前 A/B 区间已失效，请重新设定区间后再保存书签。")
+            return
+        bm = self.bookmark_manager.add_bookmark(a, b, label=label, oldest_abs_frame=oldest)
+        self.window.bookmark_label_edit.clear()
+        self._sync_ab_bookmarks()
+        idx = self.window.bookmark_combo.findData(bm.bookmark_id)
+        if idx >= 0:
+            self.window.bookmark_combo.setCurrentIndex(idx)
+        self.window.show_banner_message(
+            f"✅ 已保存 A/B 书签「{bm.label}」({(b - a) / float(self.ring_buffer.sample_rate):.1f}s，上限 12 个)。"
+        )
+
+    def _on_ab_bookmark_select(self, bookmark_id: int) -> None:
+        oldest = self.ring_buffer.oldest_abs_frame
+        newest = self.ring_buffer.total_written_frames
+        sr = float(max(1, self.ring_buffer.sample_rate))
+        bm = self.bookmark_manager.get_bookmark(bookmark_id, oldest_abs_frame=oldest)
+        if bm is None or bm.end_abs_frame <= oldest:
+            self._sync_ab_bookmarks()
+            self.window.show_banner_message("⚠️ 所选 A/B 书签已滚出最近 120s 环形缓冲并自动清理。")
+            return
+        a = max(oldest, bm.start_abs_frame)
+        b = min(newest, bm.end_abs_frame)
+        if b <= a:
+            self._sync_ab_bookmarks()
+            self.window.show_banner_message("⚠️ 所选 A/B 书签范围无效，已移除。")
+            return
+        self.ab_player.set_ab_range(a, b)
+        start_ago = max(0.5, (newest - a) / sr)
+        end_ago = max(0.0, (newest - b) / sr)
+        if start_ago - end_ago < 0.5:
+            start_ago = min(120.0, end_ago + 0.5)
+        self.window.start_ago_spin.setValue(round(start_ago, 2))
+        self.window.end_ago_spin.setValue(round(end_ago, 2))
+        self.window._set_ab_region_from_ago(start_ago, end_ago)
+        self.window.show_banner_message(
+            f"✅ 已跳转书签「{bm.label}」(倒退 {start_ago:.1f}s ~ {end_ago:.1f}s，共 {(b - a) / sr:.1f}s)。"
+        )
+
+    def _on_ab_bookmark_delete(self, bookmark_id: int) -> None:
+        removed = self.bookmark_manager.remove_bookmark(bookmark_id)
+        self._sync_ab_bookmarks()
+        if removed:
+            self.window.show_banner_message("已删除选定 A/B 书签。")
+
+    def _on_export_diagnostic_bundle(self, out_path: str) -> None:
+        if not out_path:
+            return
+        snap = self.resource_manager.latest_snapshot or self.resource_manager.sample()
+        hw_rep = self.hardware_report
+        limits = self.resource_limits
+        ai_cfg = self.ai_config
+        ai_py = self.ai_job_manager.ai_python_executable or ""
+        perf_logger = self.perf_logger
+        log_handler = self.log_handler
+        settings_path = self._settings_path
+
+        def _run() -> None:
+            try:
+                saved = export_diagnostic_bundle(
+                    out_path,
+                    hardware_report=hw_rep,
+                    resource_snapshot=snap,
+                    resource_limits=limits,
+                    ai_config=ai_cfg,
+                    ai_python_executable=ai_py,
+                    perf_logger=perf_logger,
+                    log_handler=log_handler,
+                    settings_path=settings_path,
+                )
+                msg = f"✅ 已生成离线排障诊断包 (.zip): {saved}"
+            except Exception as exc:
+                msg = f"导出诊断包失败: {exc}"
+            self._put_latest(self._ui_banner_q, msg)
+
+        threading.Thread(target=_run, name="ListenScope-ExportDiag", daemon=True).start()
 
     def _on_reset_harmony(self) -> None:
         self.analysis_worker.reset_harmony()
@@ -603,6 +747,8 @@ class ListenScopeController:
             )
             self.analysis_worker.reset_harmony()
             self.window.chroma_widget.clear_progression()
+            self.bookmark_manager.clear()
+            self._sync_ab_bookmarks()
             avail = self.ring_buffer.available_seconds
             if avail >= 0.5:
                 sel = min(30.0, avail)
@@ -633,6 +779,8 @@ class ListenScopeController:
             self.ab_player.stop()
             self.ring_buffer.clear()
             self.ab_player.set_ab_range(0, 0)
+            self.bookmark_manager.clear()
+            self._sync_ab_bookmarks()
             self.analysis_worker.reset_harmony()
             self.window.chroma_widget.clear_progression()
             arr, sr, ch = _read_wav_excerpt_f32(Path(stem_path), max_seconds=30.0)
@@ -817,6 +965,8 @@ class ListenScopeController:
         threading.Thread(target=_run, name="ListenScope-LiveBench", daemon=True).start()
 
     def _on_live_start(self, model_id: str) -> None:
+        self.metronome.stop_standalone()
+        self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
         self.ab_player.pause()
         self.mixer_engine.pause()
 
@@ -984,6 +1134,7 @@ class ListenScopeController:
 
             mins, maxs, avail_sec = self.ring_buffer.snapshot_envelope(300)
             self.window.update_history_overview(mins, maxs, avail_sec)
+            self._sync_ab_bookmarks()
 
             rsnap = self.resource_manager.sample()
             self.window.update_resource_snapshot(
@@ -1002,6 +1153,7 @@ class ListenScopeController:
         if hasattr(self, "_timer"):
             self._timer.stop()
         self.stop_capture()
+        self.metronome.stop_standalone()
         self.ab_player.stop()
         self.mixer_engine.clear()
         self.analysis_worker.stop()

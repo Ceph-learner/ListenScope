@@ -132,6 +132,7 @@ class StemMixerWidget(QtWidgets.QWidget):
     deep_analyze_requested = QtCore.Signal(object)  # dict[stem_name, stem_path]
     export_sheet_requested = QtCore.Signal(str)     # output .md/.csv path
     save_midi_requested = QtCore.Signal(str)        # output .mid path
+    metronome_overlay_toggled = QtCore.Signal(bool)
 
     def __init__(self, mixer_engine: StemMixerEngine, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -250,6 +251,10 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.clear_subloop_btn.setEnabled(False)
         self.clear_subloop_btn.clicked.connect(self._on_clear_subloop)
 
+        self.metronome_chk = QtWidgets.QCheckBox("随播节拍器")
+        self.metronome_chk.setToolTip("与混音回放（含 0.5x–1.25x 变速练习）同步叠加纯 CPU 节拍器")
+        self.metronome_chk.toggled.connect(self.metronome_overlay_toggled.emit)
+
         self.subloop_badge_lbl = QtWidgets.QLabel("循环范围: 全曲")
         self.subloop_badge_lbl.setStyleSheet("padding: 3px 8px; background: #1C2026; border-radius: 4px; color: #9AA4B2;")
 
@@ -261,6 +266,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         practice_bar.addWidget(self.speed_combo)
         practice_bar.addWidget(self.loop_chord_btn)
         practice_bar.addWidget(self.clear_subloop_btn)
+        practice_bar.addWidget(self.metronome_chk)
         practice_bar.addWidget(self.subloop_badge_lbl)
         practice_bar.addWidget(self.live_chord_hud_lbl, 1)
         root.addLayout(practice_bar)
@@ -397,6 +403,11 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.subloop_badge_lbl.setText("循环范围: 全曲")
         self.subloop_badge_lbl.setStyleSheet("padding: 3px 8px; background: #1C2026; border-radius: 4px; color: #9AA4B2;")
         self.clear_subloop_btn.setEnabled(False)
+
+    def sync_metronome_ui(self, enabled: bool) -> None:
+        self.metronome_chk.blockSignals(True)
+        self.metronome_chk.setChecked(bool(enabled))
+        self.metronome_chk.blockSignals(False)
 
     def _on_seek_released(self) -> None:
         max_f = self.mixer_engine.max_frames

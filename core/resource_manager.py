@@ -356,3 +356,8 @@ class ResourceManager:
     def history(self) -> list[ResourceSnapshot]:
         with self._lock:
             return list(self._history)
+
+    @property
+    def latest_snapshot(self) -> Optional[ResourceSnapshot]:
+        with self._lock:
+            return self._history[-1] if self._history else None

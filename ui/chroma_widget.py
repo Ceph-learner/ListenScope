@@ -9,6 +9,7 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
 from analysis.chroma import PITCH_CLASSES
+from audio.metronome import TapTempoTracker
 from core.models import AnalysisSnapshot
 
 
@@ -16,10 +17,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     """Displays 12-bin chroma, chord candidates, bounded transition strip, key candidates, BPM, and pitch readout."""
 
     reset_harmony_requested = QtCore.Signal()
+    metronome_bpm_changed = QtCore.Signal(float)
+    metronome_beats_changed = QtCore.Signal(int)
+    metronome_overlay_toggled = QtCore.Signal(bool)
+    metronome_standalone_toggled = QtCore.Signal(bool)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._chord_history: deque[str] = deque(maxlen=12)
+        self._tap_tracker = TapTempoTracker()
+        self._latest_detected_bpm: float | None = None
         root = QtWidgets.QVBoxLayout(self)
         root.setSpacing(10)
 
@@ -57,18 +64,65 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         key_l.addWidget(self.key_sig_note_lbl)
         cards.addWidget(key_box, 2)
 
-        # BPM + Pitch card
-        rhythm_box = QtWidgets.QGroupBox("BPM 与 主音高 (CPU 轻量估算)")
+        # BPM + Pitch + CPU Practice Metronome card
+        rhythm_box = QtWidgets.QGroupBox("BPM · 主音高 · 纯 CPU 练习节拍器")
         rhythm_l = QtWidgets.QVBoxLayout(rhythm_box)
         self.bpm_lbl = QtWidgets.QLabel("BPM: Unknown")
         self.bpm_lbl.setStyleSheet("font-size: 22px; font-weight: 700; color: #FFD166;")
         self.bpm_stab_lbl = QtWidgets.QLabel("节拍稳定度: Unknown")
         self.pitch_lbl = QtWidgets.QLabel("主音高: -")
+
+        met_row = QtWidgets.QHBoxLayout()
+        self.tap_tempo_btn = QtWidgets.QPushButton("Tap 定速")
+        self.tap_tempo_btn.setToolTip("按曲子节奏连续点击 2 次以上估算 BPM")
+        self.tap_tempo_btn.clicked.connect(self._on_tap_tempo_clicked)
+
+        self.adopt_bpm_btn = QtWidgets.QPushButton("同步检测BPM")
+        self.adopt_bpm_btn.setEnabled(False)
+        self.adopt_bpm_btn.setToolTip("将上方检测到的歌曲 BPM 应用到练习节拍器")
+        self.adopt_bpm_btn.clicked.connect(self._on_adopt_bpm_clicked)
+
+        self.metronome_bpm_spin = QtWidgets.QDoubleSpinBox()
+        self.metronome_bpm_spin.setRange(30.0, 240.0)
+        self.metronome_bpm_spin.setDecimals(1)
+        self.metronome_bpm_spin.setSingleStep(1.0)
+        self.metronome_bpm_spin.setValue(120.0)
+        self.metronome_bpm_spin.setSuffix(" BPM")
+        self.metronome_bpm_spin.valueChanged.connect(self.metronome_bpm_changed.emit)
+
+        self.metronome_sig_combo = QtWidgets.QComboBox()
+        for sig_lbl, beats in [("4/4", 4), ("3/4", 3), ("2/4", 2), ("6/8", 6)]:
+            self.metronome_sig_combo.addItem(sig_lbl, beats)
+        self.metronome_sig_combo.currentIndexChanged.connect(
+            lambda: self.metronome_beats_changed.emit(int(self.metronome_sig_combo.currentData() or 4))
+        )
+
+        self.metronome_overlay_chk = QtWidgets.QCheckBox("随播节拍器")
+        self.metronome_overlay_chk.setToolTip("在 A/B 回放或分轨混音（含变速练习）中混入同步节拍器 Click")
+        self.metronome_overlay_chk.toggled.connect(self.metronome_overlay_toggled.emit)
+
+        self.metronome_standalone_btn = QtWidgets.QPushButton("独立节拍器")
+        self.metronome_standalone_btn.setCheckable(True)
+        self.metronome_standalone_btn.setToolTip("单独播放纯 CPU 节拍器 Click 用于跟练（播放 A/B 或分轨时会自动切回随播模式）")
+        self.metronome_standalone_btn.toggled.connect(self.metronome_standalone_toggled.emit)
+
+        met_row.addWidget(self.tap_tempo_btn)
+        met_row.addWidget(self.adopt_bpm_btn)
+        met_row.addWidget(self.metronome_bpm_spin)
+        met_row.addWidget(self.metronome_sig_combo)
+        met_row2 = QtWidgets.QHBoxLayout()
+        met_row2.addWidget(self.metronome_overlay_chk)
+        met_row2.addWidget(self.metronome_standalone_btn)
+        self.tap_status_lbl = QtWidgets.QLabel("")
+        self.tap_status_lbl.setStyleSheet("color: #9AA4B2; font-size: 11px;")
+        met_row2.addWidget(self.tap_status_lbl, 1)
+
         rhythm_l.addWidget(self.bpm_lbl)
         rhythm_l.addWidget(self.bpm_stab_lbl)
         rhythm_l.addWidget(self.pitch_lbl)
-        rhythm_l.addStretch(1)
-        cards.addWidget(rhythm_box, 1)
+        rhythm_l.addLayout(met_row)
+        rhythm_l.addLayout(met_row2)
+        cards.addWidget(rhythm_box, 2)
 
         root.addLayout(cards)
 
@@ -125,12 +179,40 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     def recent_progression(self) -> list[str]:
         return list(self._chord_history)
 
+    def _on_tap_tempo_clicked(self) -> None:
+        tap_bpm = self._tap_tracker.tap()
+        if tap_bpm is None:
+            self.tap_status_lbl.setText(f"Tap x{self._tap_tracker.tap_count} (继续点击...)")
+            return
+        self.tap_status_lbl.setText(f"Tap={tap_bpm:.1f} BPM")
+        self.metronome_bpm_spin.setValue(tap_bpm)
+
+    def _on_adopt_bpm_clicked(self) -> None:
+        if self._latest_detected_bpm is not None:
+            self.metronome_bpm_spin.setValue(round(self._latest_detected_bpm, 1))
+            self.tap_status_lbl.setText(f"已同步 {self._latest_detected_bpm:.1f} BPM")
+
+    def sync_metronome_ui(self, *, overlay_enabled: bool | None = None, standalone_playing: bool | None = None) -> None:
+        if overlay_enabled is not None:
+            self.metronome_overlay_chk.blockSignals(True)
+            self.metronome_overlay_chk.setChecked(bool(overlay_enabled))
+            self.metronome_overlay_chk.blockSignals(False)
+        if standalone_playing is not None:
+            self.metronome_standalone_btn.blockSignals(True)
+            self.metronome_standalone_btn.setChecked(bool(standalone_playing))
+            self.metronome_standalone_btn.setText("停止独立节拍器" if standalone_playing else "独立节拍器")
+            self.metronome_standalone_btn.blockSignals(False)
+
     def _on_reset_clicked(self) -> None:
         self.clear_progression()
         self.reset_harmony_requested.emit()
 
     def clear_progression(self) -> None:
         self._chord_history.clear()
+        self._tap_tracker.reset()
+        self._latest_detected_bpm = None
+        self.adopt_bpm_btn.setEnabled(False)
+        self.tap_status_lbl.setText("")
         self.chord_progression_lbl.setText("最近和弦进行 (最多 12 步): -")
         self.chord_primary_lbl.setText("N (静音)")
         self.chord_secondary_lbl.setText("第二候选: -")
@@ -166,7 +248,14 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.key_sig_note_lbl.setText(ky.key_signature_note)
 
         tp = snap.tempo
-        self.bpm_lbl.setText(f"BPM: {tp.bpm:.1f}" if tp.bpm is not None else "BPM: Unknown")
+        if tp.bpm is not None:
+            self._latest_detected_bpm = float(tp.bpm)
+            self.adopt_bpm_btn.setEnabled(True)
+            self.bpm_lbl.setText(f"BPM: {tp.bpm:.1f}")
+        else:
+            self._latest_detected_bpm = None
+            self.adopt_bpm_btn.setEnabled(False)
+            self.bpm_lbl.setText("BPM: Unknown")
         self.bpm_stab_lbl.setText(f"节拍稳定度: {tp.stability} (自相关峰: {tp.confidence_score:.2f})")
 
         pt = snap.pitch

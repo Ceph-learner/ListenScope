@@ -86,11 +86,13 @@ pyinstaller packaging\listenscope_core.spec --noconfirm
 
 打包输出位于 `dist\ListenScopeCore\ListenScope.exe`。打包规范（[`listenscope_core.spec`](../packaging/listenscope_core.spec)）会自动打包 `proctap` / `soundfile` 原生库并附带 `ai/`、`separation/`、`streaming/`、`audio/`、`core/`、`analysis/`、`scripts/` 纯 Python 模块（通过 [`core/paths.py`](../core/paths.py) 自动定位 `sys._MEIPASS` 并使用 `CREATE_NO_WINDOW` 静默启动子进程），以便外部 `.venv-ai\Scripts\python.exe` 同时执行音轨分离（`python -m ai.worker`）、实验性实时分轨（`python -m streaming.live_separator` / `streaming.benchmark`）、Basic Pitch MIDI 转录（`python -m analysis.midi_transcription`）与设置面板 **“验证 AI 环境”**（`python -m scripts.check_env --json --check-ai-packages --no-write`）。运行后可在 **设置 -> 资源安全阈值 & AI 配置 -> 独立 AI Worker Python 路径** 通过「浏览...」与「验证 AI 环境」检查后点击 OK，外部 `.venv-ai` GPU 就绪状态会实时同步主窗口勾选状态并持久化保存至 `~/.listenscope/settings.json`。
 
-### Windows 真机音频设备排障说明（捕获前必看）
+### Windows 真机音频设备与现场排障说明（捕获前必看）
 
 - **44.1kHz / 96kHz 声卡或蓝牙耳机静音启动变音问题（上游 `proctap 1.1.1` 已知特性）**：
   - 上游 `proc-tap` 在非 48kHz 采样率设备上会进入自检分支；若启动捕获瞬间目标播放器恰好处于纯静音，格式自检可能暂落回 INT16。
   - **推荐做法**：在 Windows「声音设置 -> 扬声器/耳机属性 -> 高级 -> 默认格式」保持 **24位/16位 48000 Hz（推荐）**；若使用 44.1kHz / 96kHz 外置声卡，先让 QQ 音乐开始出声再点击 ListenScope「开始捕获」。如仍受设备限制，可切换至 `[兜底] 系统 WASAPI Loopback`。
+- **一键导出脱敏诊断包 (`.zip`)**：
+  - 在 **4. 系统资源 & 性能日志** 页点击 **「导出诊断包 (.zip)」**，可在不泄露个人环境变量或本地路径名的前提下，将 `SYSTEM_REPORT.md`、硬件状态摘要、最近 500 条运行日志、最新 `ai_perf_*.jsonl` 尾部摘要及脱敏设置打包为 `listenscope_diag_*.zip` 用于现场排障。
 
 ---
 

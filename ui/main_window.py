@@ -247,6 +247,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     settings_applied = QtCore.Signal(object, object, str)
     import_audio_requested = QtCore.Signal(str)
     toggle_playback_requested = QtCore.Signal()
+    ab_bookmark_save_requested = QtCore.Signal(str)
+    ab_bookmark_select_requested = QtCore.Signal(int)
+    ab_bookmark_delete_requested = QtCore.Signal(int)
 
     def __init__(
         self,
@@ -449,6 +452,31 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_region.sigRegionChangeFinished.connect(self._on_ab_region_finished)
         bottom_l.addWidget(self.history_overview_plot)
 
+        bookmark_row = QtWidgets.QHBoxLayout()
+        bookmark_row.addWidget(QtWidgets.QLabel("A/B 书签(<=12):"))
+        self.bookmark_label_edit = QtWidgets.QLineEdit()
+        self.bookmark_label_edit.setPlaceholderText("书签名称 (如 副歌/Solo，可留空)")
+        self.bookmark_label_edit.setMaxLength(40)
+        self.bookmark_label_edit.setMaximumWidth(210)
+        self.bookmark_save_btn = QtWidgets.QPushButton("保存当前 A/B")
+        self.bookmark_save_btn.clicked.connect(self._on_bookmark_save_clicked)
+
+        self.bookmark_combo = QtWidgets.QComboBox()
+        self.bookmark_combo.setMinimumWidth(260)
+        self.bookmark_jump_btn = QtWidgets.QPushButton("跳转此书签")
+        self.bookmark_jump_btn.setEnabled(False)
+        self.bookmark_jump_btn.clicked.connect(self._on_bookmark_jump_clicked)
+        self.bookmark_del_btn = QtWidgets.QPushButton("删除书签")
+        self.bookmark_del_btn.setEnabled(False)
+        self.bookmark_del_btn.clicked.connect(self._on_bookmark_del_clicked)
+
+        bookmark_row.addWidget(self.bookmark_label_edit)
+        bookmark_row.addWidget(self.bookmark_save_btn)
+        bookmark_row.addWidget(self.bookmark_combo, 1)
+        bookmark_row.addWidget(self.bookmark_jump_btn)
+        bookmark_row.addWidget(self.bookmark_del_btn)
+        bottom_l.addLayout(bookmark_row)
+
         row_b = QtWidgets.QHBoxLayout()
         self.ai_2stem_combo = QtWidgets.QComboBox()
         self._refresh_model_combos()
@@ -594,6 +622,55 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._ab_playhead_line.setValue(x)
         if not self._ab_playhead_line.isVisible():
             self._ab_playhead_line.setVisible(True)
+
+    def _on_bookmark_save_clicked(self) -> None:
+        label = self.bookmark_label_edit.text().strip()
+        self.ab_bookmark_save_requested.emit(label)
+
+    def _on_bookmark_jump_clicked(self) -> None:
+        bid = self.bookmark_combo.currentData()
+        if bid is not None:
+            self.ab_bookmark_select_requested.emit(int(bid))
+
+    def _on_bookmark_del_clicked(self) -> None:
+        bid = self.bookmark_combo.currentData()
+        if bid is not None:
+            self.ab_bookmark_delete_requested.emit(int(bid))
+
+    def update_ab_bookmarks(self, items: list[dict[str, Any]]) -> None:
+        if self.bookmark_combo.view().isVisible():
+            return
+        formatted: list[tuple[int, str]] = [
+            (
+                int(it["bookmark_id"]),
+                f"{it['label']} (-{it['start_ago_sec']:.1f}s~-{it['end_ago_sec']:.1f}s, 长{it['duration_sec']:.1f}s)",
+            )
+            for it in items
+        ]
+        existing_ids = [
+            int(self.bookmark_combo.itemData(i))
+            for i in range(self.bookmark_combo.count())
+            if self.bookmark_combo.itemData(i) is not None
+        ]
+        new_ids = [bid for bid, _ in formatted]
+        if existing_ids == new_ids:
+            for idx, (_bid, txt) in enumerate(formatted):
+                if self.bookmark_combo.itemText(idx) != txt:
+                    self.bookmark_combo.setItemText(idx, txt)
+        else:
+            prev_bid = self.bookmark_combo.currentData()
+            self.bookmark_combo.blockSignals(True)
+            self.bookmark_combo.clear()
+            for bid, txt in formatted:
+                self.bookmark_combo.addItem(txt, bid)
+            if prev_bid is not None:
+                idx = self.bookmark_combo.findData(prev_bid)
+                if idx >= 0:
+                    self.bookmark_combo.setCurrentIndex(idx)
+            self.bookmark_combo.blockSignals(False)
+        has_items = len(formatted) > 0
+        self.bookmark_jump_btn.setEnabled(has_items)
+        self.bookmark_del_btn.setEnabled(has_items)
 
     def _on_sep_2stem(self) -> None:
         model_id = str(self.ai_2stem_combo.currentData() or "mdx_low_vram_2stem")

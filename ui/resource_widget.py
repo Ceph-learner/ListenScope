@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from pathlib import Path
+
 from PySide6 import QtCore, QtWidgets
 
 from core.logging import PerformanceRecord
@@ -48,7 +51,9 @@ class ResourceMonitorBar(QtWidgets.QWidget):
 
 
 class ResourceStatusPanel(QtWidgets.QWidget):
-    """Full dashboard tab showing detailed RAM/VRAM telemetry, AI perf history, and bounded logs."""
+    """Full dashboard tab showing detailed RAM/VRAM telemetry, AI perf history, bounded logs, and diagnostic zip export."""
+
+    export_diagnostics_requested = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -102,14 +107,35 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         perf_layout.addWidget(self.perf_table)
         root.addWidget(perf_group, 2)
 
-        # Bounded diagnostic log viewer
+        # Bounded diagnostic log viewer + one-click ZIP bundle export
         log_group = QtWidgets.QGroupBox("有界运行日志 (仅保留最近 500 条)")
         log_layout = QtWidgets.QVBoxLayout(log_group)
+        diag_bar = QtWidgets.QHBoxLayout()
+        diag_note = QtWidgets.QLabel("日志与性能摘要严格有界；如在 Windows 遇到 CUDA/WASAPI 故障可一键导出脱敏诊断包：")
+        diag_note.setStyleSheet("color: #9AA4B2;")
+        self.export_diag_btn = QtWidgets.QPushButton("导出诊断包 (.zip)")
+        self.export_diag_btn.setToolTip("打包 SYSTEM_REPORT、最近 500 条有界日志、性能记录与脱敏 settings.json")
+        self.export_diag_btn.clicked.connect(self._on_export_diag_clicked)
+        diag_bar.addWidget(diag_note, 1)
+        diag_bar.addWidget(self.export_diag_btn)
+        log_layout.addLayout(diag_bar)
+
         self.log_text = QtWidgets.QPlainTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumBlockCount(500)
         log_layout.addWidget(self.log_text)
         root.addWidget(log_group, 1)
+
+    def _on_export_diag_clicked(self) -> None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "导出 ListenScope 诊断排障压缩包 (.zip)",
+            str(Path("exports") / f"listenscope_diag_{stamp}.zip"),
+            "ZIP Archives (*.zip)",
+        )
+        if file_path:
+            self.export_diagnostics_requested.emit(file_path)
 
     def update_snapshot(self, snap: ResourceSnapshot) -> None:
         self._fields["main_ram"].setText(f"{snap.main_ram_mb:.1f} MB")
