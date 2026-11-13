@@ -2,11 +2,140 @@
 
 from __future__ import annotations
 
+import re
 import numpy as np
 
 from core.models import ChordEstimate
 
 from .chroma import PITCH_CLASSES
+
+
+_FLAT_TO_SHARP = {
+    "DB": "C#",
+    "EB": "D#",
+    "FB": "E",
+    "GB": "F#",
+    "AB": "G#",
+    "BB": "A#",
+    "E#": "F",
+    "B#": "C",
+    "CB": "B",
+}
+
+_CHORD_INTERVALS: dict[str, tuple[int, ...]] = {
+    "": (0, 4, 7),
+    "maj": (0, 4, 7),
+    "m": (0, 3, 7),
+    "min": (0, 3, 7),
+    "maj7": (0, 4, 7, 11),
+    "m7": (0, 3, 7, 10),
+    "min7": (0, 3, 7, 10),
+    "7": (0, 4, 7, 10),
+    "sus4": (0, 5, 7),
+    "sus2": (0, 2, 7),
+    "dim": (0, 3, 6),
+    "aug": (0, 4, 8),
+}
+
+_EXTRA_CHORD_SUFFIXES = {"6", "m6", "min6", "9", "m9", "maj9", "add9", "5", "dim7", "m7b5"}
+_CHORD_RE = re.compile(r"^([A-Ga-g])([#b♯♭]?)(.*)$")
+_NOTE_RE = re.compile(r"^([A-Ga-g])([#b♯♭]?)(-?\d+)?$")
+_KEY_RE = re.compile(r"^([A-Ga-g][#b♯♭]?)\s+(major|minor|大调|小调)$", re.IGNORECASE)
+
+
+def _normalize_pitch_token(token: str) -> str | None:
+    clean = (token or "").strip().replace("♯", "#").replace("♭", "b")
+    if not clean:
+        return None
+    norm = _FLAT_TO_SHARP.get(clean.upper(), clean[0].upper() + clean[1:])
+    return norm if norm in PITCH_CLASSES else None
+
+
+def transpose_note_name(note_name: str, semitones: int) -> str:
+    """Shift a pitch class (`C`, `Bb`) or octave-tagged note (`A4`, `C#3`) by `semitones`."""
+    raw = (note_name or "").strip()
+    semi = int(semitones)
+    if semi == 0 or not raw or raw in ("-", "N", "N (静音)", "Unknown", "Insufficient", "结束"):
+        return raw
+    m = _NOTE_RE.match(raw)
+    if not m:
+        return raw
+    norm_root = _normalize_pitch_token(m.group(1) + m.group(2))
+    if norm_root is None:
+        return raw
+    idx = PITCH_CLASSES.index(norm_root)
+    oct_str = m.group(3)
+    if oct_str is None:
+        return PITCH_CLASSES[(idx + semi) % 12]
+    midi = (int(oct_str) + 1) * 12 + idx + semi
+    return f"{PITCH_CLASSES[midi % 12]}{(midi // 12) - 1}"
+
+
+def transpose_chord_symbol(chord_name: str, semitones: int) -> str:
+    """Shift a chord symbol (supporting slash bass & triad/7th/sus qualities) by `semitones`."""
+    raw = (chord_name or "").strip()
+    semi = int(semitones)
+    if semi == 0 or not raw or raw in ("-", "N", "N (静音)", "Unknown", "结束"):
+        return raw
+
+    if "/" in raw:
+        main_part, bass_part = raw.split("/", 1)
+        new_main = transpose_chord_symbol(main_part, semi)
+        if new_main == main_part.strip() and not _CHORD_RE.match(main_part.strip()):
+            return raw
+        new_bass = transpose_note_name(bass_part, semi)
+        return f"{new_main}/{new_bass}"
+
+    m = _CHORD_RE.match(raw)
+    if not m:
+        return raw
+    norm_root = _normalize_pitch_token(m.group(1) + m.group(2))
+    suffix = (m.group(3) or "").strip()
+    if norm_root is None:
+        return raw
+    s_low = suffix.lower()
+    if suffix not in _CHORD_INTERVALS and s_low not in _CHORD_INTERVALS and s_low not in _EXTRA_CHORD_SUFFIXES:
+        return raw
+
+    new_root = PITCH_CLASSES[(PITCH_CLASSES.index(norm_root) + semi) % 12]
+    return f"{new_root}{suffix}"
+
+
+def transpose_key_label(key_label: str, semitones: int) -> str:
+    """Shift key labels like `'C major'` or `'F# minor'` by `semitones`."""
+    raw = (key_label or "").strip()
+    semi = int(semitones)
+    if semi == 0 or not raw or raw in ("-", "Unknown", "Insufficient"):
+        return raw
+    m = _KEY_RE.match(raw)
+    if not m:
+        return raw
+    new_tonic = transpose_note_name(m.group(1), semi)
+    return f"{new_tonic} {m.group(2)}"
+
+
+def spell_chord_tones(chord_name: str) -> str:
+    """Return chromatic note spelling (e.g. `'A · C · E'`) for detected chord symbols, or `'-'`."""
+    raw = (chord_name or "").strip()
+    if not raw or raw in ("-", "N", "N (静音)", "Unknown", "结束"):
+        return "-"
+    base = raw.split("/", 1)[0].strip()
+    m = _CHORD_RE.match(base)
+    if not m:
+        return "-"
+    norm_root = _normalize_pitch_token(m.group(1) + m.group(2))
+    suffix = (m.group(3) or "").strip()
+    if norm_root is None:
+        return "-"
+
+    intervals = _CHORD_INTERVALS.get(suffix)
+    if intervals is None:
+        intervals = _CHORD_INTERVALS.get(suffix.lower())
+    if intervals is None:
+        return "-"
+
+    root_idx = PITCH_CLASSES.index(norm_root)
+    return " · ".join(PITCH_CLASSES[(root_idx + iv) % 12] for iv in intervals)
 
 
 def _build_chord_templates(*, include_sevenths: bool = False) -> tuple[list[str], np.ndarray]:

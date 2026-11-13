@@ -411,6 +411,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_speed_combo.currentIndexChanged.connect(self._on_ab_speed_changed)
 
         self.ab_export_wav_btn = QtWidgets.QPushButton("导出 A/B 片段 WAV")
+        self.ab_export_wav_btn.setToolTip("流式导出当前 A/B 片段 WAV（自动应用当前不变调倍速与随播节拍器）")
         self.import_audio_btn = QtWidgets.QPushButton("导入本地音频(<=120s)")
         self.import_audio_btn.setToolTip("流式读取本地 WAV/FLAC/OGG 的前 <=120s 至历史环形缓冲（禁止全文件一次加载）")
         self.ab_play_btn.clicked.connect(self.ab_play_requested.emit)
@@ -612,8 +613,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_set_range_sec_requested.emit(start_ago, end_ago)
 
     def _on_apply_ab_clicked(self) -> None:
-        start_ago = max(0.5, min(120.0, float(self.start_ago_spin.value())))
-        end_ago = max(0.0, min(start_ago - 0.5, float(self.end_ago_spin.value())))
+        raw_a = max(0.0, min(120.0, float(self.start_ago_spin.value())))
+        raw_b = max(0.0, min(120.0, float(self.end_ago_spin.value())))
+        start_ago = max(0.5, max(raw_a, raw_b))
+        end_ago = max(0.0, min(start_ago - 0.5, min(raw_a, raw_b)))
         self.start_ago_spin.blockSignals(True)
         self.end_ago_spin.blockSignals(True)
         self.start_ago_spin.setValue(round(start_ago, 2))

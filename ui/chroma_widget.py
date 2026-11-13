@@ -4,73 +4,36 @@ from __future__ import annotations
 
 from collections import deque
 import math
-import re
 
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from analysis.chords import (
+    spell_chord_tones,
+    transpose_chord_symbol,
+    transpose_key_label,
+    transpose_note_name,
+)
 from analysis.chroma import PITCH_CLASSES
 from audio.metronome import TapTempoTracker
 from core.models import AnalysisSnapshot
 
 
-_FLAT_TO_SHARP = {
-    "DB": "C#",
-    "EB": "D#",
-    "FB": "E",
-    "GB": "F#",
-    "AB": "G#",
-    "BB": "A#",
-    "E#": "F",
-    "B#": "C",
-    "CB": "B",
-}
-
-_CHORD_INTERVALS: dict[str, tuple[int, ...]] = {
-    "": (0, 4, 7),
-    "maj": (0, 4, 7),
-    "m": (0, 3, 7),
-    "min": (0, 3, 7),
-    "maj7": (0, 4, 7, 11),
-    "m7": (0, 3, 7, 10),
-    "min7": (0, 3, 7, 10),
-    "7": (0, 4, 7, 10),
-    "sus4": (0, 5, 7),
-    "sus2": (0, 2, 7),
-    "dim": (0, 3, 6),
-    "aug": (0, 4, 8),
-}
-
-_CHORD_RE = re.compile(r"^([A-Ga-g])([#b♯♭]?)(.*)$")
-
-
-def spell_chord_tones(chord_name: str) -> str:
-    """Return chromatic note spelling (e.g. `'A · C · E'`) for detected chord symbols, or `'-'`."""
-    raw = (chord_name or "").strip()
-    if not raw or raw in ("-", "N", "N (静音)", "Unknown", "结束"):
-        return "-"
-    base = raw.split("/", 1)[0].strip()
-    m = _CHORD_RE.match(base)
-    if not m:
-        return "-"
-    letter = m.group(1).upper()
-    acc = m.group(2).replace("♯", "#").replace("♭", "b")
-    suffix = (m.group(3) or "").strip()
-
-    token = letter + acc
-    norm_root = _FLAT_TO_SHARP.get(token.upper(), token)
-    if norm_root not in PITCH_CLASSES:
-        return "-"
-
-    intervals = _CHORD_INTERVALS.get(suffix)
-    if intervals is None:
-        intervals = _CHORD_INTERVALS.get(suffix.lower())
-    if intervals is None:
-        return "-"
-
-    root_idx = PITCH_CLASSES.index(norm_root)
-    return " · ".join(PITCH_CLASSES[(root_idx + iv) % 12] for iv in intervals)
+TRANSPOSE_PRESETS: list[tuple[str, int]] = [
+    ("原调 / 实音 (0)", 0),
+    ("Capo 1 (-1 半音指型)", -1),
+    ("Capo 2 (-2 半音指型)", -2),
+    ("Capo 3 (-3 半音指型)", -3),
+    ("Capo 4 (-4 半音指型)", -4),
+    ("Capo 5 (-5 半音指型)", -5),
+    ("Capo 6 (-6 半音指型)", -6),
+    ("Capo 7 (-7 半音指型)", -7),
+    ("降半音 / Eb调弦 (+1)", 1),
+    ("降B乐器 (+2: 小号/单簧管)", 2),
+    ("F调圆号 (+7)", 7),
+    ("降E乐器 (+9: 中音萨克斯)", 9),
+]
 
 
 class TuningCentsBar(QtWidgets.QWidget):
@@ -177,12 +140,15 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     metronome_standalone_toggled = QtCore.Signal(bool)
     metronome_count_in_toggled = QtCore.Signal(bool)
     metronome_volume_changed = QtCore.Signal(float)
+    transpose_semitones_changed = QtCore.Signal(int)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._chord_history: deque[str] = deque(maxlen=12)
         self._tap_tracker = TapTempoTracker()
         self._latest_detected_bpm: float | None = None
+        self._transpose_semitones: int = 0
+        self._last_snapshot: AnalysisSnapshot | None = None
         root = QtWidgets.QVBoxLayout(self)
         root.setSpacing(10)
 
@@ -305,17 +271,26 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         root.addLayout(cards)
 
-        # Recent bounded chord transition strip + Reset button for song switches
+        # Recent bounded chord transition strip + Capo/Transposition selector + Reset button
         prog_bar = QtWidgets.QHBoxLayout()
         self.chord_progression_lbl = QtWidgets.QLabel("最近和弦进行 (最多 12 步): -")
         self.chord_progression_lbl.setStyleSheet(
             "padding: 5px 10px; background: #1C2026; border: 1px solid #2C323C; border-radius: 5px; color: #E6EAF0;"
         )
         self.chord_progression_lbl.setWordWrap(True)
+
+        self.transpose_combo = QtWidgets.QComboBox()
+        self.transpose_combo.setToolTip("仅切换乐谱/变调夹和弦与调性显示偏移（零 PCM 拷贝/重采样开销，不影响实音分析）")
+        for lbl, semi in TRANSPOSE_PRESETS:
+            self.transpose_combo.addItem(lbl, semi)
+        self.transpose_combo.currentIndexChanged.connect(self._on_transpose_changed)
+
         self.reset_harmony_btn = QtWidgets.QPushButton("换歌重置 (和弦/调性/BPM)")
         self.reset_harmony_btn.setToolTip("切歌后一键清空和弦轨迹、调性滑动窗口与 BPM 累积，不中断当前捕获")
         self.reset_harmony_btn.clicked.connect(self._on_reset_clicked)
         prog_bar.addWidget(self.chord_progression_lbl, 1)
+        prog_bar.addWidget(QtWidgets.QLabel("移调/Capo:"))
+        prog_bar.addWidget(self.transpose_combo)
         prog_bar.addWidget(self.reset_harmony_btn)
         root.addLayout(prog_bar)
 
@@ -355,8 +330,39 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         root.addWidget(splitter, 1)
 
     @property
+    def transpose_semitones(self) -> int:
+        return self._transpose_semitones
+
+    @property
     def recent_progression(self) -> list[str]:
         return list(self._chord_history)
+
+    def _on_transpose_changed(self) -> None:
+        semi = int(self.transpose_combo.currentData() or 0)
+        if semi != self._transpose_semitones:
+            self._transpose_semitones = semi
+            self._refresh_transposed_views()
+            self.transpose_semitones_changed.emit(semi)
+
+    def set_transpose_semitones(self, semitones: int) -> None:
+        target = int(semitones)
+        idx = self.transpose_combo.findData(target)
+        if idx < 0:
+            self.transpose_combo.addItem(f"自定义移调 ({target:+d} 半音)", target)
+            idx = self.transpose_combo.findData(target)
+        self.transpose_combo.blockSignals(True)
+        self.transpose_combo.setCurrentIndex(max(0, idx))
+        self.transpose_combo.blockSignals(False)
+        self._transpose_semitones = target
+        self._refresh_transposed_views()
+
+    def _refresh_transposed_views(self) -> None:
+        if self._last_snapshot is not None:
+            self._render_harmonic_labels(self._last_snapshot)
+        if self._chord_history:
+            semi = self._transpose_semitones
+            disp = [transpose_chord_symbol(c, semi) if semi != 0 else c for c in self._chord_history]
+            self.chord_progression_lbl.setText(f"最近和弦进行 (最多 12 步): {' -> '.join(disp)}")
 
     def _on_tap_tempo_clicked(self) -> None:
         tap_bpm = self._tap_tracker.tap()
@@ -378,11 +384,23 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     def sync_metronome_ui(
         self,
         *,
+        bpm: float | None = None,
+        beats_per_bar: int | None = None,
         overlay_enabled: bool | None = None,
         standalone_playing: bool | None = None,
         count_in_enabled: bool | None = None,
         volume: float | None = None,
     ) -> None:
+        if bpm is not None:
+            self.metronome_bpm_spin.blockSignals(True)
+            self.metronome_bpm_spin.setValue(round(max(30.0, min(240.0, float(bpm))), 1))
+            self.metronome_bpm_spin.blockSignals(False)
+        if beats_per_bar is not None:
+            idx = self.metronome_sig_combo.findData(int(beats_per_bar))
+            if idx >= 0:
+                self.metronome_sig_combo.blockSignals(True)
+                self.metronome_sig_combo.setCurrentIndex(idx)
+                self.metronome_sig_combo.blockSignals(False)
         if overlay_enabled is not None:
             self.metronome_overlay_chk.blockSignals(True)
             self.metronome_overlay_chk.setChecked(bool(overlay_enabled))
@@ -411,6 +429,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._chord_history.clear()
         self._tap_tracker.reset()
         self._latest_detected_bpm = None
+        self._last_snapshot = None
         self.adopt_bpm_btn.setEnabled(False)
         self.tap_status_lbl.setText("")
         self.chord_progression_lbl.setText("最近和弦进行 (最多 12 步): -")
@@ -426,30 +445,66 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.pitch_lbl.setText("主音高: -")
         self.tuning_bar.set_pitch(None, 0.0)
 
-    def update_analysis(self, snap: AnalysisSnapshot, chroma_history: np.ndarray | None = None) -> None:
+    def _render_harmonic_labels(self, snap: AnalysisSnapshot) -> None:
+        semi = self._transpose_semitones
         ch = snap.chord
-        self.chord_primary_lbl.setText(ch.primary)
-        tones = "-" if ch.is_silent else spell_chord_tones(ch.primary)
+        if semi == 0 or ch.is_silent:
+            disp_chord = ch.primary
+            disp_sec = ch.secondary
+            self.chord_primary_lbl.setText(disp_chord)
+        else:
+            disp_chord = transpose_chord_symbol(ch.primary, semi)
+            disp_sec = transpose_chord_symbol(ch.secondary, semi)
+            self.chord_primary_lbl.setText(
+                f"{disp_chord} (实音 {ch.primary})" if disp_chord != ch.primary else disp_chord
+            )
+        tones = "-" if ch.is_silent else spell_chord_tones(disp_chord)
         self.chord_tones_lbl.setText(f"构成音: {tones}")
-        self.chord_secondary_lbl.setText(f"第二候选: {ch.secondary}")
+        self.chord_secondary_lbl.setText(f"第二候选: {disp_sec}")
         self.chord_stability_lbl.setText(
             f"稳定度: {ch.stability} | 相关度: {ch.correlation:.2f} | 领先差值: {ch.margin:.2f}"
         )
-        if not ch.is_silent and ch.primary not in ("Unknown", "N (静音)", "-"):
-            if not self._chord_history or self._chord_history[-1] != ch.primary:
-                self._chord_history.append(ch.primary)
-                self.chord_progression_lbl.setText(
-                    f"最近和弦进行 (最多 12 步): {' -> '.join(self._chord_history)}"
-                )
 
         ky = snap.key
-        self.key_primary_lbl.setText(ky.primary)
-        self.key_secondary_lbl.setText(f"第二候选: {ky.secondary}")
+        if semi == 0:
+            self.key_primary_lbl.setText(ky.primary)
+            self.key_secondary_lbl.setText(f"第二候选: {ky.secondary}")
+        else:
+            disp_key = transpose_key_label(ky.primary, semi)
+            disp_key_sec = transpose_key_label(ky.secondary, semi)
+            self.key_primary_lbl.setText(
+                f"{disp_key} (实音 {ky.primary})" if disp_key != ky.primary else disp_key
+            )
+            self.key_secondary_lbl.setText(f"第二候选: {disp_key_sec}")
         mod_tag = " [可能转调]" if ky.modulation_hint else ""
         self.key_relation_lbl.setText(
             f"稳定度: {ky.stability}{mod_tag} | {ky.relation_note}"
         )
         self.key_sig_note_lbl.setText(ky.key_signature_note)
+
+        pt = snap.pitch
+        if pt.frequency_hz is not None:
+            disp_note = transpose_note_name(pt.note_name, semi) if semi != 0 else pt.note_name
+            self.pitch_lbl.setText(
+                f"主音高: {disp_note} ({pt.frequency_hz:.1f} Hz, {pt.cents_offset:+.1f} cents)"
+            )
+            self.tuning_bar.set_pitch(pt.frequency_hz, pt.cents_offset)
+        else:
+            self.pitch_lbl.setText(f"主音高: {pt.note_name}")
+            self.tuning_bar.set_pitch(None, 0.0)
+
+    def update_analysis(self, snap: AnalysisSnapshot, chroma_history: np.ndarray | None = None) -> None:
+        self._last_snapshot = snap
+        self._render_harmonic_labels(snap)
+        ch = snap.chord
+        if not ch.is_silent and ch.primary not in ("Unknown", "N (静音)", "-"):
+            if not self._chord_history or self._chord_history[-1] != ch.primary:
+                self._chord_history.append(ch.primary)
+                semi = self._transpose_semitones
+                disp = [transpose_chord_symbol(c, semi) if semi != 0 else c for c in self._chord_history]
+                self.chord_progression_lbl.setText(
+                    f"最近和弦进行 (最多 12 步): {' -> '.join(disp)}"
+                )
 
         tp = snap.tempo
         if tp.bpm is not None:
@@ -462,18 +517,9 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.bpm_lbl.setText("BPM: Unknown")
         self.bpm_stab_lbl.setText(f"节拍稳定度: {tp.stability} (自相关峰: {tp.confidence_score:.2f})")
 
-        pt = snap.pitch
-        if pt.frequency_hz is not None:
-            self.pitch_lbl.setText(
-                f"主音高: {pt.note_name} ({pt.frequency_hz:.1f} Hz, {pt.cents_offset:+.1f} cents)"
-            )
-            self.tuning_bar.set_pitch(pt.frequency_hz, pt.cents_offset)
-        else:
-            self.pitch_lbl.setText(f"主音高: {pt.note_name}")
-            self.tuning_bar.set_pitch(None, 0.0)
-
         if snap.chroma_12:
             self._bar_item.setOpts(height=np.asarray(snap.chroma_12, dtype=np.float32))
 
         if chroma_history is not None and chroma_history.size > 0:
             self._chroma_img.setImage(chroma_history, autoLevels=False, levels=(0.0, 0.9))
+

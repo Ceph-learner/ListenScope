@@ -150,6 +150,10 @@ class CaptureStatsTracker:
         with self._lock:
             self._last_error = error_message
 
+    def set_process_name(self, process_name: str) -> None:
+        with self._lock:
+            self._process_name = str(process_name)
+
     def record_chunk(self, pcm_f32: np.ndarray, *, queue_size: int, overruns: int) -> bool:
         num_frames = int(pcm_f32.shape[0]) if pcm_f32.ndim >= 1 else 0
         rms_lin, rms_db, peak_lin, peak_db = compute_rms_and_peak(pcm_f32)

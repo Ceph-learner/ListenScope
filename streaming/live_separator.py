@@ -493,14 +493,19 @@ class ExperimentalLiveSeparator:
                         continue
                     mtype = msg.get("type")
                     if mtype == "chunk":
-                        decoded = {
-                            "type": "chunk",
-                            "seq": msg["seq"],
-                            "vocals": base64.b64decode(msg["vocals_b64"]),
-                            "instrumental": base64.b64decode(msg["instrumental_b64"]),
-                            "shape": tuple(int(x) for x in msg["shape"]),
-                            "infer_sec": float(msg.get("infer_sec", 0.0)),
-                        }
+                        try:
+                            raw_shape = msg["shape"]
+                            decoded = {
+                                "type": "chunk",
+                                "seq": msg.get("seq"),
+                                "vocals": base64.b64decode(msg["vocals_b64"]),
+                                "instrumental": base64.b64decode(msg["instrumental_b64"]),
+                                "shape": tuple(int(x) for x in raw_shape),
+                                "infer_sec": float(msg.get("infer_sec", 0.0)),
+                            }
+                        except Exception:
+                            logger.warning("Ignoring malformed external live stdout chunk JSON")
+                            continue
                         out_item = decoded
                     else:
                         out_item = msg
@@ -863,6 +868,9 @@ class ExperimentalLiveSeparator:
                         break
                     except Exception:
                         break
+                    if not isinstance(msg, dict):
+                        logger.warning("Ignoring non-dict live IPC payload")
+                        continue
                     mtype = msg.get("type")
                     if mtype == "error":
                         err = str(msg.get("error", "Worker 异常"))
@@ -881,10 +889,45 @@ class ExperimentalLiveSeparator:
                         )
                         return
                     if mtype == "chunk":
-                        shape = tuple(msg["shape"])
-                        voc = np.frombuffer(msg["vocals"], dtype=np.float32).reshape(shape)
-                        inst = np.frombuffer(msg["instrumental"], dtype=np.float32).reshape(shape)
-                        infer_sec = float(msg.get("infer_sec", 0.0))
+                        raw_shape = msg.get("shape")
+                        voc_bytes = msg.get("vocals")
+                        inst_bytes = msg.get("instrumental")
+                        if (
+                            not isinstance(raw_shape, (list, tuple))
+                            or len(raw_shape) != 2
+                            or not isinstance(voc_bytes, (bytes, bytearray, memoryview))
+                            or not isinstance(inst_bytes, (bytes, bytearray, memoryview))
+                        ):
+                            logger.warning("Ignoring malformed live IPC chunk payload")
+                            continue
+                        try:
+                            shape = (int(raw_shape[0]), int(raw_shape[1]))
+                            infer_sec = float(msg.get("infer_sec", 0.0))
+                        except (TypeError, ValueError):
+                            logger.warning("Ignoring unparseable live IPC chunk metadata")
+                            continue
+                        if not np.isfinite(infer_sec) or infer_sec < 0.0:
+                            infer_sec = 0.0
+                        expected_bytes = shape[0] * shape[1] * 4
+                        if (
+                            shape[0] <= 0
+                            or shape[1] != self.audio_config.channels
+                            or len(voc_bytes) != expected_bytes
+                            or len(inst_bytes) != expected_bytes
+                        ):
+                            logger.warning(
+                                "Ignoring mismatched live IPC chunk bytes (shape=%s, voc=%d, inst=%d)",
+                                shape,
+                                len(voc_bytes),
+                                len(inst_bytes),
+                            )
+                            continue
+                        voc = np.frombuffer(voc_bytes, dtype=np.float32).reshape(shape)
+                        inst = np.frombuffer(inst_bytes, dtype=np.float32).reshape(shape)
+                        if not np.all(np.isfinite(voc)):
+                            voc = np.nan_to_num(voc, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
+                        if not np.all(np.isfinite(inst)):
+                            inst = np.nan_to_num(inst, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
                         assembled = self._overlap_add.process_chunk({"vocals": voc, "instrumental": inst})
                         self._append_output(assembled["vocals"], assembled["instrumental"])
                         rtf = infer_sec / max(0.01, chunk_duration)

@@ -1,10 +1,11 @@
-"""Persistent settings loader/saver for ResourceLimits, AIConfig, and AI worker interpreter path."""
+"""Persistent settings loader/saver for ResourceLimits, AIConfig, AI worker path, and practice tools."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Optional
 
@@ -18,11 +19,64 @@ class PersistedSettings:
     resource_limits: ResourceLimits
     ai_config: AIConfig
     ai_python_executable: str = ""
-    schema_version: int = 1
+    metronome_bpm: float = 120.0
+    metronome_beats_per_bar: int = 4
+    metronome_volume: float = 0.70
+    metronome_count_in: bool = False
+    transpose_semitones: int = 0
+    schema_version: int = 2
 
 
 def default_settings_path() -> Path:
     return Path.home() / ".listenscope" / "settings.json"
+
+
+def _clamp_practice_values(
+    *,
+    metronome_bpm: Any = 120.0,
+    metronome_beats_per_bar: Any = 4,
+    metronome_volume: Any = 0.70,
+    metronome_count_in: Any = False,
+    transpose_semitones: Any = 0,
+) -> dict[str, Any]:
+    try:
+        bpm = float(metronome_bpm)
+        if not math.isfinite(bpm):
+            bpm = 120.0
+    except Exception:
+        bpm = 120.0
+    bpm = round(max(30.0, min(240.0, bpm)), 1)
+
+    try:
+        beats = int(metronome_beats_per_bar)
+    except Exception:
+        beats = 4
+    if beats not in (2, 3, 4, 6):
+        beats = max(1, min(12, beats))
+
+    try:
+        vol = float(metronome_volume)
+        if not math.isfinite(vol):
+            vol = 0.70
+    except Exception:
+        vol = 0.70
+    vol = round(max(0.0, min(1.5, vol)), 2)
+
+    count_in = bool(metronome_count_in) if isinstance(metronome_count_in, bool) else False
+
+    try:
+        semi = int(transpose_semitones)
+    except Exception:
+        semi = 0
+    semi = max(-11, min(11, semi))
+
+    return {
+        "metronome_bpm": bpm,
+        "metronome_beats_per_bar": beats,
+        "metronome_volume": vol,
+        "metronome_count_in": count_in,
+        "transpose_semitones": semi,
+    }
 
 
 def _filter_dataclass_kwargs(cls: type[Any], raw: Any) -> dict[str, Any]:
@@ -87,10 +141,18 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
 
     raw_py = payload.get("ai_python_executable", "")
     ai_python = str(raw_py).strip() if isinstance(raw_py, str) else ""
+    practice = _clamp_practice_values(
+        metronome_bpm=payload.get("metronome_bpm", 120.0),
+        metronome_beats_per_bar=payload.get("metronome_beats_per_bar", 4),
+        metronome_volume=payload.get("metronome_volume", 0.70),
+        metronome_count_in=payload.get("metronome_count_in", False),
+        transpose_semitones=payload.get("transpose_semitones", 0),
+    )
     return PersistedSettings(
         resource_limits=limits,
         ai_config=ai_cfg,
         ai_python_executable=ai_python,
+        **practice,
     )
 
 
@@ -98,13 +160,22 @@ def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None
     """Atomically write user settings JSON to disk."""
     target = Path(path) if path is not None else default_settings_path()
     target.parent.mkdir(parents=True, exist_ok=True)
+    practice = _clamp_practice_values(
+        metronome_bpm=settings.metronome_bpm,
+        metronome_beats_per_bar=settings.metronome_beats_per_bar,
+        metronome_volume=settings.metronome_volume,
+        metronome_count_in=settings.metronome_count_in,
+        transpose_semitones=settings.transpose_semitones,
+    )
     payload = {
         "schema_version": int(settings.schema_version),
         "resource_limits": asdict(settings.resource_limits),
         "ai_config": asdict(settings.ai_config),
         "ai_python_executable": str(settings.ai_python_executable or "").strip(),
+        **practice,
     }
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(target)
     return target
+

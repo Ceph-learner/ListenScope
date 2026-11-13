@@ -43,6 +43,8 @@ def _read_audio_mono_f32(audio_path: Path, *, max_seconds: float = 120.0) -> tup
             mono = np.nan_to_num(mono, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
         return mono, sr
     except Exception:
+        from audio.pcm_utils import decode_wave_bytes
+
         with wave.open(str(audio_path), "rb") as wf:
             sr = max(1, int(wf.getframerate()))
             ch = max(1, int(wf.getnchannels()))
@@ -50,25 +52,9 @@ def _read_audio_mono_f32(audio_path: Path, *, max_seconds: float = 120.0) -> tup
             nframes = min(int(wf.getnframes()), max(1, int(sr * max_seconds)))
             raw = wf.readframes(nframes)
 
-        if sw == 2:
-            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sw == 3:
-            raw_u8 = np.frombuffer(raw, dtype=np.uint8)
-            usable_b = (raw_u8.size // 3) * 3
-            triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
-            signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
-            signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
-            arr = signed.astype(np.float32) / 8388608.0
-        elif sw == 4:
-            arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-        else:
-            arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        arr = decode_wave_bytes(raw, sw, ch)
         if arr.size == 0:
             return np.empty(0, dtype=np.float32), sr
-        usable = (arr.size // ch) * ch
-        if usable == 0:
-            return np.empty(0, dtype=np.float32), sr
-        arr = arr[:usable].reshape(-1, ch)
         mono = np.mean(arr, axis=1)
         if not np.all(np.isfinite(mono)):
             mono = np.nan_to_num(mono, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)

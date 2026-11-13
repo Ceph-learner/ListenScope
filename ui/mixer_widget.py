@@ -21,7 +21,12 @@ from core.models import (
     OOMRecoveryAction,
     StemDeepAnalysisReport,
 )
-from ui.chroma_widget import spell_chord_tones
+from ui.chroma_widget import (
+    spell_chord_tones,
+    transpose_chord_symbol,
+    transpose_key_label,
+    transpose_note_name,
+)
 
 
 def _fmt_sec(sec: float) -> str:
@@ -144,6 +149,8 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._chord_segments: list[ChordTimelineSegment] = []
         self._midi_notes: list[MidiNoteCandidate] = []
         self._piano_roll_max_sec: float = 0.0
+        self._transpose_semitones: int = 0
+        self._last_deep_report: Optional[StemDeepAnalysisReport] = None
 
         root = QtWidgets.QVBoxLayout(self)
         root.setSpacing(8)
@@ -196,6 +203,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.loop_chk.toggled.connect(self.mixer_engine.set_loop)
 
         self.export_btn = QtWidgets.QPushButton("导出混合 WAV")
+        self.export_btn.setToolTip("流式导出当前分轨混音 WAV；若已设定局部循环、不变调倍速或随播节拍器将同步应用到导出结果")
         self.deep_analyze_btn = QtWidgets.QPushButton("深度分析分轨 (和弦/Bass/鼓/旋律)")
         self.deep_analyze_btn.setEnabled(False)
         self.sevenths_chk = QtWidgets.QCheckBox("扩展和弦 (maj7/m7/7/sus4)")
@@ -373,6 +381,22 @@ class StemMixerWidget(QtWidgets.QWidget):
     def include_sevenths(self) -> bool:
         return bool(self.sevenths_chk.isChecked())
 
+    def set_transpose_semitones(self, semitones: int) -> None:
+        self._transpose_semitones = int(semitones)
+        if self._last_deep_report is not None:
+            self.display_deep_analysis(self._last_deep_report)
+        else:
+            self.sync_playback_position()
+
+    def _tr_chord(self, chord: str) -> str:
+        return transpose_chord_symbol(chord, self._transpose_semitones) if self._transpose_semitones != 0 else chord
+
+    def _tr_key(self, key: str) -> str:
+        return transpose_key_label(key, self._transpose_semitones) if self._transpose_semitones != 0 else key
+
+    def _tr_note(self, note: str) -> str:
+        return transpose_note_name(note, self._transpose_semitones) if self._transpose_semitones != 0 else note
+
     def _on_play_clicked(self) -> None:
         self.before_play_requested.emit()
         self.mixer_engine.play(open_audio_device=True)
@@ -392,7 +416,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.loop_chk.blockSignals(True)
         self.loop_chk.setChecked(True)
         self.loop_chk.blockSignals(False)
-        self.subloop_badge_lbl.setText(f"局部循环 [{seg.chord}]: {s_sec:.2f}s ~ {e_sec:.2f}s")
+        self.subloop_badge_lbl.setText(f"局部循环 [{self._tr_chord(seg.chord)}]: {s_sec:.2f}s ~ {e_sec:.2f}s")
         self.subloop_badge_lbl.setStyleSheet(
             "padding: 3px 8px; background: #1B3B2B; color: #7EE2B8; border: 1px solid #2EC27E; border-radius: 4px;"
         )
@@ -497,10 +521,11 @@ class StemMixerWidget(QtWidgets.QWidget):
                 active_idx = len(self._chord_segments) - 1
             if 0 <= active_idx < len(self._chord_segments):
                 cur = self._chord_segments[active_idx]
-                tones = spell_chord_tones(cur.chord)
-                cur_disp = f"{cur.chord} ({tones})" if tones != "-" else cur.chord
+                cur_chord = self._tr_chord(cur.chord)
+                tones = spell_chord_tones(cur_chord)
+                cur_disp = f"{cur_chord} ({tones})" if tones != "-" else cur_chord
                 nxt = (
-                    self._chord_segments[active_idx + 1].chord
+                    self._tr_chord(self._chord_segments[active_idx + 1].chord)
                     if active_idx + 1 < len(self._chord_segments)
                     else "结束"
                 )
@@ -608,6 +633,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._stem_paths = dict(stem_paths)
         self._chord_segments.clear()
         self._midi_notes.clear()
+        self._last_deep_report = None
         self._piano_roll_max_sec = 0.0
 
         if self._piano_roll_item is not None:
@@ -645,14 +671,23 @@ class StemMixerWidget(QtWidgets.QWidget):
             self._rows[name] = row
 
     def display_deep_analysis(self, report: StemDeepAnalysisReport) -> None:
+        same_report = self._last_deep_report is report
+        prev_row = self.chord_timeline_table.currentRow()
+        self._last_deep_report = report
         bpm_txt = f"{report.estimated_bpm.bpm:.1f} ({report.estimated_bpm.stability})" if report.estimated_bpm.bpm else "Unknown"
+        key_p = self._tr_key(report.estimated_key.primary)
+        key_s = self._tr_key(report.estimated_key.secondary)
+        tr_tag = f" | 移调={self._transpose_semitones:+d}" if self._transpose_semitones != 0 else ""
         parts = [
-            f"调性: {report.estimated_key.primary} (候选: {report.estimated_key.secondary}, {report.estimated_key.stability}) | BPM: {bpm_txt} | 和声源: {report.harmonic_source_label}"
+            f"调性: {key_p} (候选: {key_s}, {report.estimated_key.stability}{tr_tag}) | BPM: {bpm_txt} | 和声源: {report.harmonic_source_label}"
         ]
         if report.bass is not None:
+            low_b = self._tr_note(report.bass.lowest_note) or "-"
+            high_b = self._tr_note(report.bass.highest_note) or "-"
+            roots_b = ", ".join(self._tr_note(r) for r in report.bass.root_pitch_classes) or "-"
             parts.append(
-                f"Bass: 音域 {report.bass.lowest_note or '-'}~{report.bass.highest_note or '-'} | "
-                f"核心根音 [{', '.join(report.bass.root_pitch_classes) or '-'}] | 音符数={len(report.bass.notes)}"
+                f"Bass: 音域 {low_b}~{high_b} | "
+                f"核心根音 [{roots_b}] | 音符数={len(report.bass.notes)}"
             )
         if report.drums is not None:
             parts.append(
@@ -660,9 +695,12 @@ class StemMixerWidget(QtWidgets.QWidget):
                 f"HiHat={len(report.drums.hihat_times_sec)} | 16步律动: {' '.join(report.drums.groove_16_step)}"
             )
         if report.melody is not None:
+            low_m = self._tr_note(report.melody.lowest_note) or "-"
+            high_m = self._tr_note(report.melody.highest_note) or "-"
+            med_m = self._tr_note(report.melody.median_note) or "-"
             parts.append(
-                f"Melody ({report.melody.stem_name}): 音域 {report.melody.lowest_note or '-'}~{report.melody.highest_note or '-'} "
-                f"(中位 {report.melody.median_note or '-'}) | 有声率={report.melody.voiced_ratio * 100:.1f}%"
+                f"Melody ({report.melody.stem_name}): 音域 {low_m}~{high_m} "
+                f"(中位 {med_m}) | 有声率={report.melody.voiced_ratio * 100:.1f}%"
             )
         self.deep_summary_lbl.setText("\n".join(parts))
 
@@ -673,8 +711,8 @@ class StemMixerWidget(QtWidgets.QWidget):
             vals = [
                 f"{seg.start_sec:.2f}",
                 f"{seg.end_sec:.2f}",
-                seg.chord,
-                seg.secondary,
+                self._tr_chord(seg.chord),
+                self._tr_chord(seg.secondary),
                 f"{seg.correlation:.3f}",
                 seg.stability,
             ]
@@ -685,11 +723,13 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         self.loop_chord_btn.setEnabled(bool(rows))
         if rows:
+            target_row = prev_row if (same_report and 0 <= prev_row < len(rows)) else 0
             self.chord_timeline_table.blockSignals(True)
-            self.chord_timeline_table.selectRow(0)
+            self.chord_timeline_table.selectRow(target_row)
             self.chord_timeline_table.blockSignals(False)
         self.export_sheet_btn.setEnabled(True)
-        self.analysis_tabs.setCurrentIndex(0)
+        if not same_report:
+            self.analysis_tabs.setCurrentIndex(0)
         self.sync_playback_position()
 
     def display_midi_result(self, result: MidiTranscriptionResult) -> None:

@@ -39,7 +39,7 @@ from analysis.worker import AnalysisWorker
 from audio.bookmarks import ABBookmarkManager
 from audio.capture_base import AudioCaptureBackend
 from audio.metronome import PracticeMetronome
-from audio.pcm_utils import normalize_to_canonical_pcm
+from audio.pcm_utils import decode_wave_bytes, normalize_to_canonical_pcm
 from audio.playback import AB_PAUSE_PLAYER_HINT, HistoryABPlayer, StemMixerEngine
 from audio.process_enum import enumerate_audio_processes
 from audio.process_loopback import WasapiProcessLoopbackBackend
@@ -103,9 +103,13 @@ def _read_wav_excerpt_f32(wav_path: Path, *, max_seconds: float = 30.0) -> tuple
 
         with sf.SoundFile(str(wav_path), "r") as sf_file:
             sr = int(sf_file.samplerate)
-            ch = int(sf_file.channels)
+            ch = max(1, int(sf_file.channels))
             take = min(int(sf_file.frames), max(1, int(sr * max_seconds)))
             arr = np.asarray(sf_file.read(take, dtype="float32", always_2d=True), dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            if arr.size > 0 and not np.all(np.isfinite(arr)):
+                arr = np.nan_to_num(arr, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
             return arr, sr, ch
     except Exception:
         with wave.open(str(wav_path), "rb") as wf:
@@ -115,21 +119,8 @@ def _read_wav_excerpt_f32(wav_path: Path, *, max_seconds: float = 30.0) -> tuple
             take = min(int(wf.getnframes()), max(1, int(sr * max_seconds)))
             raw = wf.readframes(take)
 
-        if sw == 2:
-            flat = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sw == 3:
-            raw_u8 = np.frombuffer(raw, dtype=np.uint8)
-            usable_b = (raw_u8.size // 3) * 3
-            triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
-            signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
-            signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
-            flat = signed.astype(np.float32) / 8388608.0
-        elif sw == 4:
-            flat = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-        else:
-            flat = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-        usable = (flat.size // ch) * ch
-        return flat[:usable].reshape(-1, ch), sr, ch
+        arr = decode_wave_bytes(raw, sw, ch)
+        return arr, sr, ch
 
 
 class ListenScopeController:
@@ -224,10 +215,16 @@ class ListenScopeController:
         self._ui_banner_q: queue.Queue[str] = queue.Queue(maxsize=16)
         self._ui_live_bench_q: queue.Queue[str] = queue.Queue(maxsize=8)
         self._ui_live_pending_q: queue.Queue[bool] = queue.Queue(maxsize=8)
-        self._ui_midi_result_q: queue.Queue[tuple[Optional[MidiTranscriptionResult], Optional[str]]] = queue.Queue(maxsize=8)
-        self._ui_deep_analysis_q: queue.Queue[tuple[Optional[StemDeepAnalysisReport], Optional[str]]] = queue.Queue(maxsize=4)
+        self._ui_midi_result_q: queue.Queue[tuple[int, Optional[MidiTranscriptionResult], Optional[str]]] = queue.Queue(
+            maxsize=8
+        )
+        self._ui_deep_analysis_q: queue.Queue[tuple[int, Optional[StemDeepAnalysisReport], Optional[str]]] = queue.Queue(
+            maxsize=4
+        )
         self._ui_hw_probe_q: queue.Queue[tuple[int, dict[str, Any]]] = queue.Queue(maxsize=4)
         self._probe_seq = 0
+        self._stem_generation = 0
+        self._practice_dirty = False
         self._last_ai_request: Optional[AIJobRequest] = None
         self._latest_deep_report: Optional[StemDeepAnalysisReport] = None
         self._latest_midi_result: Optional[MidiTranscriptionResult] = None
@@ -242,6 +239,19 @@ class ListenScopeController:
             mixer_engine=self.mixer_engine,
             ai_python_executable=ai_python_executable or "",
         )
+        self.metronome.set_bpm(saved_settings.metronome_bpm)
+        self.metronome.set_beats_per_bar(saved_settings.metronome_beats_per_bar)
+        self.metronome.set_volume(saved_settings.metronome_volume)
+        self.metronome.set_count_in_enabled(saved_settings.metronome_count_in)
+        self.window.chroma_widget.sync_metronome_ui(
+            bpm=self.metronome.bpm,
+            beats_per_bar=self.metronome.beats_per_bar,
+            count_in_enabled=self.metronome.count_in_enabled,
+            volume=self.metronome.volume,
+        )
+        self.window.chroma_widget.set_transpose_semitones(saved_settings.transpose_semitones)
+        self.window.mixer_widget.set_transpose_semitones(saved_settings.transpose_semitones)
+
         self.window.set_closing_handler(self.shutdown)
         self._connect_signals()
         self.refresh_sources()
@@ -346,12 +356,13 @@ class ListenScopeController:
         w.ab_bookmark_save_requested.connect(self._on_ab_bookmark_save)
         w.ab_bookmark_select_requested.connect(self._on_ab_bookmark_select)
         w.ab_bookmark_delete_requested.connect(self._on_ab_bookmark_delete)
-        w.chroma_widget.metronome_bpm_changed.connect(self.metronome.set_bpm)
-        w.chroma_widget.metronome_beats_changed.connect(self.metronome.set_beats_per_bar)
+        w.chroma_widget.metronome_bpm_changed.connect(self._on_metronome_bpm_changed)
+        w.chroma_widget.metronome_beats_changed.connect(self._on_metronome_beats_changed)
         w.chroma_widget.metronome_overlay_toggled.connect(self._on_metronome_overlay_toggled)
         w.chroma_widget.metronome_standalone_toggled.connect(self._on_metronome_standalone_toggled)
-        w.chroma_widget.metronome_count_in_toggled.connect(self.metronome.set_count_in_enabled)
-        w.chroma_widget.metronome_volume_changed.connect(self.metronome.set_volume)
+        w.chroma_widget.metronome_count_in_toggled.connect(self._on_metronome_count_in_toggled)
+        w.chroma_widget.metronome_volume_changed.connect(self._on_metronome_volume_changed)
+        w.chroma_widget.transpose_semitones_changed.connect(self._on_transpose_semitones_changed)
         w.mixer_widget.metronome_overlay_toggled.connect(self._on_metronome_overlay_toggled)
         w.resource_panel.export_diagnostics_requested.connect(self._on_export_diagnostic_bundle)
 
@@ -479,9 +490,26 @@ class ListenScopeController:
         if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
             self.ab_player.select_recent_seconds(min(30.0, self.ring_buffer.available_seconds))
         a_frame, b_frame = self.ab_player.loop_range
+        spd = self.ab_player.speed
+        inc_met = bool(self.metronome.overlay_enabled)
         try:
-            saved, dur = self.ring_buffer.export_wav_streaming(out_path, a_frame, b_frame)
-            self.window.show_banner_message(f"✅ 已流式导出 A/B 片段 WAV ({dur:.2f}s): {saved}")
+            saved, dur = self.ab_player.export_ab_practice_wav_streaming(
+                out_path,
+                a_frame,
+                b_frame,
+                speed=spd,
+                include_metronome=inc_met,
+                bpm=self.metronome.bpm,
+                beats_per_bar=self.metronome.beats_per_bar,
+                metronome_volume=self.metronome.volume,
+            )
+            tags: list[str] = []
+            if abs(spd - 1.0) >= 1e-3:
+                tags.append(f"{spd:.2f}x不变调")
+            if inc_met:
+                tags.append(f"节拍器{self.metronome.bpm:.0f}BPM")
+            tag_txt = f" | {'+'.join(tags)}" if tags else ""
+            self.window.show_banner_message(f"✅ 已流式导出 A/B 片段 WAV ({dur:.2f}s{tag_txt}): {saved}")
         except Exception as exc:
             self.window.show_banner_message(f"导出 A/B 片段失败: {exc}")
 
@@ -490,6 +518,26 @@ class ListenScopeController:
         self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
         self.ab_player.pause()
         self.live_separator.close_output_stream()
+
+    def _on_metronome_bpm_changed(self, bpm: float) -> None:
+        self.metronome.set_bpm(bpm)
+        self._practice_dirty = True
+
+    def _on_metronome_beats_changed(self, beats: int) -> None:
+        self.metronome.set_beats_per_bar(beats)
+        self._practice_dirty = True
+
+    def _on_metronome_count_in_toggled(self, enabled: bool) -> None:
+        self.metronome.set_count_in_enabled(bool(enabled))
+        self._practice_dirty = True
+
+    def _on_metronome_volume_changed(self, volume: float) -> None:
+        self.metronome.set_volume(volume)
+        self._practice_dirty = True
+
+    def _on_transpose_semitones_changed(self, semitones: int) -> None:
+        self.window.mixer_widget.set_transpose_semitones(int(semitones))
+        self._practice_dirty = True
 
     def _on_metronome_overlay_toggled(self, enabled: bool) -> None:
         self.metronome.set_overlay_enabled(bool(enabled))
@@ -728,9 +776,28 @@ class ListenScopeController:
             self._last_ai_request = new_req
 
     def _on_export_mix(self, out_path: str) -> None:
+        use_loop = self.mixer_engine.loop_region_sec is not None
+        spd = self.mixer_engine.speed
+        inc_met = bool(self.metronome.overlay_enabled)
         try:
-            saved = self.mixer_engine.export_mix_streaming(out_path)
-            self.window.show_banner_message(f"✅ 已流式导出混合音轨 WAV: {saved}")
+            saved = self.mixer_engine.export_mix_streaming(
+                out_path,
+                use_loop_region=use_loop,
+                speed=spd,
+                include_metronome=inc_met,
+                bpm=self.metronome.bpm,
+                beats_per_bar=self.metronome.beats_per_bar,
+                metronome_volume=self.metronome.volume,
+            )
+            tags: list[str] = []
+            if use_loop:
+                tags.append("局部循环区")
+            if abs(spd - 1.0) >= 1e-3:
+                tags.append(f"{spd:.2f}x不变调")
+            if inc_met:
+                tags.append(f"节拍器{self.metronome.bpm:.0f}BPM")
+            tag_txt = f" ({'+'.join(tags)})" if tags else ""
+            self.window.show_banner_message(f"✅ 已流式导出混合音轨 WAV{tag_txt}: {saved}")
         except Exception as exc:
             self.window.show_banner_message(f"导出混音失败: {exc}")
 
@@ -847,6 +914,7 @@ class ListenScopeController:
         )
         paths_copy = dict(stem_paths)
         max_sec = float(self.audio_config.ring_buffer_seconds)
+        req_gen = self._stem_generation
 
         def _run() -> None:
             try:
@@ -859,9 +927,9 @@ class ListenScopeController:
                     f"✅ 深度分轨分析完成 ({report.duration_sec:.1f}s | {mode_tag})："
                     f"识别 {len(report.chord_timeline)} 段和弦 | 调性={report.estimated_key.primary}"
                 )
-                self._put_latest(self._ui_deep_analysis_q, (report, msg))
+                self._put_latest(self._ui_deep_analysis_q, (req_gen, report, msg))
             except Exception as exc:
-                self._put_latest(self._ui_deep_analysis_q, (None, f"深度分轨分析失败: {exc}"))
+                self._put_latest(self._ui_deep_analysis_q, (req_gen, None, f"深度分轨分析失败: {exc}"))
 
         threading.Thread(target=_run, name="ListenScope-StemDeepAnalyze", daemon=True).start()
 
@@ -876,6 +944,7 @@ class ListenScopeController:
                 self._latest_deep_report,
                 out_path,
                 midi_result=self._latest_midi_result,
+                transpose_semitones=self.window.chroma_widget.transpose_semitones,
             )
             self.window.show_banner_message(f"✅ 已导出扒谱与深度分析报告: {saved}")
         except Exception as exc:
@@ -905,6 +974,7 @@ class ListenScopeController:
         ai_py = self.ai_job_manager.ai_python_executable
         mock_mode = self.use_mock_ai_for_demo
         bundle_root = get_bundle_root()
+        req_gen = self._stem_generation
 
         def _run() -> None:
             try:
@@ -960,9 +1030,9 @@ class ListenScopeController:
                         allow_full_mix=False,
                         allow_cpu_pitch_fallback=True,
                     )
-                self._put_latest(self._ui_midi_result_q, (res, f"✅ MIDI 转录完成: {out_mid}"))
+                self._put_latest(self._ui_midi_result_q, (req_gen, res, f"✅ MIDI 转录完成: {out_mid}"))
             except Exception as exc:
-                self._put_latest(self._ui_midi_result_q, (None, f"MIDI 转录失败: {exc}"))
+                self._put_latest(self._ui_midi_result_q, (req_gen, None, f"MIDI 转录失败: {exc}"))
 
         threading.Thread(target=_run, name="ListenScope-MidiTranscribe", daemon=True).start()
 
@@ -1011,6 +1081,26 @@ class ListenScopeController:
 
         threading.Thread(target=_run, name="ListenScope-LiveStop", daemon=True).start()
 
+    def _build_persisted_settings(
+        self,
+        limits: Optional[ResourceLimits] = None,
+        ai_cfg: Optional[AIConfig] = None,
+        ai_python: Optional[str] = None,
+    ) -> PersistedSettings:
+        lim = self.resource_limits if limits is None else limits
+        cfg = self.ai_config if ai_cfg is None else ai_cfg
+        py = (self.ai_job_manager.ai_python_executable or "") if ai_python is None else ai_python
+        return PersistedSettings(
+            resource_limits=lim,
+            ai_config=cfg,
+            ai_python_executable=py,
+            metronome_bpm=self.metronome.bpm,
+            metronome_beats_per_bar=self.metronome.beats_per_bar,
+            metronome_volume=self.metronome.volume,
+            metronome_count_in=self.metronome.count_in_enabled,
+            transpose_semitones=self.window.chroma_widget.transpose_semitones,
+        )
+
     def _on_settings_applied(self, limits: ResourceLimits, ai_cfg: AIConfig, ai_python: str) -> None:
         self.resource_limits = limits
         self.ai_config = ai_cfg
@@ -1038,13 +1128,10 @@ class ListenScopeController:
 
         try:
             saved = save_settings(
-                PersistedSettings(
-                    resource_limits=limits,
-                    ai_config=ai_cfg,
-                    ai_python_executable=ai_python,
-                ),
+                self._build_persisted_settings(limits, ai_cfg, ai_python),
                 self._settings_path,
             )
+            self._practice_dirty = False
             self.window.show_banner_message(f"✅ 资源安全阈值与 AI 环境配置已保存至 {saved}")
         except Exception as exc:
             self.window.show_banner_message(f"⚠️ 配置已生效，但写入本地设置文件失败: {exc}")
@@ -1074,6 +1161,7 @@ class ListenScopeController:
             try:
                 ai_res = self._ui_ai_result_q.get_nowait()
                 if ai_res.state == AIJobState.COMPLETED:
+                    self._stem_generation += 1
                     self._latest_deep_report = None
                     self._latest_midi_result = None
                 self.window.handle_ai_result(ai_res)
@@ -1096,7 +1184,9 @@ class ListenScopeController:
                 break
         while True:
             try:
-                midi_res, midi_msg = self._ui_midi_result_q.get_nowait()
+                gen, midi_res, midi_msg = self._ui_midi_result_q.get_nowait()
+                if gen != self._stem_generation:
+                    continue
                 if midi_res is not None:
                     self._latest_midi_result = midi_res
                     self.window.display_midi_result(midi_res)
@@ -1106,7 +1196,9 @@ class ListenScopeController:
                 break
         while True:
             try:
-                deep_res, deep_msg = self._ui_deep_analysis_q.get_nowait()
+                gen, deep_res, deep_msg = self._ui_deep_analysis_q.get_nowait()
+                if gen != self._stem_generation:
+                    continue
                 if deep_res is not None:
                     self._latest_deep_report = deep_res
                     self.window.display_deep_analysis(deep_res)
@@ -1168,6 +1260,12 @@ class ListenScopeController:
             return
         self._shutdown_done = True
         self._probe_seq += 1
+        if getattr(self, "_practice_dirty", False) and hasattr(self, "window") and self.window is not None:
+            try:
+                save_settings(self._build_persisted_settings(), self._settings_path)
+                self._practice_dirty = False
+            except Exception:
+                pass
         if hasattr(self, "_timer"):
             self._timer.stop()
         self.stop_capture()

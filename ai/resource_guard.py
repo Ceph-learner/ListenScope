@@ -132,25 +132,9 @@ def cleanup_temp_outputs(path: Path | str) -> None:
 
 
 def _decode_pcm_bytes(raw: bytes, sample_width: int, channels: int) -> np.ndarray:
-    if not raw:
-        return np.empty((0, channels), dtype=np.float32)
-    if sample_width == 2:
-        arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    elif sample_width == 3:
-        raw_u8 = np.frombuffer(raw, dtype=np.uint8)
-        usable_b = (raw_u8.size // 3) * 3
-        triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
-        signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
-        signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
-        arr = signed.astype(np.float32) / 8388608.0
-    elif sample_width == 4:
-        arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-    elif sample_width == 1:
-        arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-    else:
-        raise ValueError(f"Unsupported WAV sample width: {sample_width} bytes")
-    usable = (arr.size // channels) * channels
-    return arr[:usable].reshape(-1, channels)
+    from audio.pcm_utils import decode_wave_bytes
+
+    return decode_wave_bytes(raw, sample_width, channels)
 
 
 def stream_chunked_separation(

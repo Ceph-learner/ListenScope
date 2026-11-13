@@ -132,3 +132,37 @@ def compute_rms_and_peak(pcm_f32: np.ndarray) -> tuple[float, float, float, floa
     rms_db = float(20.0 * np.log10(max(rms, MIN_AMP)))
     peak_db = float(20.0 * np.log10(max(peak, MIN_AMP)))
     return rms, max(DBFS_FLOOR, rms_db), peak, max(DBFS_FLOOR, peak_db)
+
+
+def decode_wave_bytes(raw: bytes, sample_width: int, channels: int) -> np.ndarray:
+    """Decode raw PCM WAV bytes (1/2/3/4-byte sample width) into finite `(frames, channels)` float32."""
+    ch = max(1, int(channels))
+    sw = int(sample_width)
+    if not raw or sw <= 0:
+        return np.empty((0, ch), dtype=np.float32)
+
+    frame_bytes = sw * ch
+    usable_b = (len(raw) // frame_bytes) * frame_bytes
+    if usable_b <= 0:
+        return np.empty((0, ch), dtype=np.float32)
+
+    mv = memoryview(raw)[:usable_b]
+    if sw == 2:
+        flat = np.frombuffer(mv, dtype=np.int16).astype(np.float32) / 32768.0
+    elif sw == 3:
+        raw_u8 = np.frombuffer(mv, dtype=np.uint8).reshape(-1, 3).astype(np.int32)
+        signed = raw_u8[:, 0] | (raw_u8[:, 1] << 8) | (raw_u8[:, 2] << 16)
+        signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
+        flat = signed.astype(np.float32) / 8388608.0
+    elif sw == 4:
+        flat = np.frombuffer(mv, dtype=np.int32).astype(np.float32) / 2147483648.0
+    elif sw == 1:
+        flat = (np.frombuffer(mv, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    else:
+        raise ValueError(f"Unsupported WAV sample width: {sw} bytes")
+
+    arr = flat.reshape(-1, ch)
+    if arr.size > 0 and not np.all(np.isfinite(arr)):
+        arr = np.nan_to_num(arr, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
+    return arr
+

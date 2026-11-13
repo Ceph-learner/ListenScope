@@ -49,33 +49,28 @@ def _write_pcm16_wav(path: Path, pcm_f32: np.ndarray, sample_rate: int) -> None:
 
 
 def _read_wav_f32(path: Path, target_frames: Optional[int] = None) -> tuple[np.ndarray, int]:
+    from audio.pcm_utils import decode_wave_bytes
+
     try:
         import soundfile as sf  # type: ignore[import-untyped]
 
         data, sr = sf.read(str(path), dtype="float32", always_2d=True)
         arr = np.asarray(data, dtype=np.float32)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
     except Exception:
         with wave.open(str(path), "rb") as wf:
             sr = int(wf.getframerate())
-            ch = int(wf.getnchannels())
+            ch = max(1, int(wf.getnchannels()))
             sw = int(wf.getsampwidth())
             raw = wf.readframes(wf.getnframes())
-        if sw == 2:
-            flat = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sw == 3:
-            raw_u8 = np.frombuffer(raw, dtype=np.uint8)
-            usable_b = (raw_u8.size // 3) * 3
-            triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
-            signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
-            signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
-            flat = signed.astype(np.float32) / 8388608.0
-        elif sw == 4:
-            flat = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-        else:
-            flat = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-        usable = (flat.size // max(1, ch)) * max(1, ch)
-        arr = flat[:usable].reshape(-1, max(1, ch))
+        arr = decode_wave_bytes(raw, sw, ch)
 
+    if arr.size > 0 and not np.all(np.isfinite(arr)):
+        arr = np.nan_to_num(arr, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
+
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
     if arr.shape[1] == 1:
         arr = np.repeat(arr, 2, axis=1)
     elif arr.shape[1] > 2:

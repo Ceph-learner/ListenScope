@@ -14,7 +14,7 @@ import numpy as np
 from core.config import AudioConfig
 
 from .metronome import PracticeMetronome
-from .pcm_utils import normalize_to_canonical_pcm
+from .pcm_utils import decode_wave_bytes, normalize_to_canonical_pcm
 from .ring_buffer import FixedRingBuffer
 from .time_stretch import StreamingTimeStretcher
 
@@ -68,33 +68,22 @@ class _StemHandle:
         take = min(num_frames, self.total_frames - start_frame)
         if self.sf_handle is not None:
             self.sf_handle.seek(start_frame)
-            data = self.sf_handle.read(take, dtype="float32", always_2d=True)
-            return np.asarray(data, dtype=np.float32)
+            data = np.asarray(self.sf_handle.read(take, dtype="float32", always_2d=True), dtype=np.float32)
+            if data.ndim == 1:
+                data = data.reshape(-1, 1)
+            if data.size > 0 and not np.all(np.isfinite(data)):
+                data = np.nan_to_num(data, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
+            return data
 
         assert self.wf_handle is not None
         self.wf_handle.setpos(start_frame)
         raw = self.wf_handle.readframes(take)
         sw = int(self.wf_handle.getsampwidth())
         ch = max(1, self.channels)
-        if sw == 2:
-            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sw == 3:
-            raw_u8 = np.frombuffer(raw, dtype=np.uint8)
-            usable_b = (raw_u8.size // 3) * 3
-            triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
-            signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
-            signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
-            arr = signed.astype(np.float32) / 8388608.0
-        elif sw == 4:
-            arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-        elif sw == 1:
-            arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-        else:
-            arr = np.zeros(0, dtype=np.float32)
-        usable = (arr.size // ch) * ch
-        if usable == 0:
+        try:
+            return decode_wave_bytes(raw, sw, ch)
+        except ValueError:
             return np.empty((0, ch), dtype=np.float32)
-        return arr[:usable].reshape(-1, ch)
 
     def close(self) -> None:
         for h in (self.sf_handle, self.wf_handle):
@@ -270,6 +259,106 @@ class HistoryABPlayer:
         if should_close:
             self._close_output_stream()
 
+    def export_ab_practice_wav_streaming(
+        self,
+        out_path: Path | str,
+        start_abs_frame: int,
+        end_abs_frame: int,
+        *,
+        speed: float = 1.0,
+        include_metronome: bool = False,
+        bpm: float = 120.0,
+        beats_per_bar: int = 4,
+        metronome_volume: float = 0.7,
+        chunk_frames: int = 8192,
+    ) -> tuple[Path, float]:
+        """Export A/B excerpt in small chunks with optional WSOLA speed stretch & metronome overlay."""
+        eff_speed = max(0.5, min(1.5, float(speed)))
+        if abs(eff_speed - 1.0) < 1e-3 and not include_metronome:
+            return self.ring_buffer.export_wav_streaming(out_path, start_abs_frame, end_abs_frame)
+
+        path = Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sr = self.ring_buffer.sample_rate
+        ch = self.ring_buffer.channels
+
+        oldest = self.ring_buffer.oldest_abs_frame
+        newest = self.ring_buffer.total_written_frames
+        a = max(oldest, int(start_abs_frame))
+        b = min(newest, int(end_abs_frame))
+        span = b - a
+        if span <= 0:
+            raise ValueError("所选 A/B 区间没有可导出的有效音频。")
+
+        stretcher = StreamingTimeStretcher(sample_rate=sr, channels=ch)
+        local_met: Optional[PracticeMetronome] = None
+        if include_metronome:
+            local_met = PracticeMetronome(sample_rate=sr, channels=ch)
+            local_met.set_bpm(bpm)
+            local_met.set_beats_per_bar(beats_per_bar)
+            local_met.set_volume(metronome_volume)
+            local_met.set_overlay_enabled(True)
+            local_met.reset_phase()
+
+        def _read_ab_rel(rel_start: int, count: int) -> np.ndarray:
+            s_abs = a + max(0, int(rel_start))
+            e_abs = min(b, s_abs + max(0, int(count)))
+            if e_abs <= s_abs:
+                return np.empty((0, ch), dtype=np.float32)
+            return self.ring_buffer.read_range(s_abs, e_abs)
+
+        tmp_path = path.with_name(path.name + ".tmp")
+        written_frames = 0
+        try:
+            with wave.open(str(tmp_path), "wb") as wf:
+                wf.setnchannels(ch)
+                wf.setsampwidth(2)
+                wf.setframerate(sr)
+
+                if abs(eff_speed - 1.0) >= 1e-3:
+                    expected_out_frames = max(1, int(round(span / eff_speed)))
+                    rel_cursor = 0
+                    while written_frames < expected_out_frames:
+                        blk, _new_rel, hit_eof = stretcher.render_block(
+                            chunk_frames,
+                            speed=eff_speed,
+                            span_frames=span,
+                            rel_cursor=rel_cursor,
+                            loop_enabled=False,
+                            read_rel_fn=_read_ab_rel,
+                        )
+                        take = min(int(blk.shape[0]), expected_out_frames - written_frames)
+                        if take > 0:
+                            out_blk = blk[:take].copy()
+                            if local_met is not None:
+                                local_met.overlay_into(out_blk, rate_scale=eff_speed)
+                            i16 = (np.clip(out_blk, -1.0, 1.0) * 32767.0).astype(np.int16)
+                            wf.writeframes(i16.tobytes())
+                            written_frames += take
+                        if hit_eof:
+                            break
+                        rel_cursor = _new_rel
+                else:
+                    cursor = a
+                    while cursor < b:
+                        stop = min(b, cursor + chunk_frames)
+                        chunk = self.ring_buffer.read_range(cursor, stop)
+                        if chunk.shape[0] == 0:
+                            break
+                        out_blk = chunk.copy()
+                        if local_met is not None:
+                            local_met.overlay_into(out_blk, rate_scale=1.0)
+                        i16 = (np.clip(out_blk, -1.0, 1.0) * 32767.0).astype(np.int16)
+                        wf.writeframes(i16.tobytes())
+                        written_frames += int(out_blk.shape[0])
+                        cursor = stop
+            tmp_path.replace(path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+        return path, written_frames / float(max(1, sr))
+
     def render_block(self, num_frames: int) -> np.ndarray:
         """Pull exact PCM block of shape (num_frames, 2) float32 with optional pitch-preserved speed & A/B wrap."""
         out = np.zeros((num_frames, self.audio_config.channels), dtype=np.float32)
@@ -374,7 +463,7 @@ class HistoryABPlayer:
 
     def _ensure_output_stream(self) -> None:
         with self._lock:
-            if self._stream is not None:
+            if self._stream is not None or not self._is_playing:
                 return
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
@@ -383,9 +472,9 @@ class HistoryABPlayer:
             return
 
         def _callback(outdata, frames, _time_info, _status) -> None:
-            block = self.render_block(frames)
-            outdata[:] = block
+            outdata[:] = self.render_block(frames)
 
+        stream = None
         try:
             stream = sd.OutputStream(
                 samplerate=self.audio_config.sample_rate,
@@ -394,10 +483,23 @@ class HistoryABPlayer:
                 callback=_callback,
             )
             stream.start()
+            discard = False
             with self._lock:
-                self._stream = stream
+                if not self._is_playing or self._stream is not None:
+                    discard = True
+                else:
+                    self._stream = stream
+            if discard:
+                stream.stop()
+                stream.close()
         except Exception as exc:
             logger.warning("Failed to open sounddevice output stream (pull-only mode active): %s", exc)
+            if stream is not None:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
             with self._lock:
                 self._stream = None
 
@@ -862,14 +964,29 @@ class StemMixerEngine:
             )
         return mix
 
-    def export_mix_streaming(self, out_path: Path | str, *, chunk_frames: int = 48000) -> Path:
+    def export_mix_streaming(
+        self,
+        out_path: Path | str,
+        *,
+        chunk_frames: int = 48000,
+        use_loop_region: bool = False,
+        speed: float = 1.0,
+        include_metronome: bool = False,
+        bpm: float = 120.0,
+        beats_per_bar: int = 4,
+        metronome_volume: float = 0.7,
+    ) -> Path:
         """Export current mute/solo/volume mix cleanly in chunks without blocking concurrent playback."""
+        eff_speed = max(0.5, min(1.5, float(speed)))
         path = Path(out_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             if self._max_frames <= 0:
                 raise ValueError("当前没有可导出的分离音轨。")
-            max_frames = int(self._max_frames)
+            if use_loop_region:
+                win_start, win_end = self._active_window_locked()
+            else:
+                win_start, win_end = 0, int(self._max_frames)
             any_solo = any(t.solo for t in self._tracks.values())
             export_specs: list[tuple[StemTrackState, float]] = []
             for track in self._tracks.values():
@@ -879,24 +996,77 @@ class StemMixerEngine:
 
         local_handles: list[tuple[_StemHandle, StemTrackState, float]] = []
         tmp_path = path.with_name(path.name + ".tmp")
+
+        def _mix_local_window(start_abs: int, count: int) -> np.ndarray:
+            buf = np.zeros((count, self.channels), dtype=np.float32)
+            for handle, track, gain in local_handles:
+                buf += self._read_track_chunk_from_handle(handle, track, start_abs, count) * gain
+            np.clip(buf, -1.0, 1.0, out=buf)
+            return buf
+
         try:
             for track, gain in export_specs:
                 local_handles.append((_StemHandle(track.path), track, gain))
 
+            local_met: Optional[PracticeMetronome] = None
+            if include_metronome:
+                local_met = PracticeMetronome(sample_rate=self.sample_rate, channels=self.channels)
+                local_met.set_bpm(bpm)
+                local_met.set_beats_per_bar(beats_per_bar)
+                local_met.set_volume(metronome_volume)
+                local_met.set_overlay_enabled(True)
+                local_met.reset_phase()
+
+            span = max(0, win_end - win_start)
             with wave.open(str(tmp_path), "wb") as out_wf:
                 out_wf.setnchannels(self.channels)
                 out_wf.setsampwidth(2)
                 out_wf.setframerate(self.sample_rate)
 
-                cursor = 0
-                while cursor < max_frames:
-                    n = min(chunk_frames, max_frames - cursor)
-                    mix = np.zeros((n, self.channels), dtype=np.float32)
-                    for handle, track, gain in local_handles:
-                        mix += self._read_track_chunk_from_handle(handle, track, cursor, n) * gain
-                    np.clip(mix, -1.0, 1.0, out=mix)
-                    out_wf.writeframes((mix * 32767.0).astype(np.int16).tobytes())
-                    cursor += n
+                if abs(eff_speed - 1.0) >= 1e-3 and span > 0:
+                    stretcher = StreamingTimeStretcher(sample_rate=self.sample_rate, channels=self.channels)
+                    stretch_step = min(chunk_frames, 8192)
+                    expected_out_frames = max(1, int(round(span / eff_speed)))
+                    written_frames = 0
+                    rel_cursor = 0
+
+                    def _read_local_rel(rel_start: int, count: int) -> np.ndarray:
+                        s_abs = win_start + max(0, int(rel_start))
+                        take = max(0, min(int(count), win_end - s_abs))
+                        if take <= 0:
+                            return np.empty((0, self.channels), dtype=np.float32)
+                        return _mix_local_window(s_abs, take)
+
+                    while written_frames < expected_out_frames:
+                        blk, _new_rel, hit_eof = stretcher.render_block(
+                            stretch_step,
+                            speed=eff_speed,
+                            span_frames=span,
+                            rel_cursor=rel_cursor,
+                            loop_enabled=False,
+                            read_rel_fn=_read_local_rel,
+                        )
+                        take = min(int(blk.shape[0]), expected_out_frames - written_frames)
+                        if take > 0:
+                            out_blk = blk[:take].copy()
+                            if local_met is not None:
+                                local_met.overlay_into(out_blk, rate_scale=eff_speed)
+                            np.clip(out_blk, -1.0, 1.0, out=out_blk)
+                            out_wf.writeframes((out_blk * 32767.0).astype(np.int16).tobytes())
+                            written_frames += take
+                        if hit_eof:
+                            break
+                        rel_cursor = _new_rel
+                else:
+                    cursor = win_start
+                    while cursor < win_end:
+                        n = min(chunk_frames, win_end - cursor)
+                        mix = _mix_local_window(cursor, n)
+                        if local_met is not None:
+                            local_met.overlay_into(mix, rate_scale=1.0)
+                        np.clip(mix, -1.0, 1.0, out=mix)
+                        out_wf.writeframes((mix * 32767.0).astype(np.int16).tobytes())
+                        cursor += n
             tmp_path.replace(path)
         except Exception:
             tmp_path.unlink(missing_ok=True)
@@ -932,7 +1102,7 @@ class StemMixerEngine:
 
     def _ensure_output_stream(self) -> None:
         with self._lock:
-            if self._stream is not None:
+            if self._stream is not None or not self._is_playing:
                 return
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
@@ -942,6 +1112,7 @@ class StemMixerEngine:
         def _callback(outdata, frames, _time_info, _status) -> None:
             outdata[:] = self.render_block(frames, advance=True)
 
+        stream = None
         try:
             stream = sd.OutputStream(
                 samplerate=self.sample_rate,
@@ -950,9 +1121,23 @@ class StemMixerEngine:
                 callback=_callback,
             )
             stream.start()
+            discard = False
             with self._lock:
-                self._stream = stream
-        except Exception:
+                if not self._is_playing or self._stream is not None:
+                    discard = True
+                else:
+                    self._stream = stream
+            if discard:
+                stream.stop()
+                stream.close()
+        except Exception as exc:
+            logger.warning("Failed to open stem mixer output stream (pull-only mode): %s", exc)
+            if stream is not None:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
             with self._lock:
                 self._stream = None
 
@@ -966,3 +1151,4 @@ class StemMixerEngine:
                 stream.close()
             except Exception:
                 pass
+

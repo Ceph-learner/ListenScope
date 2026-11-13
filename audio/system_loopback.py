@@ -183,6 +183,8 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         raw_ch = int(dev_info.get("maxInputChannels") or 0) or int(dev_info.get("maxOutputChannels") or 0)
         src_channels = max(1, raw_ch)
         reconnects = 0
+        clean_chunks_since_reconnect = 0
+        has_transient_reconnect_notice = False
 
         while not self._stop_event.is_set():
             with self._lock:
@@ -192,6 +194,11 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
             try:
                 raw_bytes = stream.read(frames_per_buffer, exception_on_overflow=False)
                 reconnects = 0
+                if has_transient_reconnect_notice:
+                    clean_chunks_since_reconnect += 1
+                    if clean_chunks_since_reconnect >= 25:
+                        self._stats.set_error(None)
+                        has_transient_reconnect_notice = False
                 chunk = normalize_to_canonical_pcm(
                     raw_bytes,
                     src_rate=src_rate,
@@ -214,7 +221,9 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 self._stats.record_underrun(1)
                 self._close_stream()
                 reconnects += 1
+                clean_chunks_since_reconnect = 0
                 if reconnects > self._max_device_reconnects:
+                    has_transient_reconnect_notice = False
                     self._stats.set_error(f"播放设备中断且重连超过 {self._max_device_reconnects} 次: {exc}")
                     break
                 if self._stop_event.wait(timeout=0.35):
@@ -235,8 +244,13 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                     src_rate = int(new_dev["defaultSampleRate"])
                     new_ch = int(new_dev.get("maxInputChannels") or 0) or int(new_dev.get("maxOutputChannels") or 0)
                     src_channels = max(1, new_ch)
-                    self._stats.set_error(f"检测到播放设备切换，已重连至: {new_dev.get('name', 'default')}")
+                    self._device_name = str(new_dev.get("name", self._device_name))
+                    self._stats.set_process_name(self._device_name)
+                    self._stats.set_error(f"检测到播放设备切换，已重连至: {self._device_name}")
+                    has_transient_reconnect_notice = True
+                    clean_chunks_since_reconnect = 0
                 except Exception as rec_exc:
+                    has_transient_reconnect_notice = False
                     self._stats.set_error(f"播放设备重连失败 ({reconnects}/{self._max_device_reconnects}): {rec_exc}")
 
         self._close_stream()

@@ -16,7 +16,7 @@ import wave
 
 import numpy as np
 
-from audio.pcm_utils import normalize_to_canonical_pcm
+from audio.pcm_utils import decode_wave_bytes, normalize_to_canonical_pcm
 from core.config import AnalysisConfig
 from core.models import (
     BassAnalysisResult,
@@ -30,7 +30,7 @@ from core.models import (
     TempoEstimate,
 )
 
-from .chords import ChordDetector
+from .chords import ChordDetector, transpose_chord_symbol, transpose_key_label, transpose_note_name
 from .chroma import ChromaExtractor, PITCH_CLASSES
 from .fft import SpectrumAnalyzer
 from .key_detection import KeyDetector
@@ -62,31 +62,22 @@ def _read_reader_chunk_f32(kind: str, handle: object, take: int, src_ch: int) ->
     if take <= 0:
         return np.empty((0, src_ch), dtype=np.float32)
     if kind == "sf":
-        arr = handle.read(take, dtype="float32", always_2d=True)  # type: ignore[attr-defined]
-        return np.asarray(arr, dtype=np.float32)
+        arr = np.asarray(handle.read(take, dtype="float32", always_2d=True), dtype=np.float32)  # type: ignore[attr-defined]
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        if arr.size > 0 and not np.all(np.isfinite(arr)):
+            arr = np.nan_to_num(arr, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
+        return arr
 
     wf = handle
     raw = wf.readframes(take)  # type: ignore[attr-defined]
     if not raw:
         return np.empty((0, src_ch), dtype=np.float32)
     sw = int(wf.getsampwidth())  # type: ignore[attr-defined]
-    if sw == 2:
-        flat = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    elif sw == 3:
-        raw_u8 = np.frombuffer(raw, dtype=np.uint8)
-        usable_b = (raw_u8.size // 3) * 3
-        triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
-        signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
-        signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
-        flat = signed.astype(np.float32) / 8388608.0
-    elif sw == 4:
-        flat = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-    else:
-        flat = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-    usable = (flat.size // src_ch) * src_ch
-    if usable == 0:
+    try:
+        return decode_wave_bytes(raw, sw, src_ch)
+    except ValueError:
         return np.empty((0, src_ch), dtype=np.float32)
-    return flat[:usable].reshape(-1, src_ch)
 
 
 def _iter_aligned_mono_48k_frames(
@@ -737,11 +728,22 @@ def export_transcription_sheet(
     output_path: Path | str,
     *,
     midi_result: Optional[MidiTranscriptionResult] = None,
+    transpose_semitones: int = 0,
 ) -> Path:
     """Export chord progression, bass, drums groove, melody, and optional MIDI notes to Markdown or CSV."""
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out.with_name(out.name + ".tmp")
+    semi = int(transpose_semitones)
+
+    def _tr_chord(c: str) -> str:
+        return transpose_chord_symbol(c, semi) if semi != 0 else c
+
+    def _tr_key(k: str) -> str:
+        return transpose_key_label(k, semi) if semi != 0 else k
+
+    def _tr_note(n: str) -> str:
+        return transpose_note_name(n, semi) if semi != 0 else n
 
     if out.suffix.lower() == ".csv":
         try:
@@ -749,10 +751,12 @@ def export_transcription_sheet(
                 writer = csv.writer(fh)
                 writer.writerow(["section", "start_sec", "end_sec", "label", "detail_1", "detail_2", "confidence_or_corr"])
                 for seg in report.chord_timeline:
-                    writer.writerow(["chord", seg.start_sec, seg.end_sec, seg.chord, seg.secondary, seg.stability, seg.correlation])
+                    writer.writerow(
+                        ["chord", seg.start_sec, seg.end_sec, _tr_chord(seg.chord), _tr_chord(seg.secondary), seg.stability, seg.correlation]
+                    )
                 if report.bass is not None:
                     for n in report.bass.notes:
-                        writer.writerow(["bass", n.start_sec, n.end_sec, n.note_name, n.pitch_midi, f"{n.frequency_hz}Hz", n.confidence])
+                        writer.writerow(["bass", n.start_sec, n.end_sec, _tr_note(n.note_name), n.pitch_midi, f"{n.frequency_hz}Hz", n.confidence])
                 if report.drums is not None:
                     for t in report.drums.kick_times_sec:
                         writer.writerow(["drum_kick", t, t, "Kick", "", "", ""])
@@ -762,10 +766,10 @@ def export_transcription_sheet(
                         writer.writerow(["drum_hihat", t, t, "HiHat", "", "", ""])
                 if report.melody is not None:
                     for n in report.melody.notes:
-                        writer.writerow(["melody", n.start_sec, n.end_sec, n.note_name, n.pitch_midi, f"{n.frequency_hz}Hz", n.confidence])
+                        writer.writerow(["melody", n.start_sec, n.end_sec, _tr_note(n.note_name), n.pitch_midi, f"{n.frequency_hz}Hz", n.confidence])
                 if midi_result is not None:
                     for n in midi_result.notes:
-                        writer.writerow(["midi", n.start_sec, n.end_sec, n.note_name, n.pitch_midi, f"vel={n.velocity}", n.confidence])
+                        writer.writerow(["midi", n.start_sec, n.end_sec, _tr_note(n.note_name), n.pitch_midi, f"vel={n.velocity}", n.confidence])
             tmp_path.replace(out)
         except Exception:
             tmp_path.unlink(missing_ok=True)
@@ -773,6 +777,13 @@ def export_transcription_sheet(
         return out
 
     bpm_str = f"{report.estimated_bpm.bpm:.1f} ({report.estimated_bpm.stability})" if report.estimated_bpm.bpm else "Unknown"
+    key_primary = _tr_key(report.estimated_key.primary)
+    key_secondary = _tr_key(report.estimated_key.secondary)
+    transpose_line = (
+        f"- **记谱 / 变调夹移调 (Transpose)**: `{semi:+d} 半音`（实音调性: `{report.estimated_key.primary}`）"
+        if semi != 0
+        else "- **记谱移调 (Transpose)**: `0 半音 (原调实音)`"
+    )
     lines: list[str] = [
         "# ListenScope 离线分轨与扒谱分析报告",
         "",
@@ -780,7 +791,8 @@ def export_transcription_sheet(
         "",
         f"- **分析时长**: `{report.duration_sec:.2f} s`",
         f"- **和声分析源**: `{report.harmonic_source_label}`",
-        f"- **推测调性 (Key)**: `{report.estimated_key.primary}`（第二候选: `{report.estimated_key.secondary}`，稳定度: `{report.estimated_key.stability}`）",
+        transpose_line,
+        f"- **推测调性 (Key)**: `{key_primary}`（第二候选: `{key_secondary}`，稳定度: `{report.estimated_key.stability}`）",
         f"- **调性说明**: {report.estimated_key.relation_note}；{report.estimated_key.key_signature_note}",
         f"- **推测速度 (BPM)**: `{bpm_str}`",
         "",
@@ -791,7 +803,7 @@ def export_transcription_sheet(
     ]
     for seg in report.chord_timeline:
         lines.append(
-            f"| {seg.start_sec:.2f} | {seg.end_sec:.2f} | `{seg.chord}` | `{seg.secondary}` | {seg.correlation:.3f} | {seg.stability} |"
+            f"| {seg.start_sec:.2f} | {seg.end_sec:.2f} | `{_tr_chord(seg.chord)}` | `{_tr_chord(seg.secondary)}` | {seg.correlation:.3f} | {seg.stability} |"
         )
 
     if report.bass is not None:
@@ -800,8 +812,8 @@ def export_transcription_sheet(
                 "",
                 "## 3. Bass 音轨分析",
                 "",
-                f"- **音域**: `{report.bass.lowest_note or '-'} ~ {report.bass.highest_note or '-'}`",
-                f"- **高频根音级**: `{', '.join(report.bass.root_pitch_classes) or '-'}`",
+                f"- **音域**: `{_tr_note(report.bass.lowest_note) or '-'} ~ {_tr_note(report.bass.highest_note) or '-'}`",
+                f"- **高频根音级**: `{', '.join(_tr_note(r) for r in report.bass.root_pitch_classes) or '-'}`",
                 f"- **提取音符数**: `{len(report.bass.notes)}`",
                 "",
                 "| 开始 (s) | 结束 (s) | 音名 | MIDI | 基频 (Hz) | 置信度 |",
@@ -809,7 +821,9 @@ def export_transcription_sheet(
             ]
         )
         for n in report.bass.notes[:120]:
-            lines.append(f"| {n.start_sec:.2f} | {n.end_sec:.2f} | `{n.note_name}` | {n.pitch_midi} | {n.frequency_hz:.1f} | {n.confidence:.2f} |")
+            lines.append(
+                f"| {n.start_sec:.2f} | {n.end_sec:.2f} | `{_tr_note(n.note_name)}` | {n.pitch_midi} | {n.frequency_hz:.1f} | {n.confidence:.2f} |"
+            )
 
     if report.drums is not None:
         lines.extend(
@@ -831,7 +845,8 @@ def export_transcription_sheet(
                 "",
                 f"## 5. 主旋律 / 人声分析 (`{report.melody.stem_name}`)",
                 "",
-                f"- **音域**: `{report.melody.lowest_note or '-'} ~ {report.melody.highest_note or '-'}` (中位音高: `{report.melody.median_note or '-'}`)",
+                f"- **音域**: `{_tr_note(report.melody.lowest_note) or '-'} ~ {_tr_note(report.melody.highest_note) or '-'}` "
+                f"(中位音高: `{_tr_note(report.melody.median_note) or '-'}`)",
                 f"- **有声帧占比**: `{report.melody.voiced_ratio * 100:.1f}%`",
                 f"- **提取音符数**: `{len(report.melody.notes)}`",
             ]
@@ -850,7 +865,7 @@ def export_transcription_sheet(
             ]
         )
         for n in midi_result.notes[:200]:
-            lines.append(f"| `{n.note_name}` | {n.pitch_midi} | {n.start_sec:.2f} | {n.end_sec:.2f} | {n.velocity} |")
+            lines.append(f"| `{_tr_note(n.note_name)}` | {n.pitch_midi} | {n.start_sec:.2f} | {n.end_sec:.2f} | {n.velocity} |")
 
     try:
         tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -859,3 +874,4 @@ def export_transcription_sheet(
         tmp_path.unlink(missing_ok=True)
         raise
     return out
+

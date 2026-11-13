@@ -195,9 +195,23 @@ class DemucsSeparatorBackend(SeparationBackend):
         torch = self._torch
         model = self._model
         model_sr = int(getattr(model, "samplerate", 44100))
-        target_frames = int(chunk_f32.shape[0])
 
-        work = _resample_chunk(chunk_f32, sample_rate, model_sr)
+        canon = np.asarray(chunk_f32, dtype=np.float32)
+        if canon.ndim == 1:
+            canon = np.repeat(canon[:, None], 2, axis=1)
+        elif canon.shape[1] == 1:
+            canon = np.repeat(canon, 2, axis=1)
+        elif canon.shape[1] > 2:
+            canon = canon[:, :2]
+        if canon.size > 0 and not np.all(np.isfinite(canon)):
+            canon = np.nan_to_num(canon, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
+
+        target_frames = int(canon.shape[0])
+        if target_frames <= 0:
+            source_names = list(getattr(model, "sources", self.model_spec.stems))
+            return {name: np.empty((0, 2), dtype=np.float32) for name in source_names}
+
+        work = _resample_chunk(canon, sample_rate, model_sr)
         tensor = None
         sources = None
         try:
@@ -221,11 +235,19 @@ class DemucsSeparatorBackend(SeparationBackend):
             for idx, name in enumerate(source_names):
                 stem_np = sources[idx].detach().cpu().numpy().T.astype(np.float32, copy=False)
                 restored = _resample_chunk(stem_np, model_sr, sample_rate)
+                if restored.ndim == 1:
+                    restored = np.repeat(restored[:, None], 2, axis=1)
+                elif restored.shape[1] == 1:
+                    restored = np.repeat(restored, 2, axis=1)
+                elif restored.shape[1] > 2:
+                    restored = restored[:, :2]
                 if restored.shape[0] > target_frames:
                     restored = restored[:target_frames]
                 elif restored.shape[0] < target_frames:
                     pad = np.zeros((target_frames - restored.shape[0], restored.shape[1]), dtype=np.float32)
                     restored = np.vstack([restored, pad])
+                if restored.size > 0 and not np.all(np.isfinite(restored)):
+                    restored = np.nan_to_num(restored, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
                 out[name] = restored
             return out
         finally:
