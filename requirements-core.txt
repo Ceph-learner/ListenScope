@@ -1,0 +1,5 @@
+# ListenScope Phase 0 & Phase 1 Core Dependencies (CPU-only, no PyTorch/AI)
+numpy>=1.24.0
+scipy>=1.10.0
+psutil>=5.9.0
+nvidia-ml-py>=12.0.0
