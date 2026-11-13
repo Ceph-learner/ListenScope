@@ -45,7 +45,8 @@ class DemucsSeparatorBackend(SeparationBackend):
         output_dir: Optional[Path] = None,
     ) -> None:
         cfg = ai_config or AIConfig()
-        capped_segment = min(int(segment_seconds or 10), max(cfg.demucs_segment_ladder))
+        raw_segment = cfg.demucs_default_segment_sec if segment_seconds is None else segment_seconds
+        capped_segment = min(int(raw_segment), max(cfg.demucs_segment_ladder))
         super().__init__(
             model_spec,
             use_gpu=use_gpu,
@@ -132,7 +133,8 @@ class DemucsSeparatorBackend(SeparationBackend):
                 "未安装 `demucs` 或 `audio-separator`。请在 AI Worker 环境安装: pip install demucs audio-separator[gpu]"
             ) from exc
 
-        self._tmp_root = tempfile.TemporaryDirectory(prefix="ls_demucs_")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._tmp_root = tempfile.TemporaryDirectory(prefix="ls_demucs_", dir=self.output_dir)
         chunk_out_dir = Path(self._tmp_root.name) / "out"
         chunk_out_dir.mkdir(parents=True, exist_ok=True)
         self._separator = Separator(

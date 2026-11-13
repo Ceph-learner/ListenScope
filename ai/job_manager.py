@@ -16,6 +16,8 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+import psutil
+
 from core.config import AIConfig, TargetHardwareSpec
 from core.logging import PerformanceLogger
 from core.models import (
@@ -26,7 +28,7 @@ from core.models import (
     OOMRecoveryAction,
     ResourceSnapshot,
 )
-from core.paths import get_bundle_root, subprocess_no_window_kwargs
+from core.paths import get_bundle_root, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
 from core.resource_manager import ResourceManager
 
 from .models import MODEL_REGISTRY
@@ -336,7 +338,7 @@ class AIJobManager:
             req_path.write_text(json.dumps(req_dict, ensure_ascii=False), encoding="utf-8")
             cfg_path.write_text(json.dumps(cfg_dict, ensure_ascii=False), encoding="utf-8")
 
-            env = os.environ.copy()
+            env = prepend_ffmpeg_path_env(os.environ.copy())
             existing_pp = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
 
@@ -481,6 +483,38 @@ class AIJobManager:
             except Exception:
                 pass
 
+    @staticmethod
+    def _terminate_process_tree(pid: Optional[int], grace_timeout: float = 0.6) -> None:
+        if pid is None:
+            return
+        try:
+            parent = psutil.Process(int(pid))
+        except Exception:
+            return
+        try:
+            targets = parent.children(recursive=True) + [parent]
+        except Exception:
+            targets = [parent]
+        for p in targets:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        try:
+            _gone, alive = psutil.wait_procs(targets, timeout=max(0.1, grace_timeout))
+        except Exception:
+            alive = targets
+        for p in alive:
+            try:
+                p.kill()
+            except Exception:
+                pass
+        if alive:
+            try:
+                psutil.wait_procs(alive, timeout=0.4)
+            except Exception:
+                pass
+
     def _terminate_workers_only(self, grace_timeout: float) -> None:
         self._signal_worker_cancel()
         deadline = time.monotonic() + max(0.05, grace_timeout)
@@ -490,17 +524,18 @@ class AIJobManager:
         if self._spawn_proc is not None:
             proc = self._spawn_proc
             if proc.is_alive():
+                self._terminate_process_tree(proc.pid, grace_timeout=0.6)
                 try:
                     proc.terminate()
                 except Exception:
                     pass
-                proc.join(timeout=0.6)
+                proc.join(timeout=0.3)
             if proc.is_alive():
                 try:
                     proc.kill()
                 except Exception:
                     pass
-                proc.join(timeout=0.5)
+                proc.join(timeout=0.4)
             else:
                 proc.join(timeout=0.2)
             self._spawn_proc = None
@@ -508,15 +543,17 @@ class AIJobManager:
         if self._subproc is not None:
             sub = self._subproc
             if sub.poll() is None:
-                try:
-                    sub.terminate()
-                    sub.wait(timeout=0.6)
-                except Exception:
+                self._terminate_process_tree(sub.pid, grace_timeout=0.6)
+                if sub.poll() is None:
                     try:
-                        sub.kill()
-                        sub.wait(timeout=0.5)
+                        sub.terminate()
+                        sub.wait(timeout=0.4)
                     except Exception:
-                        pass
+                        try:
+                            sub.kill()
+                            sub.wait(timeout=0.4)
+                        except Exception:
+                            pass
             for pipe in (sub.stdout, sub.stderr):
                 if pipe is not None:
                     try:
@@ -650,12 +687,15 @@ class AIJobManager:
                 self._terminate_and_cleanup_ipc(grace_timeout=min(0.6, self.ai_config.worker_graceful_cancel_timeout_sec))
                 self._cleanup_task_staging(req)
                 snap = self.resource_manager.sample()
+                err_msg = reason
+                if "RAM" not in err_msg:
+                    err_msg = f"{reason}（当前可用 RAM={snap.system_ram_available_mb:.0f} MB）"
                 res = AIJobResult(
                     task_id=req.task_id,
                     state=AIJobState.EMERGENCY_STOPPED,
                     model_id=req.model_id,
                     device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
-                    error=reason,
+                    error=err_msg,
                 )
                 self._dispatch_result(req, res)
                 return snap

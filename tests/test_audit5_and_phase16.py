@@ -507,6 +507,9 @@ def test_settings_v2_backward_compat_ui_transposition_and_stale_generation_guard
         pixmap = cw.tuning_bar.grab()
         assert pixmap.width() > 0 and pixmap.height() > 0
 
+        # Freeze periodic background timer ticks so synthetic AnalysisSnapshot stays deterministic
+        ctrl._timer.stop()
+
         # Feed D chord / D major snapshot + load deep report
         snap = AnalysisSnapshot(
             timestamp=1.0,

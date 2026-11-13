@@ -10,13 +10,19 @@ from PySide6 import QtCore, QtWidgets
 
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
 from core.models import SystemHardwareReport
-from core.system_probe import apply_external_ai_probe_to_report, probe_external_ai_environment
+from core.system_probe import (
+    MIDI_ENV_SETUP_GUIDE,
+    apply_external_ai_probe_to_report,
+    probe_external_ai_environment,
+    probe_external_midi_environment,
+)
 
 
 class SettingsDialog(QtWidgets.QDialog):
     """Shows real SystemHardwareReport (`设置 -> 系统状态`) and configurable guardrails."""
 
     _probe_finished = QtCore.Signal(object)
+    _midi_probe_finished = QtCore.Signal(object)
 
     def __init__(
         self,
@@ -25,19 +31,22 @@ class SettingsDialog(QtWidgets.QDialog):
         ai_config: AIConfig,
         *,
         ai_python_executable: str = "",
+        midi_python_executable: str = "",
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope 设置 -> 系统状态 & 资源安全策略")
-        self.resize(780, 600)
+        self.resize(820, 690)
 
         self._report = hardware_report
         self._updated_limits: Optional[ResourceLimits] = None
         self._updated_ai_config: Optional[AIConfig] = None
         self._updated_ai_python: str = ai_python_executable
+        self._updated_midi_python: str = midi_python_executable
         self._verified_ai_probe: Optional[dict[str, Any]] = None
         self._dialog_closed = False
         self._probe_finished.connect(self._on_ai_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
+        self._midi_probe_finished.connect(self._on_midi_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
 
         root = QtWidgets.QVBoxLayout(self)
         tabs = QtWidgets.QTabWidget()
@@ -106,9 +115,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self.crit_vram_spin.setValue(resource_limits.critical_vram_free_mb)
 
         self.chunk_sec_spin = QtWidgets.QDoubleSpinBox()
-        self.chunk_sec_spin.setRange(5.0, 45.0)
+        self.chunk_sec_spin.setRange(2.0, 45.0)
         self.chunk_sec_spin.setSuffix(" s")
         self.chunk_sec_spin.setValue(ai_config.long_audio_chunk_seconds)
+        self.chunk_sec_spin.setToolTip(
+            "离线音频流式分块长度（RTX 5060 Ti 8GB + 16GB RAM 实测默认 6.0s；保留用户已保存自定义设置）。"
+        )
+
+        self.demucs_seg_spin = QtWidgets.QSpinBox()
+        self.demucs_seg_spin.setRange(4, max(int(s) for s in ai_config.demucs_segment_ladder))
+        self.demucs_seg_spin.setSuffix(" s")
+        self.demucs_seg_spin.setValue(ai_config.demucs_default_segment_sec)
+        self.demucs_seg_spin.setToolTip(
+            "HTDemucs 4-Stem 内部模型分段时长（实测默认 6s）；与离线流式分块分开设置，且不影响 MDX 内部 segment_size=256。"
+        )
 
         py_row = QtWidgets.QHBoxLayout()
         self.ai_python_edit = QtWidgets.QLineEdit(ai_python_executable)
@@ -121,9 +141,28 @@ class SettingsDialog(QtWidgets.QDialog):
         py_row.addWidget(self.browse_ai_py_btn)
         py_row.addWidget(self.verify_ai_env_btn)
 
-        self.ai_probe_result_lbl = QtWidgets.QLabel("配置会持久化保存至 ~/.listenscope/settings.json；可点击“验证 AI 环境”检测 CUDA / ONNX / Demucs / Basic Pitch。")
+        self.ai_probe_result_lbl = QtWidgets.QLabel(
+            "配置会持久化保存至 ~/.listenscope/settings.json；可点击“验证 AI 环境”检测 CUDA / ONNX / Demucs / FFmpeg（Basic Pitch 请在下方独立 MIDI 环境配置）。"
+        )
         self.ai_probe_result_lbl.setWordWrap(True)
         self.ai_probe_result_lbl.setStyleSheet("padding: 6px; background: #1C2026; border: 1px solid #2C323C; border-radius: 5px; color: #D7DCE2;")
+
+        midi_py_row = QtWidgets.QHBoxLayout()
+        self.midi_python_edit = QtWidgets.QLineEdit(midi_python_executable)
+        self.midi_python_edit.setPlaceholderText("建议填写 Python 3.11 独立环境: .venv-midi\\Scripts\\python.exe")
+        self.browse_midi_py_btn = QtWidgets.QPushButton("浏览...")
+        self.browse_midi_py_btn.clicked.connect(self._browse_midi_python)
+        self.verify_midi_env_btn = QtWidgets.QPushButton("验证 MIDI 环境")
+        self.verify_midi_env_btn.clicked.connect(self._verify_midi_environment)
+        midi_py_row.addWidget(self.midi_python_edit, 1)
+        midi_py_row.addWidget(self.browse_midi_py_btn)
+        midi_py_row.addWidget(self.verify_midi_env_btn)
+
+        self.midi_probe_result_lbl = QtWidgets.QLabel(
+            "MIDI 转录独立调用 Python 3.11 CPU 环境 (basic-pitch 0.4.0 + tensorflow<=2.15 + setuptools<81)；未配置或缺失时将展示安装方法并明确标注所采用的轻量回退算法。"
+        )
+        self.midi_probe_result_lbl.setWordWrap(True)
+        self.midi_probe_result_lbl.setStyleSheet("padding: 6px; background: #1C2026; border: 1px solid #2C323C; border-radius: 5px; color: #D7DCE2;")
 
         self.roformer_chk = QtWidgets.QCheckBox("允许实验性 BS-RoFormer 模型 (仅在 RTX 5060 Ti 8GB 实测峰值通过后手动启用)")
         self.roformer_chk.setChecked(ai_config.allow_experimental_roformer)
@@ -134,9 +173,12 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("GPU 2-Stem 最低空闲显存 (min_vram_2stem):", self.vram_2s_spin)
         form.addRow("GPU 4-Stem 最低空闲显存 (min_vram_4stem):", self.vram_4s_spin)
         form.addRow("桌面/QQ音乐保留最低空闲显存 (critical_vram_free):", self.crit_vram_spin)
-        form.addRow("长音频流式分块长度 (long_audio_chunk_seconds):", self.chunk_sec_spin)
-        form.addRow("独立 AI Worker Python 路径:", py_row)
+        form.addRow("离线音频流式分块长度 (long_audio_chunk_seconds):", self.chunk_sec_spin)
+        form.addRow("HTDemucs 4-Stem 模型分段 (demucs_default_segment_sec):", self.demucs_seg_spin)
+        form.addRow("独立 AI Worker Python 路径 (.venv-ai):", py_row)
         form.addRow("AI 环境验证结果:", self.ai_probe_result_lbl)
+        form.addRow("独立 CPU MIDI Python 路径 (.venv-midi):", midi_py_row)
+        form.addRow("MIDI 环境验证结果:", self.midi_probe_result_lbl)
         form.addRow("高显存模型解锁:", self.roformer_chk)
 
         tabs.addTab(cfg_tab, "资源安全阈值 & AI 配置")
@@ -185,10 +227,21 @@ class SettingsDialog(QtWidgets.QDialog):
         if selected:
             self.ai_python_edit.setText(selected)
 
+    def _browse_midi_python(self) -> None:
+        start_dir = str(Path(self.midi_python_edit.text().strip()).parent) if self.midi_python_edit.text().strip() else str(Path.cwd())
+        selected, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "选择独立 CPU MIDI Python 解释器 (建议 Python 3.11 .venv-midi)",
+            start_dir,
+            "Python Executable (python.exe python python3*);;All Files (*)",
+        )
+        if selected:
+            self.midi_python_edit.setText(selected)
+
     def _verify_ai_environment(self) -> None:
         target_py = self.ai_python_edit.text().strip()
         self.verify_ai_env_btn.setEnabled(False)
-        self.ai_probe_result_lbl.setText("⏳ 正在启动子进程检测 AI Python 环境 (CUDA / sm_120 / ONNX / Demucs / Basic Pitch)...")
+        self.ai_probe_result_lbl.setText("⏳ 正在启动子进程检测 AI Python 环境 (CUDA / sm_120 / ONNX / Demucs / FFmpeg)...")
 
         def _worker() -> None:
             res = probe_external_ai_environment(target_py)
@@ -199,6 +252,21 @@ class SettingsDialog(QtWidgets.QDialog):
                     pass
 
         threading.Thread(target=_worker, name="ListenScope-VerifyAIEnv", daemon=True).start()
+
+    def _verify_midi_environment(self) -> None:
+        target_py = self.midi_python_edit.text().strip()
+        self.verify_midi_env_btn.setEnabled(False)
+        self.midi_probe_result_lbl.setText("⏳ 正在启动子进程检测独立 CPU MIDI 环境 (Basic Pitch / TensorFlow / pkg_resources / mido)...")
+
+        def _worker() -> None:
+            res = probe_external_midi_environment(target_py)
+            if not self._dialog_closed:
+                try:
+                    self._midi_probe_finished.emit(res)
+                except RuntimeError:
+                    pass
+
+        threading.Thread(target=_worker, name="ListenScope-VerifyMidiEnv", daemon=True).start()
 
     @QtCore.Slot(object)
     def _on_ai_probe_finished(self, result: Any) -> None:
@@ -222,17 +290,26 @@ class SettingsDialog(QtWidgets.QDialog):
         pt = result.get("pytorch") or {}
         ort = result.get("onnxruntime") or {}
         pkgs = result.get("ai_packages") or {}
+        tools = result.get("tools") or {}
+        ff_info = tools.get("ffmpeg") or {}
         gpu_ready = bool(self._report.gpu_ai_ready)
         block_reason = self._report.gpu_ai_block_reason or ""
-        pkg_summary = ", ".join(
-            f"{k}={'OK' if (v or {}).get('installed') else 'MISS'}"
-            for k, v in pkgs.items()
-        )
+
+        def _fmt_pkg(name: str, info: Any) -> str:
+            d = info or {}
+            if d.get("installed"):
+                return f"{name}=OK"
+            if d.get("optional"):
+                return f"{name}=OPT(独立MIDI)"
+            return f"{name}=MISS"
+
+        pkg_summary = ", ".join(_fmt_pkg(k, v) for k, v in pkgs.items())
+        ff_txt = f"OK ({ff_info.get('path')})" if ff_info.get("installed") else "MISS (仅 WAV 可直读)"
         summary = (
             f"Python: {result.get('python_executable')}\n"
             f"PyTorch: {pt.get('version') or 'N/A'} (CUDA={pt.get('cuda_available')}, sm_120={pt.get('supports_sm_120')}) | "
             f"ONNX CUDA: {ort.get('cuda_provider_available')}\n"
-            f"AI 包: {pkg_summary}\n"
+            f"AI 包: {pkg_summary} | FFmpeg: {ff_txt}\n"
             f"GPU AI 准入: {'READY' if gpu_ready else f'BLOCKED ({block_reason})'}"
         )
         self.ai_probe_result_lbl.setText(summary)
@@ -242,6 +319,43 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         else:
             self.ai_probe_result_lbl.setStyleSheet(
+                "padding: 6px; background: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 5px;"
+            )
+
+    @QtCore.Slot(object)
+    def _on_midi_probe_finished(self, result: Any) -> None:
+        if self._dialog_closed:
+            return
+        self.verify_midi_env_btn.setEnabled(True)
+        if not isinstance(result, dict) or not result.get("ok"):
+            err = result.get("error", "未知错误") if isinstance(result, dict) else str(result)
+            guide = result.get("setup_guide", MIDI_ENV_SETUP_GUIDE) if isinstance(result, dict) else MIDI_ENV_SETUP_GUIDE
+            msg = err if guide in err else f"{err}\n{guide}"
+            self.midi_probe_result_lbl.setText(f"❌ MIDI 环境不可用: {msg}")
+            self.midi_probe_result_lbl.setStyleSheet(
+                "padding: 6px; background: #4D1D1D; color: #FF9B9B; border: 1px solid #E03E3E; border-radius: 5px;"
+            )
+            return
+
+        pkgs = result.get("midi_packages") or {}
+        pkg_summary = ", ".join(
+            f"{k}={'OK' if (v or {}).get('installed') else 'MISS'}"
+            for k, v in pkgs.items()
+        )
+        midi_ready = bool(result.get("midi_ready"))
+        block_reason = str(result.get("midi_block_reason") or "")
+        summary = (
+            f"Python: {result.get('python_executable')} (ver={result.get('python_version') or 'N/A'})\n"
+            f"MIDI 包: {pkg_summary}\n"
+            f"Basic Pitch CPU 准入: {'READY' if midi_ready else f'BLOCKED ({block_reason})'}"
+        )
+        self.midi_probe_result_lbl.setText(summary)
+        if midi_ready:
+            self.midi_probe_result_lbl.setStyleSheet(
+                "padding: 6px; background: #1B4D3E; color: #7EE2B8; border: 1px solid #2EC27E; border-radius: 5px;"
+            )
+        else:
+            self.midi_probe_result_lbl.setStyleSheet(
                 "padding: 6px; background: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 5px;"
             )
 
@@ -287,6 +401,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 demucs_jobs=1,
                 demucs_shifts=1,
                 demucs_overlap=self._orig_ai_cfg.demucs_overlap,
+                demucs_default_segment_sec=int(self.demucs_seg_spin.value()),
                 demucs_segment_ladder=self._orig_ai_cfg.demucs_segment_ladder,
                 mdx_batch_size=self._orig_ai_cfg.mdx_batch_size,
                 mdx_segment_size=self._orig_ai_cfg.mdx_segment_size,
@@ -300,6 +415,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             entered_py = self.ai_python_edit.text().strip()
             self._updated_ai_python = entered_py
+            self._updated_midi_python = self.midi_python_edit.text().strip()
             if self._verified_ai_probe is not None and str(self._verified_ai_probe.get("python_executable", "")) != entered_py:
                 self._verified_ai_probe = None
         except ValueError as exc:
@@ -318,6 +434,10 @@ class SettingsDialog(QtWidgets.QDialog):
     @property
     def updated_ai_python(self) -> str:
         return self._updated_ai_python
+
+    @property
+    def updated_midi_python(self) -> str:
+        return self._updated_midi_python
 
     @property
     def verified_ai_probe(self) -> Optional[dict[str, Any]]:

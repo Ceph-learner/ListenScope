@@ -19,7 +19,7 @@ from ai.backend import build_separation_backend
 from ai.models import MODEL_REGISTRY
 from ai.resource_guard import release_torch_and_memory
 from core.config import AIConfig, AudioConfig, TargetHardwareSpec
-from core.paths import get_bundle_root, subprocess_no_window_kwargs
+from core.paths import get_bundle_root, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
 from core.system_probe import (
     _probe_gpus_nvml,
     _probe_gpus_nvidia_smi,
@@ -160,12 +160,12 @@ def benchmark_live_model_isolated(
         raise FileNotFoundError(f"找不到 AI Python 解释器: {exe}")
 
     bundle_root = get_bundle_root()
-    env = os.environ.copy()
+    env = prepend_ffmpeg_path_env(os.environ.copy())
     existing_pp = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
 
-    ai_cfg_payload = json.dumps(asdict(ai_config or AIConfig()), ensure_ascii=False)
-    aud_cfg_payload = json.dumps(asdict(audio_config or AudioConfig()), ensure_ascii=False)
+    ai_cfg_payload = json.dumps(asdict(ai_config or AIConfig()))
+    aud_cfg_payload = json.dumps(asdict(audio_config or AudioConfig()))
 
     cmd = [
         str(exe_path),
@@ -308,13 +308,13 @@ def _cli_main() -> int:
             audio_config=aud_cfg,
         )
         if args.json:
-            print(json.dumps(asdict(res), ensure_ascii=False), file=ipc_out, flush=True)
+            print(json.dumps(asdict(res)), file=ipc_out, flush=True)
         else:
             print(res.message)
         return 0
     except Exception as exc:
         if args.json:
-            print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=ipc_out, flush=True)
+            print(json.dumps({"error": str(exc)}), file=ipc_out, flush=True)
         else:
             print(f"Benchmark error: {exc}", file=sys.stderr)
         return 1

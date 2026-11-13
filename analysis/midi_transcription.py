@@ -266,7 +266,7 @@ def _cli_main() -> int:
         if args.json:
             payload = asdict(res)
             payload["output_midi_path"] = str(res.output_midi_path) if res.output_midi_path is not None else None
-            print(json.dumps(payload, ensure_ascii=False), file=ipc_out, flush=True)
+            print(json.dumps(payload), file=ipc_out, flush=True)
         else:
             print(f"MIDI written: {res.output_midi_path} ({len(res.notes)} notes, backend={res.backend_used})")
     finally:

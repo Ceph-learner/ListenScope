@@ -355,7 +355,9 @@ class StemMixerWidget(QtWidgets.QWidget):
         midi_tab = QtWidgets.QWidget()
         midi_l = QtWidgets.QVBoxLayout(midi_tab)
         midi_hdr = QtWidgets.QHBoxLayout()
-        self.midi_info_lbl = QtWidgets.QLabel("尚未执行分轨 MIDI 转录（Basic Pitch 仅作用于单一分轨；点击音符行可跳转至对应时间位置）。")
+        self.midi_info_lbl = QtWidgets.QLabel(
+            "尚未执行分轨 MIDI 转录（Basic Pitch 默认通过独立 Python 3.11 CPU 环境 `.venv-midi` 仅针对单一分轨运行；点击音符行可跳转至对应时间位置）。"
+        )
         self.midi_info_lbl.setWordWrap(True)
         self.save_midi_btn = QtWidgets.QPushButton("另存 MIDI (.mid)")
         self.save_midi_btn.setEnabled(False)
@@ -639,8 +641,12 @@ class StemMixerWidget(QtWidgets.QWidget):
         if self._piano_roll_item is not None:
             self.piano_roll_plot.removeItem(self._piano_roll_item)
             self._piano_roll_item = None
+        self.piano_roll_plot.setTitle("MIDI 钢琴卷帘预览 (Pitch vs Time · 单击画面可跳转播放位置)")
         self.midi_table.setRowCount(0)
-        self.midi_info_lbl.setText("尚未执行分轨 MIDI 转录（Basic Pitch 仅作用于单一分轨；点击音符行可跳转至对应时间位置）。")
+        self.midi_info_lbl.setStyleSheet("")
+        self.midi_info_lbl.setText(
+            "尚未执行分轨 MIDI 转录（Basic Pitch 默认通过独立 Python 3.11 CPU 环境 `.venv-midi` 仅针对单一分轨运行；点击音符行可跳转至对应时间位置）。"
+        )
         self.save_midi_btn.setEnabled(False)
         self.loop_chord_btn.setEnabled(False)
         self.clear_subloop_btn.setEnabled(False)
@@ -652,6 +658,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.deep_analyze_btn.setEnabled(bool(tracks))
         self.export_sheet_btn.setEnabled(False)
         self.chord_timeline_table.setRowCount(0)
+        self.analysis_tabs.setCurrentIndex(0)
         self.deep_summary_lbl.setText(
             "分轨完成后点击上方「深度分析分轨」：离线流式解析时间轴和弦进行、Bass 根音、鼓组 Kick/Snare/Hi-Hat 16 步律动及主旋律音域（点击行跳转试听，可点「循环选中和弦段」反复练习）。"
         )
@@ -733,11 +740,27 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.sync_playback_position()
 
     def display_midi_result(self, result: MidiTranscriptionResult) -> None:
-        warn = f" | {result.warning}" if result.warning else ""
+        backend = str(result.backend_used or "unknown")
+        if backend == "basic-pitch":
+            algo_desc = "Spotify Basic Pitch CPU (basic-pitch)"
+            self.midi_info_lbl.setStyleSheet(
+                "padding: 6px; background: #1B3B2B; color: #7EE2B8; border: 1px solid #2EC27E; border-radius: 5px;"
+            )
+        else:
+            algo_desc = f"⚠️ 轻量回退算法 ({backend}，非 Spotify Basic Pitch)"
+            self.midi_info_lbl.setStyleSheet(
+                "padding: 6px; background: #332400; color: #FFD166; border: 1px solid #F5A623; border-radius: 5px;"
+            )
+        self.piano_roll_plot.setTitle(
+            f"MIDI 钢琴卷帘预览 ({result.source_stem_name} · 算法: {algo_desc} · 单击画面可跳转播放位置)"
+        )
+        warn = f"\n说明: {result.warning}" if result.warning else ""
         self.midi_info_lbl.setText(
-            f"源音轨: {result.source_stem_name} | 后端: {result.backend_used} | "
+            f"源音轨: {result.source_stem_name} | 实际算法: {algo_desc} | "
             f"音符数: {len(result.notes)} | 文件: {result.output_midi_path}{warn}"
         )
+        if self.analysis_tabs.currentIndex() == 0:
+            self.analysis_tabs.setCurrentIndex(2)
         show = list(result.notes[:250])
         self._midi_notes = show
         self.midi_table.setRowCount(len(show))

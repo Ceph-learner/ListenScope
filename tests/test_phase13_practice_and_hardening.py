@@ -36,7 +36,7 @@ from core.models import (
     StemDeepAnalysisReport,
     TempoEstimate,
 )
-from core.resource_manager import ResourceManager
+from core.resource_manager import ResourceManager, SimulationOverrides
 from main import ListenScopeController
 from streaming.live_separator import ExperimentalLiveSeparator
 
@@ -305,6 +305,7 @@ def test_audit2_live_separator_detects_unexpected_worker_death(tmp_path: Path) -
     cfg = AudioConfig(sample_rate=48000, channels=2, ring_buffer_seconds=10)
     rb = FixedRingBuffer(audio_config=cfg)
     rm = ResourceManager(ResourceLimits())
+    rm.set_simulation_overrides(SimulationOverrides(system_ram_available_mb=12000.0))
     try:
         sep = ExperimentalLiveSeparator(rb, rm, audio_config=cfg)
 

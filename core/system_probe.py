@@ -22,7 +22,7 @@ from .models import (
     PyTorchProbeInfo,
     SystemHardwareReport,
 )
-from .paths import get_bundle_root, subprocess_no_window_kwargs
+from .paths import get_bundle_root, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
 
 
 def _run_cmd_line(cmd: list[str], timeout: float = 5.0) -> Optional[str]:
@@ -334,8 +334,8 @@ def probe_system(target: TargetHardwareSpec = TargetHardwareSpec()) -> SystemHar
         )
     elif win_build is not None and win_build < target.min_windows_build_for_process_loopback:
         warnings.append(
-            f"Windows build {win_build} < {target.min_windows_build_for_process_loopback} (20H1)；"
-            "WASAPI Process Loopback 不可用，将退回系统 WASAPI Loopback。"
+            f"Windows build {win_build} < {target.min_windows_build_for_process_loopback}；"
+            "WASAPI Process Loopback 不可用，可手动选择系统 WASAPI Loopback。"
         )
 
     ram_total_mb = vm.total / (1024.0 * 1024.0)
@@ -389,7 +389,7 @@ def generate_system_report_markdown(
         "",
         "所有内存、显存预算与 AI 分轨保护策略均严格以下列目标硬件为准：",
         "",
-        f"- **目标系统**: Windows 10/11 (Build >= {target.min_windows_build_for_process_loopback}, 20H1+ 以支持 WASAPI Process Loopback)",
+        f"- **目标系统**: Windows (Build >= {target.min_windows_build_for_process_loopback} 以支持 WASAPI Process Loopback)",
         f"- **目标 GPU**: `{target.gpu_name}` ({target.gpu_architecture})",
         f"- **GPU 显存**: **{target.vram_gb}GB VRAM**（严禁误写作 16GB VRAM）",
         f"- **系统内存**: **{target.ram_gb}GB RAM**",
@@ -413,9 +413,9 @@ def generate_system_report_markdown(
         [
             "| 项目 | 当前环境实测值 | 目标真机要求 |",
             "| :--- | :--- | :--- |",
-            f"| 操作系统 | `{report.os_system} {report.os_release}` (`{report.architecture}`) | Windows 10/11 20H1+ (`build >= {target.min_windows_build_for_process_loopback}`) |",
+            f"| 操作系统 | `{report.os_system} {report.os_release}` (`{report.architecture}`) | Windows (`build >= {target.min_windows_build_for_process_loopback}`) |",
             f"| Windows Build | `{report.windows_build if report.windows_build is not None else 'N/A (非 Windows)'}` | `>= {target.min_windows_build_for_process_loopback}` |",
-            f"| WASAPI Process Loopback | `{'支持' if report.wasapi_process_loopback_supported else '不可用 / 未在 Windows 真机验证'}` | 需要 Windows 20H1+ |",
+            f"| WASAPI Process Loopback | `{'支持' if report.wasapi_process_loopback_supported else '不可用 / 未在 Windows 真机验证'}` | 需要 Build {target.min_windows_build_for_process_loopback}+ |",
             f"| Python 版本 | `{report.python_version}` | `>= 3.11` (建议 3.11/3.12) |",
             f"| Git 版本 | `{report.git_version or '未检测到'}` | 已安装 |",
             f"| CPU | `{report.cpu_model}` ({report.cpu_cores_logical} 逻辑核) | Windows PC CPU (实时分析默认 CPU 运行) |",
@@ -490,11 +490,12 @@ def generate_system_report_markdown(
     lines.extend(
         [
             "",
-            "### Windows 真机部署建议（Stage 5+ AI 环境启用前核对）",
+            "### Windows 真机部署建议（隔离 Core / AI Worker / MIDI 环境）",
             "",
             "1. Core 与 AI Worker 环境隔离：Core 仅安装 `requirements-windows.txt`，不引入 PyTorch。",
             "2. 在 Windows PC 上运行 `python scripts/check_env.py --write-report` 更新本报告为真机实测值。",
-            "3. 后续建立 AI Worker 独立虚拟环境时，安装支持 Blackwell `sm_120` 的 PyTorch (`>= 2.7.0`, CUDA `>= 12.8`, 例如 `--index-url https://download.pytorch.org/whl/cu128` 或 `cu130`+) 与匹配的 `onnxruntime-gpu` (`CUDAExecutionProvider` + cuDNN 9.x)。",
+            "3. AI Worker (`.venv-ai`) 推荐使用 Python 3.12 x64：先安装支持 Blackwell `sm_120` 的 PyTorch (`torch==2.11.0` + `torchaudio==2.11.0`, `--index-url https://download.pytorch.org/whl/cu128`)，再安装 `requirements-ai.txt` (`onnxruntime-gpu<1.27` + `audio-separator[gpu]>=0.48.0` + `audioread>=3.1.0` + `demucs>=4.1.0`)。",
+            "4. Basic Pitch MIDI (`.venv-midi`) 推荐使用 Python 3.11 x64 + `requirements-midi.txt`（含 `basic-pitch>=0.4.0,<0.5`、`tensorflow<2.15.1`、`setuptools<81`、`psutil`、`mido`），并在软件设置页指定。",
         ]
     )
 
@@ -528,7 +529,7 @@ def probe_external_ai_environment(
         }
 
     bundle_root = get_bundle_root()
-    env = os.environ.copy()
+    env = prepend_ffmpeg_path_env(os.environ.copy())
     existing_pp = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
     cmd = [str(exe_path), "-m", "scripts.check_env", "--json", "--check-ai-packages", "--no-write"]
@@ -573,6 +574,110 @@ def probe_external_ai_environment(
             "python_executable": str(exe_path),
         }
     data["ok"] = True
+    data["python_executable"] = str(exe_path)
+    return data
+
+
+MIDI_ENV_SETUP_GUIDE = (
+    "请使用 Python 3.11 x64 创建独立 .venv-midi 并安装 requirements-midi.txt"
+    "（含 basic-pitch>=0.4.0,<0.5、tensorflow<2.15.1、setuptools<81、psutil、mido），"
+    "可运行 `powershell -ExecutionPolicy Bypass -File scripts\\setup_windows.ps1 -SkipAI -MidiPythonExe <Python3.11路径>`，"
+    "并在「设置 -> 独立 MIDI Python 路径」中选择 .venv-midi\\Scripts\\python.exe。"
+)
+
+
+def probe_external_midi_environment(
+    python_executable: str,
+    *,
+    timeout_sec: float = 20.0,
+) -> dict[str, Any]:
+    """Safely inspect an isolated CPU Basic Pitch MIDI Python interpreter via subprocess JSON probe."""
+    exe = str(python_executable or "").strip()
+    if not exe:
+        if getattr(sys, "frozen", False):
+            return {
+                "ok": False,
+                "midi_ready": False,
+                "error": f"未指定独立 MIDI Python 路径 (.venv-midi\\Scripts\\python.exe)。{MIDI_ENV_SETUP_GUIDE}",
+                "setup_guide": MIDI_ENV_SETUP_GUIDE,
+                "python_executable": "",
+            }
+        exe = sys.executable
+    exe_path = Path(exe)
+    if not exe_path.exists():
+        return {
+            "ok": False,
+            "midi_ready": False,
+            "error": f"找不到 MIDI Python 可执行文件: {exe}。{MIDI_ENV_SETUP_GUIDE}",
+            "setup_guide": MIDI_ENV_SETUP_GUIDE,
+            "python_executable": exe,
+        }
+
+    bundle_root = get_bundle_root()
+    env = prepend_ffmpeg_path_env(os.environ.copy())
+    existing_pp = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
+    cmd = [str(exe_path), "-m", "scripts.check_env", "--json", "--check-midi-packages", "--no-write"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(bundle_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_sec,
+            check=False,
+            **subprocess_no_window_kwargs(),
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "midi_ready": False,
+            "error": f"启动 MIDI 环境探针失败: {exc}",
+            "setup_guide": MIDI_ENV_SETUP_GUIDE,
+            "python_executable": str(exe_path),
+        }
+
+    if proc.returncode != 0:
+        err_tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-5:]
+        return {
+            "ok": False,
+            "midi_ready": False,
+            "error": f"MIDI 环境探针返回退出码 {proc.returncode}: {' | '.join(err_tail)}",
+            "setup_guide": MIDI_ENV_SETUP_GUIDE,
+            "python_executable": str(exe_path),
+        }
+
+    try:
+        raw_out = proc.stdout.strip()
+        brace_idx = raw_out.find("{")
+        if brace_idx > 0:
+            raw_out = raw_out[brace_idx:]
+        data = json.loads(raw_out)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "midi_ready": False,
+            "error": f"解析 MIDI 环境探针输出失败: {exc}",
+            "setup_guide": MIDI_ENV_SETUP_GUIDE,
+            "python_executable": str(exe_path),
+        }
+
+    midi_pkgs = data.get("midi_packages") or {}
+    required = ("basic_pitch", "tensorflow", "pkg_resources", "psutil", "mido")
+    missing = [k for k in required if not (midi_pkgs.get(k) or {}).get("installed")]
+    midi_ready = len(missing) == 0
+    block_reason = ""
+    if not midi_ready:
+        block_reason = f"缺少 Basic Pitch 必需依赖: {', '.join(missing)}。{MIDI_ENV_SETUP_GUIDE}"
+
+    data["ok"] = True
+    data["midi_ready"] = midi_ready
+    data["missing_packages"] = missing
+    data["midi_block_reason"] = block_reason
+    data["setup_guide"] = MIDI_ENV_SETUP_GUIDE
     data["python_executable"] = str(exe_path)
     return data
 

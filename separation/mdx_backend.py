@@ -161,7 +161,8 @@ class MDXSeparatorBackend(SeparationBackend):
                 "未安装 `audio-separator`。请在 AI Worker 环境中安装: pip install audio-separator[gpu]"
             ) from exc
 
-        self._tmp_root = tempfile.TemporaryDirectory(prefix="ls_mdx_")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._tmp_root = tempfile.TemporaryDirectory(prefix="ls_mdx_", dir=self.output_dir)
         chunk_out_dir = Path(self._tmp_root.name) / "out"
         chunk_out_dir.mkdir(parents=True, exist_ok=True)
 

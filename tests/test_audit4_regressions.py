@@ -51,7 +51,7 @@ from core.models import (
     TempoEstimate,
 )
 from core.paths import default_export_dir, default_work_dir
-from core.resource_manager import ResourceManager
+from core.resource_manager import ResourceManager, SimulationOverrides
 from main import ListenScopeController
 from streaming.live_separator import ExperimentalLiveSeparator
 
@@ -329,6 +329,7 @@ def test_process_loopback_refreshes_format_and_fallback_after_start() -> None:
 
 def test_ai_job_manager_and_worker_resilience(tmp_path: Path) -> None:
     rm = ResourceManager()
+    rm.set_simulation_overrides(SimulationOverrides(system_ram_available_mb=12000.0))
     perf = PerformanceLogger(log_dir=tmp_path / "perf")
     mgr = AIJobManager(rm, performance_logger=perf)
     try:
@@ -421,6 +422,7 @@ def test_live_separator_survives_ring_clear_and_controller_stops_on_reset(tmp_pa
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     ctrl = ListenScopeController(
         use_mock_ai_for_demo=True,
+        ai_python_executable=sys.executable,
         work_dir=tmp_path / "ws",
         settings_path=tmp_path / "settings.json",
     )
@@ -443,6 +445,7 @@ def test_live_separator_survives_ring_clear_and_controller_stops_on_reset(tmp_pa
         assert emitted[-1][1] == "bs_roformer_experimental"
         assert emitted[-1][2] == MODEL_REGISTRY["bs_roformer_experimental"].default_segment_sec
 
+        ctrl.resource_manager.set_simulation_overrides(SimulationOverrides(system_ram_available_mb=12000.0))
         # 2. Direct ExperimentalLiveSeparator unit resiliency across ring_buffer.clear()
         rb = FixedRingBuffer(audio_config=AudioConfig(ring_buffer_seconds=10))
         t = np.arange(48000 * 3, dtype=np.float32) / 48000.0

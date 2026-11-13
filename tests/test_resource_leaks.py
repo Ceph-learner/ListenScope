@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import gc
 import os
-import signal
 import time
 import wave
 
@@ -281,7 +280,7 @@ def test_ai_worker_kill_resilience_and_emergency_stop_keep_capture_running(tmp_p
         time.sleep(0.25)
         wpid = mgr.worker_pid
         assert wpid is not None
-        os.kill(wpid, signal.SIGKILL)
+        psutil.Process(wpid).kill()
 
         res_i = mgr.wait_for_completion(timeout=10.0)
         assert res_i is not None and res_i.state == AIJobState.FAILED

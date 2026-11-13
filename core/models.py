@@ -236,9 +236,9 @@ class AIJobRequest:
     stem_mode: str  # "2stem" or "4stem"
     model_id: str
     use_gpu: bool = True
-    segment_seconds: int = 10
+    segment_seconds: int = 6
     overlap: float = 0.25
-    chunk_seconds: float = 20.0
+    chunk_seconds: float = 6.0
     simulate_oom: bool = False
     simulate_delay_sec: float = 0.0
     use_mock_backend: bool = False

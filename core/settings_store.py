@@ -19,6 +19,7 @@ class PersistedSettings:
     resource_limits: ResourceLimits
     ai_config: AIConfig
     ai_python_executable: str = ""
+    midi_python_executable: str = ""
     metronome_bpm: float = 120.0
     metronome_beats_per_bar: int = 4
     metronome_volume: float = 0.70
@@ -106,6 +107,7 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
             resource_limits=default_limits,
             ai_config=default_ai,
             ai_python_executable="",
+            midi_python_executable="",
         )
 
     try:
@@ -118,6 +120,7 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
             resource_limits=default_limits,
             ai_config=default_ai,
             ai_python_executable="",
+            midi_python_executable="",
         )
 
     try:
@@ -141,6 +144,8 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
 
     raw_py = payload.get("ai_python_executable", "")
     ai_python = str(raw_py).strip() if isinstance(raw_py, str) else ""
+    raw_midi_py = payload.get("midi_python_executable", "")
+    midi_python = str(raw_midi_py).strip() if isinstance(raw_midi_py, str) else ""
     practice = _clamp_practice_values(
         metronome_bpm=payload.get("metronome_bpm", 120.0),
         metronome_beats_per_bar=payload.get("metronome_beats_per_bar", 4),
@@ -152,6 +157,7 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
         resource_limits=limits,
         ai_config=ai_cfg,
         ai_python_executable=ai_python,
+        midi_python_executable=midi_python,
         **practice,
     )
 
@@ -172,6 +178,7 @@ def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None
         "resource_limits": asdict(settings.resource_limits),
         "ai_config": asdict(settings.ai_config),
         "ai_python_executable": str(settings.ai_python_executable or "").strip(),
+        "midi_python_executable": str(settings.midi_python_executable or "").strip(),
         **practice,
     }
     tmp = target.with_suffix(".json.tmp")

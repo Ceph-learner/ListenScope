@@ -35,7 +35,7 @@ from core.models import (
     SystemHardwareReport,
     TempoEstimate,
 )
-from core.resource_manager import ResourceManager
+from core.resource_manager import ResourceManager, SimulationOverrides
 from core.settings_store import load_settings
 from main import ListenScopeController
 from streaming.benchmark import benchmark_live_model_isolated
@@ -60,6 +60,7 @@ def _write_test_wav(path: Path, seconds: float = 1.2, sr: int = 48000, freq: flo
 def test_ai_job_manager_recovers_cleanly_on_launch_failure_and_monitor_error(tmp_path: Path) -> None:
     wav_path = _write_test_wav(tmp_path / "excerpt.wav", seconds=1.0)
     rm = ResourceManager()
+    rm.set_simulation_overrides(SimulationOverrides(system_ram_available_mb=12000.0))
     perf = PerformanceLogger(log_dir=tmp_path / "perf")
     bad_py = str(tmp_path / "nonexistent_python_bin")
     mgr = AIJobManager(rm, performance_logger=perf, ai_python_executable=bad_py)

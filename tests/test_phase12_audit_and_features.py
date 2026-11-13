@@ -63,17 +63,7 @@ def _write_stereo_wav(path: Path, mono: np.ndarray, *, sr: int = 48000) -> Path:
     return path
 
 
-def _make_py_wrapper(tmp_path: Path, name: str = "ext_ai_py.sh") -> Path:
-    wrapper = tmp_path / name
-    wrapper.write_text(
-        f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n',
-        encoding="utf-8",
-    )
-    wrapper.chmod(0o755)
-    return wrapper
-
-
-def test_bug1_ai_job_manager_heavy_stderr_no_deadlock_and_crash_surface(tmp_path: Path) -> None:
+def test_bug1_ai_job_manager_heavy_stderr_no_deadlock_and_crash_surface(tmp_path: Path, stub_worker_cli) -> None:
     wav_path = tmp_path / "short.wav"
     sf.write(str(wav_path), np.zeros((24000, 2), dtype=np.float32), 48000, subtype="PCM_16")
 
@@ -101,14 +91,12 @@ print(json.dumps({
 """.strip(),
         encoding="utf-8",
     )
-    wrapper_ok = tmp_path / "ext_heavy_ok.sh"
-    wrapper_ok.write_text(f'#!/usr/bin/env bash\nexec "{sys.executable}" "{heavy_script}" "$@"\n', encoding="utf-8")
-    wrapper_ok.chmod(0o755)
+    worker_python = stub_worker_cli(heavy_script)
 
     rm = ResourceManager(ResourceLimits())
     rm.set_simulation_overrides(SimulationOverrides(system_ram_available_mb=12000.0))
     try:
-        mgr = AIJobManager(rm, performance_logger=PerformanceLogger(log_dir=tmp_path / "perf1"), ai_python_executable=str(wrapper_ok))
+        mgr = AIJobManager(rm, performance_logger=PerformanceLogger(log_dir=tmp_path / "perf1"), ai_python_executable=worker_python)
         ok, _ = mgr.submit_job(
             AIJobRequest(
                 task_id="heavy_err_job",
@@ -130,12 +118,7 @@ print(json.dumps({
             'import sys; sys.stderr.write("FATAL: synthetic CUDA DLL mismatch\\n"); sys.stderr.flush(); sys.exit(2)\n',
             encoding="utf-8",
         )
-        wrapper_crash = tmp_path / "ext_crash.sh"
-        wrapper_crash.write_text(
-            f'#!/usr/bin/env bash\nexec "{sys.executable}" "{crash_script}" "$@"\n', encoding="utf-8"
-        )
-        wrapper_crash.chmod(0o755)
-        mgr.ai_python_executable = str(wrapper_crash)
+        stub_worker_cli(crash_script)
         ok2, _ = mgr.submit_job(
             AIJobRequest(
                 task_id="crash_job",
@@ -155,7 +138,7 @@ print(json.dumps({
         rm.close()
 
 
-def test_bug2_external_probe_report_merge_and_live_ui_sync(tmp_path: Path, monkeypatch) -> None:
+def test_bug2_external_probe_report_merge_and_live_ui_sync(tmp_path: Path, monkeypatch, external_python) -> None:
     core_report = SystemHardwareReport(
         timestamp_utc="2026-01-01 00:00:00 UTC",
         os_system="Windows",
@@ -257,7 +240,7 @@ def test_bug2_external_probe_report_merge_and_live_ui_sync(tmp_path: Path, monke
         dlg.close()
 
     # Controller startup async external probe merges READY status into ai_gpu_chk
-    ext_wrapper = _make_py_wrapper(tmp_path)
+    ext_wrapper = external_python
     monkeypatch.setattr(
         "main.probe_external_ai_environment",
         lambda _py, **_kw: {**ready_probe, "python_executable": str(ext_wrapper)},
@@ -283,8 +266,8 @@ def test_bug2_external_probe_report_merge_and_live_ui_sync(tmp_path: Path, monke
         app.processEvents()
 
 
-def test_bug3_live_separator_external_python_and_benchmark_isolation(tmp_path: Path) -> None:
-    ext_wrapper = _make_py_wrapper(tmp_path)
+def test_bug3_live_separator_external_python_and_benchmark_isolation(tmp_path: Path, external_python) -> None:
+    ext_wrapper = external_python
     rb = FixedRingBuffer(AudioConfig(sample_rate=48000, channels=2, ring_buffer_seconds=10))
     rm = ResourceManager(ResourceLimits())
     rm.set_simulation_overrides(SimulationOverrides(system_ram_available_mb=12000.0))
@@ -423,7 +406,7 @@ runpy.run_module("analysis.midi_transcription", run_name="__main__")
             "--allow-cpu-fallback",
             "--json",
         ],
-        cwd="/home/antigravity/ListenScope",
+        cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         text=True,
         timeout=15.0,

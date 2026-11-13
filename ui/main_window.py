@@ -260,6 +260,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         ai_config: AIConfig,
         mixer_engine: StemMixerEngine,
         ai_python_executable: str = "",
+        midi_python_executable: str = "",
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -271,6 +272,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._resource_limits = resource_limits
         self._ai_config = ai_config
         self._ai_python_executable = ai_python_executable
+        self._midi_python_executable = midi_python_executable
         self._last_verified_ai_probe: Optional[dict[str, Any]] = None
         self._closing_handler = None
         self._last_capture_banner: Optional[str] = None
@@ -508,9 +510,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         self.segment_spin = QtWidgets.QSpinBox()
         self.segment_spin.setRange(4, 10)
-        self.segment_spin.setValue(10)
+        self.segment_spin.setValue(max(4, min(10, int(ai_config.demucs_default_segment_sec))))
         self.segment_spin.setPrefix("Demucs seg=")
         self.segment_spin.setSuffix("s")
+        self.segment_spin.setToolTip(
+            "HTDemucs 4-Stem 模型分段 (RTX 5060 Ti 实测默认 6s)；仅作用于 4-Stem HTDemucs。\n"
+            "离线流式分块长度 (long_audio_chunk_seconds，默认 6.0s) 在「设置」单独配置；"
+            "MDX 2-Stem 内部 segment_size=256 保持独立。"
+        )
 
         self.sep_2stem_btn = QtWidgets.QPushButton("AI 2-Stem 分轨 (人声/伴奏)")
         self.sep_2stem_btn.clicked.connect(self._on_sep_2stem)
@@ -866,6 +873,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._resource_limits,
             self._ai_config,
             ai_python_executable=self._ai_python_executable,
+            midi_python_executable=self._midi_python_executable,
             parent=self,
         )
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
@@ -873,8 +881,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self._resource_limits = dlg.updated_limits
                 self._ai_config = dlg.updated_ai_config
                 self._ai_python_executable = dlg.updated_ai_python
+                self._midi_python_executable = dlg.updated_midi_python
                 self._last_verified_ai_probe = dlg.verified_ai_probe
                 if dlg.verified_ai_probe is not None:
                     self.update_hardware_report(dlg.verified_report, auto_sync_gpu_chk=True)
+                self.segment_spin.setValue(max(4, min(10, int(self._ai_config.demucs_default_segment_sec))))
                 self._refresh_model_combos()
                 self.settings_applied.emit(self._resource_limits, self._ai_config, self._ai_python_executable)

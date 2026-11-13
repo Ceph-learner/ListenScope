@@ -310,12 +310,14 @@ class ResourceManager:
 
         if snap.active_ai_jobs >= self.limits.max_concurrent_ai_jobs:
             return False, (
-                f"已有 {snap.active_ai_jobs} 个 AI 分轨任务运行中（硬限制={self.limits.max_concurrent_ai_jobs}），禁止并行。"
+                f"已有 {snap.active_ai_jobs} 个 AI 分轨任务运行中（硬限制={self.limits.max_concurrent_ai_jobs}，"
+                f"当前可用 RAM={snap.system_ram_available_mb:.0f} MB），禁止并行。"
             )
 
         if snap.loaded_models >= self.limits.max_loaded_models:
             return False, (
-                f"当前已有 {snap.loaded_models} 个 AI 模型加载中（硬限制={self.limits.max_loaded_models}）。"
+                f"当前已有 {snap.loaded_models} 个 AI 模型加载中（硬限制={self.limits.max_loaded_models}，"
+                f"当前可用 RAM={snap.system_ram_available_mb:.0f} MB）。"
             )
 
         if snap.system_ram_available_mb < self.limits.pause_ram_before_ai_mb:
@@ -326,10 +328,13 @@ class ResourceManager:
 
         if require_gpu:
             if gpu_ai_ready is False:
-                return False, gpu_block_reason or "PyTorch/CUDA 或 ONNX Runtime GPU 环境未通过验证，禁止 GPU AI 推理。"
+                reason = gpu_block_reason or "PyTorch/CUDA 或 ONNX Runtime GPU 环境未通过验证，禁止 GPU AI 推理。"
+                return False, f"{reason}（当前可用 RAM={snap.system_ram_available_mb:.0f} MB）"
 
             if snap.vram_free_mb is None:
-                return False, "未检测到可用 NVIDIA GPU / NVML 显存信息，禁止默认进入 GPU AI 推理。"
+                return False, (
+                    f"未检测到可用 NVIDIA GPU / NVML 显存信息，禁止默认进入 GPU AI 推理（当前可用 RAM={snap.system_ram_available_mb:.0f} MB）。"
+                )
 
             required_vram = (
                 self.limits.min_vram_4stem_mb if stem_mode == "4stem" else self.limits.min_vram_2stem_mb
@@ -337,11 +342,12 @@ class ResourceManager:
             if snap.vram_free_mb < required_vram:
                 return False, (
                     f"{stem_mode} GPU 模式要求至少 {required_vram:.0f} MB 空闲显存，"
-                    f"当前仅剩 {snap.vram_free_mb:.0f} MB（8GB 显存需为桌面和 QQ 音乐保留余量）。"
+                    f"当前仅剩 {snap.vram_free_mb:.0f} MB，可用 RAM={snap.system_ram_available_mb:.0f} MB（8GB 显存需为桌面和 QQ 音乐保留余量）。"
                 )
             if snap.vram_free_mb <= self.limits.critical_vram_free_mb:
                 return False, (
-                    f"空闲显存接近紧急线 ({snap.vram_free_mb:.0f} MB <= {self.limits.critical_vram_free_mb:.0f} MB)。"
+                    f"空闲显存接近紧急线 ({snap.vram_free_mb:.0f} MB <= {self.limits.critical_vram_free_mb:.0f} MB，"
+                    f"可用 RAM={snap.system_ram_available_mb:.0f} MB)。"
                 )
 
         if snap.system_ram_available_mb < self.limits.min_ram_before_ai_mb:

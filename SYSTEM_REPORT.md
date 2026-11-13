@@ -1,12 +1,12 @@
 # ListenScope 系统与硬件检测报告 (Phase 0)
 
-- **检测时间**: `2026-11-13 12:06:41 UTC`
+- **检测时间**: `2026-11-13 14:03:49 UTC`
 
 ## 1. 目标用户真机硬性规格（不可更改）
 
 所有内存、显存预算与 AI 分轨保护策略均严格以下列目标硬件为准：
 
-- **目标系统**: Windows 10/11 (Build >= 19041, 20H1+ 以支持 WASAPI Process Loopback)
+- **目标系统**: Windows (Build >= 20348 以支持 WASAPI Process Loopback)
 - **目标 GPU**: `NVIDIA GeForce RTX 5060 Ti` (Blackwell (sm_120))
 - **GPU 显存**: **8GB VRAM**（严禁误写作 16GB VRAM）
 - **系统内存**: **16GB RAM**
@@ -20,14 +20,14 @@
 
 | 项目 | 当前环境实测值 | 目标真机要求 |
 | :--- | :--- | :--- |
-| 操作系统 | `Linux 6.12.105+` (`x86_64`) | Windows 10/11 20H1+ (`build >= 19041`) |
-| Windows Build | `N/A (非 Windows)` | `>= 19041` |
-| WASAPI Process Loopback | `不可用 / 未在 Windows 真机验证` | 需要 Windows 20H1+ |
+| 操作系统 | `Linux 6.12.105+` (`x86_64`) | Windows (`build >= 20348`) |
+| Windows Build | `N/A (非 Windows)` | `>= 20348` |
+| WASAPI Process Loopback | `不可用 / 未在 Windows 真机验证` | 需要 Build 20348+ |
 | Python 版本 | `3.11.2` | `>= 3.11` (建议 3.11/3.12) |
 | Git 版本 | `git version 2.39.5` | 已安装 |
 | CPU | `Intel(R) Xeon(R) Platinum 8481C` (2 逻辑核) | Windows PC CPU (实时分析默认 CPU 运行) |
 | 系统总 RAM | `7947.7 MB` (7.76 GB) | **16GB RAM** |
-| 当前可用 RAM (`psutil.available`) | `7205.4 MB` (7.04 GB) | AI 前建议 >= 5GB，低于 3GB 拒绝启动 |
+| 当前可用 RAM (`psutil.available`) | `7202.3 MB` (7.03 GB) | AI 前建议 >= 5GB，低于 3GB 拒绝启动 |
 | NVML (`pynvml`) | `不可用` | 可用 (用于监控 8GB VRAM) |
 | `nvidia-smi` | `未找到` | 可用 |
 | NVIDIA 驱动 | `未检测到` | 支持 CUDA >= 12.8 |
@@ -62,8 +62,9 @@
 
 - 当前运行环境为 Linux (x86_64)，并非目标 Windows PC；Windows WASAPI Process Loopback 与 RTX 5060 Ti CUDA 推理均未在 Windows 真机验证。
 
-### Windows 真机部署建议（Stage 5+ AI 环境启用前核对）
+### Windows 真机部署建议（隔离 Core / AI Worker / MIDI 环境）
 
 1. Core 与 AI Worker 环境隔离：Core 仅安装 `requirements-windows.txt`，不引入 PyTorch。
 2. 在 Windows PC 上运行 `python scripts/check_env.py --write-report` 更新本报告为真机实测值。
-3. 后续建立 AI Worker 独立虚拟环境时，安装支持 Blackwell `sm_120` 的 PyTorch (`>= 2.7.0`, CUDA `>= 12.8`, 例如 `--index-url https://download.pytorch.org/whl/cu128` 或 `cu130`+) 与匹配的 `onnxruntime-gpu` (`CUDAExecutionProvider` + cuDNN 9.x)。
+3. AI Worker (`.venv-ai`) 推荐使用 Python 3.12 x64：先安装支持 Blackwell `sm_120` 的 PyTorch (`torch==2.11.0` + `torchaudio==2.11.0`, `--index-url https://download.pytorch.org/whl/cu128`)，再安装 `requirements-ai.txt` (`onnxruntime-gpu<1.27` + `audio-separator[gpu]>=0.48.0` + `audioread>=3.1.0` + `demucs>=4.1.0`)。
+4. Basic Pitch MIDI (`.venv-midi`) 推荐使用 Python 3.11 x64 + `requirements-midi.txt`（含 `basic-pitch>=0.4.0,<0.5`、`tensorflow<2.15.1`、`setuptools<81`、`psutil`、`mido`），并在软件设置页指定。

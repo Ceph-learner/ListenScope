@@ -3,7 +3,7 @@
 All RAM, VRAM, audio buffer, analysis, and AI separation thresholds live here
 rather than being scattered across modules. Conservative defaults are calibrated
 for the target user PC:
-- OS: Windows 10/11 (20H1+ for WASAPI Process Loopback)
+- OS: Windows build 20348 or later for WASAPI Process Loopback
 - GPU: NVIDIA GeForce RTX 5060 Ti with 8GB VRAM (NOT 16GB VRAM)
 - System RAM: 16GB RAM
 """
@@ -19,7 +19,7 @@ class TargetHardwareSpec:
     """Hard target specification that all ListenScope budgets are designed around."""
 
     os_name: str = "Windows"
-    min_windows_build_for_process_loopback: int = 19041  # Windows 10 20H1
+    min_windows_build_for_process_loopback: int = 20348
     gpu_name: str = "NVIDIA GeForce RTX 5060 Ti"
     gpu_architecture: str = "Blackwell (sm_120)"
     gpu_compute_capability: tuple[int, int] = (12, 0)
@@ -150,13 +150,14 @@ class AIConfig:
 
     # History excerpt & streaming chunk limits
     default_max_history_ai_seconds: float = 60.0
-    long_audio_chunk_seconds: float = 20.0
+    long_audio_chunk_seconds: float = 6.0
     long_audio_overlap_seconds: float = 1.0
 
     # Demucs strict safety defaults (Section 14)
     demucs_jobs: int = 1
     demucs_shifts: int = 1
     demucs_overlap: float = 0.25
+    demucs_default_segment_sec: int = 6
     demucs_segment_ladder: tuple[int, ...] = (10, 8, 6, 4)
 
     # MDX / ONNX 2-stem safety defaults (Section 13 & 15)
@@ -191,6 +192,9 @@ class AIConfig:
             raise ValueError("long_audio_overlap_seconds must be smaller than long_audio_chunk_seconds")
         if not self.demucs_segment_ladder or any(int(s) <= 0 for s in self.demucs_segment_ladder):
             raise ValueError("demucs_segment_ladder must contain positive integers")
+        max_demucs_seg = max(int(s) for s in self.demucs_segment_ladder)
+        if int(self.demucs_default_segment_sec) < 4 or int(self.demucs_default_segment_sec) > max_demucs_seg:
+            raise ValueError(f"demucs_default_segment_sec must be in [4, {max_demucs_seg}]")
         if self.demucs_jobs != 1:
             raise ValueError("demucs_jobs must be 1 on 16GB RAM / 8GB VRAM")
         if self.demucs_shifts != 1:

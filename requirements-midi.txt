@@ -1,0 +1,15 @@
+# ListenScope Isolated CPU MIDI Transcription Environment (Python 3.11 x64 recommended)
+#
+# Verified baseline on Windows 11 Python 3.11:
+# - Basic Pitch 0.4.0 requires TensorFlow <= 2.15.0 (max Python 3.11) and `pkg_resources`
+#   provided by setuptools < 81 (imported by resampy).
+# - Kept strictly isolated from `.venv-core` and `.venv-ai` (Python 3.12 CUDA).
+
+basic-pitch>=0.4.0,<0.5
+tensorflow>=2.13.0,<2.15.1
+setuptools>=68.0,<81
+numpy>=1.24.0,<2.0
+scipy>=1.10.0
+psutil>=5.9.0
+soundfile>=0.12.0
+mido>=1.3.0

@@ -2,11 +2,44 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
 from core.models import AnalysisSnapshot
+
+
+class _FftFrequencyAxis(pg.AxisItem):
+    """Display readable frequency labels on the FFT's log-scaled axis."""
+
+    def logTickValues(self, minVal, maxVal, size, stdTicks):
+        span = maxVal - minVal
+        if span <= 0 or size <= 0:
+            return []
+        offsets = (1, 2, 5) if span >= 1.0 else range(1, 10)
+        decades = range(math.floor(minVal), math.ceil(maxVal) + 1)
+        min_spacing = 64 * span / size
+        ticks = []
+        # Give decade labels priority over the intervening labels.
+        for multiplier in offsets:
+            offset = math.log10(multiplier)
+            for decade in decades:
+                tick = decade + offset
+                if minVal <= tick <= maxVal and all(abs(tick - old) >= min_spacing for old in ticks):
+                    ticks.append(tick)
+        if not ticks:
+            # A deep zoom can put the entire view between two standard frequency ticks.
+            ticks = [(minVal + maxVal) / 2]
+        return [(min_spacing, sorted(ticks))]
+
+    def logTickStrings(self, values, scale, spacing):
+        labels = []
+        for tick in values:
+            hz = 10**tick * scale
+            labels.append(f"{hz / 1000:.4g}k" if hz >= 1000 else f"{hz:.4g}")
+        return labels
 
 
 class SpectrumAnalysisWidget(QtWidgets.QWidget):
@@ -43,8 +76,10 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         # Row 2: FFT Spectrum + Log Frequency Spectrum side by side
         mid_row = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
 
-        self.fft_plot = pg.PlotWidget(title="FFT 频谱 (dBFS)")
+        frequency_axis = _FftFrequencyAxis(orientation="bottom")
+        self.fft_plot = pg.PlotWidget(title="FFT 频谱 (dBFS)", axisItems={"bottom": frequency_axis})
         self.fft_plot.setBackground("#14161A")
+        self.fft_plot.setLabel("bottom", "频率 (Hz)")
         self.fft_plot.setYRange(-105, 5)
         self.fft_plot.setLogMode(x=True, y=False)
         self.fft_plot.showGrid(x=True, y=True, alpha=0.2)

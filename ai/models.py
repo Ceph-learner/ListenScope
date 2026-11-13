@@ -46,9 +46,9 @@ MODEL_REGISTRY: dict[str, AIModelSpec] = {
         priority=2,
         separator_filename="htdemucs.yaml",
         min_vram_mb=5632.0,
-        default_segment_sec=10,
+        default_segment_sec=6,
         experimental_only=False,
-        notes="第二优先级：4-stem 标准方案；强制 jobs=1, shifts=1, segment<=10s, OOM 时自动降 segment。",
+        notes="第二优先级：4-stem 标准方案；实测默认 segment=6s，强制 jobs=1, shifts=1, segment<=10s, OOM 时自动降 segment。",
     ),
     "mdx_hq_2stem": AIModelSpec(
         model_id="mdx_hq_2stem",

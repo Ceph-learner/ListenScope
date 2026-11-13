@@ -26,7 +26,12 @@ _SRC_DIR = Path(__file__).resolve().parent
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from core.paths import default_work_dir, get_bundle_root, subprocess_no_window_kwargs
+from core.paths import (
+    default_work_dir,
+    get_bundle_root,
+    prepend_ffmpeg_path_env,
+    subprocess_no_window_kwargs,
+)
 
 ROOT = get_bundle_root()
 if str(ROOT) not in sys.path:
@@ -65,8 +70,10 @@ from core.models import (
 from core.resource_manager import ResourceManager
 from core.settings_store import PersistedSettings, default_settings_path, load_settings, save_settings
 from core.system_probe import (
+    MIDI_ENV_SETUP_GUIDE,
     apply_external_ai_probe_to_report,
     probe_external_ai_environment,
+    probe_external_midi_environment,
     probe_system,
 )
 from streaming.live_separator import ExperimentalLiveSeparator
@@ -81,6 +88,29 @@ def _discover_ai_python_executable() -> Optional[str]:
     for base in roots:
         candidates.append(base / ".venv-ai" / "Scripts" / "python.exe")
         candidates.append(base / ".venv-ai" / "bin" / "python")
+    try:
+        cur_resolved = Path(sys.executable).resolve()
+    except Exception:
+        cur_resolved = None
+    for cand in candidates:
+        if cand.exists():
+            try:
+                if cur_resolved is not None and cand.resolve() == cur_resolved:
+                    continue
+            except Exception:
+                pass
+            return str(cand)
+    return None
+
+
+def _discover_midi_python_executable() -> Optional[str]:
+    """Locate isolated CPU `.venv-midi` Python 3.11 executable across source & frozen layouts."""
+    exe_dir = Path(sys.executable).resolve().parent
+    roots = [ROOT, exe_dir, exe_dir.parent, exe_dir.parent.parent]
+    candidates: list[Path] = []
+    for base in roots:
+        candidates.append(base / ".venv-midi" / "Scripts" / "python.exe")
+        candidates.append(base / ".venv-midi" / "bin" / "python")
     try:
         cur_resolved = Path(sys.executable).resolve()
     except Exception:
@@ -131,6 +161,7 @@ class ListenScopeController:
         *,
         use_mock_ai_for_demo: bool = False,
         ai_python_executable: Optional[str] = None,
+        midi_python_executable: Optional[str] = None,
         work_dir: Optional[Path | str] = None,
         settings_path: Optional[Path | str] = None,
     ) -> None:
@@ -150,6 +181,13 @@ class ListenScopeController:
                 ai_python_executable = cand_py
             else:
                 ai_python_executable = _discover_ai_python_executable()
+        if midi_python_executable is None:
+            cand_midi = saved_settings.midi_python_executable
+            if cand_midi and Path(cand_midi).exists():
+                midi_python_executable = cand_midi
+            else:
+                midi_python_executable = _discover_midi_python_executable()
+        self._midi_python_executable: str = str(midi_python_executable or "").strip()
 
         # Bounded diagnostic logging
         self.log_handler = BoundedMemoryLogHandler(maxlen=500)
@@ -238,6 +276,7 @@ class ListenScopeController:
             ai_config=self.ai_config,
             mixer_engine=self.mixer_engine,
             ai_python_executable=ai_python_executable or "",
+            midi_python_executable=self._midi_python_executable,
         )
         self.metronome.set_bpm(saved_settings.metronome_bpm)
         self.metronome.set_beats_per_bar(saved_settings.metronome_beats_per_bar)
@@ -274,12 +313,12 @@ class ListenScopeController:
     def _is_external_python(ai_python: Optional[str]) -> bool:
         if not ai_python:
             return False
-        if getattr(sys, "frozen", False):
-            return True
         try:
-            return Path(ai_python).resolve() != Path(sys.executable).resolve()
+            if Path(ai_python).resolve() == Path(sys.executable).resolve():
+                return False
         except Exception:
             return True
+        return True
 
     def _schedule_external_ai_probe(self, ai_python: str) -> None:
         if not ai_python:
@@ -630,6 +669,7 @@ class ListenScopeController:
         limits = self.resource_limits
         ai_cfg = self.ai_config
         ai_py = self.ai_job_manager.ai_python_executable or ""
+        midi_py = self._midi_python_executable
         perf_logger = self.perf_logger
         log_handler = self.log_handler
         settings_path = self._settings_path
@@ -643,6 +683,7 @@ class ListenScopeController:
                     resource_limits=limits,
                     ai_config=ai_cfg,
                     ai_python_executable=ai_py,
+                    midi_python_executable=midi_py,
                     perf_logger=perf_logger,
                     log_handler=log_handler,
                     settings_path=settings_path,
@@ -670,6 +711,14 @@ class ListenScopeController:
                 self.ab_player.pause()
             elif self.ring_buffer.available_seconds >= 0.2:
                 self._on_ab_play()
+
+    def _refresh_resource_ui_now(self) -> None:
+        snap = self.resource_manager.latest_snapshot or self.resource_manager.sample()
+        self.window.update_resource_snapshot(
+            snap,
+            self.perf_logger.recent_records(),
+            self.log_handler.recent(),
+        )
 
     def _on_start_ai_separation(self, stem_mode: str, model_id: str, segment: int, use_gpu: bool) -> None:
         if self.live_separator.is_active or self.live_separator.is_starting:
@@ -714,6 +763,10 @@ class ListenScopeController:
         ok, msg = self.ai_job_manager.submit_job(req)
         if not ok:
             shutil.rmtree(task_dir, ignore_errors=True)
+            self.window.ai_status_badge.setText("AI: Blocked")
+            self.window.mixer_widget.job_progress.setValue(0)
+            self.window.mixer_widget.job_status_lbl.setText(f"❌ 拒绝启动 AI 分轨: {msg}")
+            self._refresh_resource_ui_now()
             self.window.show_banner_message(f"拒绝启动 AI 分轨: {msg}")
         else:
             self._last_ai_request = req
@@ -771,6 +824,10 @@ class ListenScopeController:
 
         ok, msg = self.ai_job_manager.submit_job(new_req)
         if not ok:
+            self.window.ai_status_badge.setText("AI: Blocked")
+            self.window.mixer_widget.job_progress.setValue(0)
+            self.window.mixer_widget.job_status_lbl.setText(f"❌ OOM 恢复启动失败: {msg}")
+            self._refresh_resource_ui_now()
             self.window.show_banner_message(f"OOM 恢复启动失败: {msg}")
         else:
             self._last_ai_request = new_req
@@ -970,22 +1027,35 @@ class ListenScopeController:
 
     def _on_transcribe_stem_midi(self, stem_name: str, stem_path: str) -> None:
         out_mid = Path(stem_path).with_suffix(".mid")
-        self.window.show_banner_message(f"⏳ 正在后台执行 `{stem_name}` MIDI 转录...")
-        ai_py = self.ai_job_manager.ai_python_executable
+        midi_py = str(self._midi_python_executable or "").strip()
         mock_mode = self.use_mock_ai_for_demo
         bundle_root = get_bundle_root()
         req_gen = self._stem_generation
 
+        if midi_py and Path(midi_py).exists():
+            self.window.show_banner_message(
+                f"⏳ 正在通过独立 MIDI 环境执行 `{stem_name}` 转录 ({midi_py})..."
+            )
+        else:
+            self.window.show_banner_message(
+                f"⏳ 未检测到可用独立 `.venv-midi`，正在后台执行 `{stem_name}` 轻量回退 MIDI 转录..."
+            )
+
         def _run() -> None:
             try:
-                use_ext = bool(ai_py and not mock_mode and self._is_external_python(ai_py))
+                can_run_subproc = bool(
+                    not mock_mode
+                    and midi_py
+                    and Path(midi_py).exists()
+                    and (not getattr(sys, "frozen", False) or self._is_external_python(midi_py))
+                )
 
-                if use_ext and ai_py is not None:
-                    env = os.environ.copy()
+                if can_run_subproc:
+                    env = prepend_ffmpeg_path_env(os.environ.copy())
                     existing_pp = env.get("PYTHONPATH", "")
                     env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
                     cmd = [
-                        ai_py,
+                        midi_py,
                         "-m",
                         "analysis.midi_transcription",
                         "--audio",
@@ -997,32 +1067,68 @@ class ListenScopeController:
                         "--allow-cpu-fallback",
                         "--json",
                     ]
-                    proc = subprocess.run(
-                        cmd,
-                        cwd=str(bundle_root),
-                        env=env,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=180.0,
-                        check=True,
-                        **subprocess_no_window_kwargs(),
-                    )
-                    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
-                    candidate = lines[-1] if lines else proc.stdout.strip()
-                    brace = candidate.find("{")
-                    if brace > 0:
-                        candidate = candidate[brace:]
-                    data = json.loads(candidate)
+                    try:
+                        proc = subprocess.run(
+                            cmd,
+                            cwd=str(bundle_root),
+                            env=env,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=180.0,
+                            check=True,
+                            **subprocess_no_window_kwargs(),
+                        )
+                    except subprocess.CalledProcessError as exc:
+                        tail = ((exc.stderr or "") + "\n" + (exc.stdout or "")).strip().splitlines()[-4:]
+                        tail_txt = " | ".join(t.strip() for t in tail if t.strip())
+                        raise RuntimeError(
+                            f"MIDI 子进程退出码={exc.returncode} ({midi_py}): {tail_txt or exc}。{MIDI_ENV_SETUP_GUIDE}"
+                        ) from exc
+
+                    data: Optional[dict[str, Any]] = None
+                    for ln in reversed(proc.stdout.splitlines()):
+                        s = ln.strip()
+                        brace = s.find("{")
+                        if brace < 0:
+                            continue
+                        try:
+                            parsed = json.loads(s[brace:])
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(parsed, dict) and "source_stem_name" in parsed:
+                            data = parsed
+                            break
+                    if data is None:
+                        raise RuntimeError(
+                            f"无法解析 MIDI 子进程 JSON 输出: {proc.stdout.strip()[-200:]!r}"
+                        )
+                    warn_txt = data.get("warning")
+                    backend_used = str(data.get("backend_used", "basic-pitch"))
+                    if backend_used != "basic-pitch":
+                        extra = (
+                            f"独立 MIDI 解释器 ({midi_py}) 未安装完整 `basic-pitch` 依赖，已自动回退为 `{backend_used}`。"
+                            f" {MIDI_ENV_SETUP_GUIDE}"
+                        )
+                        warn_txt = f"{warn_txt}；{extra}" if warn_txt else extra
                     res = MidiTranscriptionResult(
                         source_stem_name=str(data["source_stem_name"]),
                         output_midi_path=Path(data["output_midi_path"]) if data.get("output_midi_path") else None,
                         notes=[MidiNoteCandidate(**n) for n in (data.get("notes") or [])],
-                        backend_used=str(data.get("backend_used", "basic-pitch")),
-                        warning=data.get("warning"),
+                        backend_used=backend_used,
+                        warning=warn_txt,
                     )
                 else:
+                    missing_reason = ""
+                    if not mock_mode:
+                        if midi_py and not Path(midi_py).exists():
+                            missing_reason = f"找不到配置的 MIDI Python 解释器: {midi_py}"
+                        elif getattr(sys, "frozen", False):
+                            missing_reason = "打包版尚未配置独立 Python 3.11 CPU MIDI 解释器 (.venv-midi)"
+                        elif not midi_py:
+                            missing_reason = "未配置独立 Python 3.11 CPU MIDI 解释器 (.venv-midi)"
+
                     res = transcribe_stem_to_midi(
                         stem_path,
                         out_mid,
@@ -1030,7 +1136,24 @@ class ListenScopeController:
                         allow_full_mix=False,
                         allow_cpu_pitch_fallback=True,
                     )
-                self._put_latest(self._ui_midi_result_q, (req_gen, res, f"✅ MIDI 转录完成: {out_mid}"))
+                    if res.backend_used != "basic-pitch" and missing_reason:
+                        guide_note = f"{missing_reason}，已使用轻量算法 `{res.backend_used}`。{MIDI_ENV_SETUP_GUIDE}"
+                        res = MidiTranscriptionResult(
+                            source_stem_name=res.source_stem_name,
+                            output_midi_path=res.output_midi_path,
+                            notes=res.notes,
+                            backend_used=res.backend_used,
+                            warning=f"{res.warning} | {guide_note}" if res.warning else guide_note,
+                        )
+
+                if res.backend_used == "basic-pitch":
+                    done_msg = f"✅ MIDI 转录完成 (实际算法={res.backend_used}, 音符数={len(res.notes)}): {out_mid}"
+                else:
+                    done_msg = (
+                        f"⚠️ MIDI 已生成，实际触发轻量回退算法 `{res.backend_used}` (音符数={len(res.notes)}): {out_mid}"
+                        + (f" | {res.warning}" if res.warning else "")
+                    )
+                self._put_latest(self._ui_midi_result_q, (req_gen, res, done_msg))
             except Exception as exc:
                 self._put_latest(self._ui_midi_result_q, (req_gen, None, f"MIDI 转录失败: {exc}"))
 
@@ -1086,14 +1209,17 @@ class ListenScopeController:
         limits: Optional[ResourceLimits] = None,
         ai_cfg: Optional[AIConfig] = None,
         ai_python: Optional[str] = None,
+        midi_python: Optional[str] = None,
     ) -> PersistedSettings:
         lim = self.resource_limits if limits is None else limits
         cfg = self.ai_config if ai_cfg is None else ai_cfg
         py = (self.ai_job_manager.ai_python_executable or "") if ai_python is None else ai_python
+        mpy = self._midi_python_executable if midi_python is None else str(midi_python or "").strip()
         return PersistedSettings(
             resource_limits=lim,
             ai_config=cfg,
             ai_python_executable=py,
+            midi_python_executable=mpy,
             metronome_bpm=self.metronome.bpm,
             metronome_beats_per_bar=self.metronome.beats_per_bar,
             metronome_volume=self.metronome.volume,
@@ -1101,7 +1227,13 @@ class ListenScopeController:
             transpose_semitones=self.window.chroma_widget.transpose_semitones,
         )
 
-    def _on_settings_applied(self, limits: ResourceLimits, ai_cfg: AIConfig, ai_python: str) -> None:
+    def _on_settings_applied(
+        self,
+        limits: ResourceLimits,
+        ai_cfg: AIConfig,
+        ai_python: str,
+        midi_python: Optional[str] = None,
+    ) -> None:
         self.resource_limits = limits
         self.ai_config = ai_cfg
         self.resource_manager.limits = limits
@@ -1109,6 +1241,15 @@ class ListenScopeController:
         self.ai_job_manager.ai_python_executable = ai_python or None
         self.live_separator.ai_config = ai_cfg
         self.live_separator.ai_python_executable = ai_python or None
+
+        resolved_midi = (
+            str(getattr(self.window, "_midi_python_executable", self._midi_python_executable) or "").strip()
+            if midi_python is None
+            else str(midi_python or "").strip()
+        )
+        self._midi_python_executable = resolved_midi
+        if hasattr(self.window, "_midi_python_executable"):
+            self.window._midi_python_executable = resolved_midi
 
         verified_probe = self.window.last_verified_ai_probe
         if (
@@ -1128,11 +1269,11 @@ class ListenScopeController:
 
         try:
             saved = save_settings(
-                self._build_persisted_settings(limits, ai_cfg, ai_python),
+                self._build_persisted_settings(limits, ai_cfg, ai_python, resolved_midi),
                 self._settings_path,
             )
             self._practice_dirty = False
-            self.window.show_banner_message(f"✅ 资源安全阈值与 AI 环境配置已保存至 {saved}")
+            self.window.show_banner_message(f"✅ 资源安全阈值、AI 与 MIDI 环境配置已保存至 {saved}")
         except Exception as exc:
             self.window.show_banner_message(f"⚠️ 配置已生效，但写入本地设置文件失败: {exc}")
 
@@ -1288,6 +1429,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="ListenScope Desktop Application")
     parser.add_argument("--simulate", action="store_true", help="启动合成信号 + Mock 测试模式（用于无真机调试）")
     parser.add_argument("--ai-python", type=str, default=None, help="独立 AI Worker 虚拟环境 python.exe 路径")
+    parser.add_argument("--midi-python", type=str, default=None, help="独立 CPU Basic Pitch MIDI 虚拟环境 python.exe 路径")
     parser.add_argument("--settings", type=str, default=None, help="自定义持久化 settings.json 路径")
     parser.add_argument("--headless-smoke", action="store_true", help="短时运行后干净退出（测试用途）")
     args = parser.parse_args(argv)
@@ -1296,6 +1438,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ctrl = ListenScopeController(
         use_mock_ai_for_demo=args.simulate,
         ai_python_executable=args.ai_python,
+        midi_python_executable=args.midi_python,
         settings_path=args.settings,
     )
     if args.simulate:

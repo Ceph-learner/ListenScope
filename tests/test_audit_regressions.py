@@ -37,17 +37,17 @@ from streaming.live_separator import ExperimentalLiveSeparator
 from ui.main_window import ListenScopeMainWindow
 
 
-def test_capture_test_cli_runs_from_outside_repo() -> None:
+def test_capture_test_cli_runs_from_outside_repo(tmp_path) -> None:
     proc = subprocess.run(
         [
             sys.executable,
-            "/home/antigravity/ListenScope/capture_test.py",
+            str(Path(__file__).resolve().parents[1] / "capture_test.py"),
             "--simulate",
             "switching",
             "--duration",
             "0.6",
         ],
-        cwd="/tmp",
+        cwd=tmp_path,
         capture_output=True,
         text=True,
         timeout=15.0,
@@ -141,7 +141,7 @@ def test_midi_transcription_model_path_float32_24bit_and_cli(tmp_path) -> None:
             "--allow-cpu-fallback",
             "--json",
         ],
-        cwd="/home/antigravity/ListenScope",
+        cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         text=True,
         timeout=15.0,
@@ -361,7 +361,7 @@ def test_system_loopback_output_channels_and_int16_fallback() -> None:
         backend.stop()
 
 
-def test_job_manager_external_stdout_retains_terminal_result_when_queue_full(tmp_path) -> None:
+def test_job_manager_external_stdout_retains_terminal_result_when_queue_full(tmp_path, stub_worker_cli) -> None:
     """Emit >280 progress JSON lines before terminal result over external AI stdout protocol."""
     wav_path = tmp_path / "short.wav"
     sf.write(str(wav_path), np.zeros((48000, 2), dtype=np.float32), 48000, subtype="PCM_16")
@@ -399,14 +399,11 @@ print(json.dumps({
         encoding="utf-8",
     )
 
-    # Create wrapper executable pointing to sys.executable `-u` behavior by monkeypatching Popen in AIJobManager test
-    wrapper = tmp_path / "fake_ai_py.sh"
-    wrapper.write_text(f'#!/usr/bin/env bash\nexec "{sys.executable}" "{flood_pkg}" "$@"\n', encoding="utf-8")
-    wrapper.chmod(0o755)
+    worker_python = stub_worker_cli(flood_pkg)
 
     rm = ResourceManager(ResourceLimits())
     rm.set_simulation_overrides(SimulationOverrides(system_ram_available_mb=12000.0))
-    mgr = AIJobManager(rm, performance_logger=PerformanceLogger(log_dir=tmp_path / "perf"), ai_python_executable=str(wrapper))
+    mgr = AIJobManager(rm, performance_logger=PerformanceLogger(log_dir=tmp_path / "perf"), ai_python_executable=worker_python)
     req = AIJobRequest(
         task_id="flood_job",
         input_wav_path=str(wav_path),

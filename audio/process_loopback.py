@@ -11,7 +11,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 import psutil
 
-from core.config import AudioConfig
+from core.config import AudioConfig, TargetHardwareSpec
 from core.models import CaptureMode, CaptureStats
 
 from .capture_base import AudioCaptureBackend, CaptureStatsTracker
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class WasapiProcessLoopbackBackend(AudioCaptureBackend):
-    """Per-process WASAPI loopback capture backed by `proctap` on Windows 10 20H1+.
+    """Per-process WASAPI loopback capture backed by `proctap` on Windows.
 
     Features:
     - Verifies whether native capture is genuinely process-specific (`is_process_specific()`)
@@ -90,7 +90,8 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
 
             if not self._allow_non_windows and platform.system() != "Windows":
                 raise RuntimeError(
-                    f"WASAPI Process Loopback 仅支持 Windows 10 20H1+ (当前系统为 {platform.system()})。"
+                    f"WASAPI Process Loopback 需要 Windows Build "
+                    f"{TargetHardwareSpec().min_windows_build_for_process_loopback}+（当前系统为 {platform.system()}）。"
                 )
 
             if not self._pid_exists_fn(self._pid):

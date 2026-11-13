@@ -1,25 +1,35 @@
 <#
 .SYNOPSIS
-    ListenScope Windows 双环境一键初始化脚本 (.venv-core + .venv-ai).
+    ListenScope Windows 隔离环境一键初始化脚本 (.venv-core + .venv-ai + 可选 .venv-midi).
 .DESCRIPTION
-    未在 Windows 真机实际验证 (Scaffold generated from Linux; must be tested on physical Windows host).
+    已结合 Windows 11 真机验收实测基线更新 (2026-11-13 第二轮):
+      - Core 与 GPU AI 基线解释器: Python 3.12 x64 (实测 3.12.16)
+      - AI GPU 实测组合: torch==2.11.0+cu128, torchaudio==2.11.0+cu128, onnxruntime-gpu 1.26.0 (<1.27),
+        audio-separator 0.48.0, demucs 4.1.0, audioread 3.1.0 (已移除 basic-pitch 与临时 ORT sitecustomize.py)
+      - MIDI CPU 隔离环境 (.venv-midi): Python 3.11 x64 + basic-pitch 0.4.0 + tensorflow 2.15 + setuptools<81 + psutil
 
     目标真实硬件基线 (严禁误写为 16GB VRAM):
-      - OS: Windows 10/11 (20H1+, Build >= 19041)
+      - OS: Windows (Build >= 20348 for WASAPI Process Loopback)
       - GPU: NVIDIA GeForce RTX 5060 Ti (Blackwell, sm_120)
       - GPU 显存: 8GB VRAM
       - 系统内存: 16GB RAM
 
     结构说明:
       1) .venv-core: 轻量 GUI (PySide6 < 6.10) + WASAPI 捕获 + CPU 实时分析，禁止混入 PyTorch/CUDA。
-      2) .venv-ai:   独立子进程 AI Worker (PyTorch CUDA >= 12.8 sm_120 + onnxruntime-gpu + demucs + audio-separator + basic-pitch)。
+      2) .venv-ai:   独立子进程 AI Worker (PyTorch cu128 + onnxruntime-gpu<1.27 + demucs + audio-separator + audioread)。
+      3) .venv-midi: 独立子进程 CPU MIDI 转录 (Python 3.11 + basic-pitch + tensorflow<2.15.1 + setuptools<81)。
 #>
 
 [CmdletBinding()]
 param(
-    [string]$PythonExe = "python",
+    [string]$PythonExe = "",
     [string]$CudaIndexUrl = "https://download.pytorch.org/whl/cu128",
-    [switch]$SkipAI
+    [string]$TorchSpec = "torch==2.11.0",
+    [string]$TorchaudioSpec = "torchaudio==2.11.0",
+    [string]$MidiPythonExe = "",
+    [switch]$SkipAI,
+    [switch]$SkipMidi,
+    [switch]$AllowUntestedPython
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,7 +48,60 @@ function Invoke-Checked {
     }
 }
 
-Write-Host "=== [1/2] 初始化 Core 桌面环境 (.venv-core) ===" -ForegroundColor Green
+function Resolve-LauncherPython {
+    param([string]$SpecVersion)
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        $resolved = & py "-$SpecVersion" -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $resolved) {
+            return ($resolved | Select-Object -First 1).Trim()
+        }
+    }
+    return ""
+}
+
+function Test-PythonSpec {
+    param(
+        [string]$Exe,
+        [int]$ExpectedMajor,
+        [int]$ExpectedMinor
+    )
+    $info = & $Exe -c "import platform, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|{platform.architecture()[0]}')"
+    if ($LASTEXITCODE -ne 0 -or -not $info) {
+        throw "无法读取 Python 版本信息: $Exe"
+    }
+    $parts = ($info | Select-Object -First 1).Trim().Split("|")
+    $ver = $parts[0]
+    $arch = if ($parts.Length -gt 1) { $parts[1] } else { "unknown" }
+    $verNums = $ver.Split(".")
+    $maj = [int]$verNums[0]
+    $min = [int]$verNums[1]
+    return [PSCustomObject]@{
+        Version = $ver
+        Arch = $arch
+        Matches = ($maj -eq $ExpectedMajor -and $min -eq $ExpectedMinor -and $arch -eq "64bit")
+    }
+}
+
+if (-not $PythonExe) {
+    $Auto312 = Resolve-LauncherPython -SpecVersion "3.12"
+    if ($Auto312) {
+        $PythonExe = $Auto312
+        Write-Host "自动检测到 Python 3.12 x64: $PythonExe" -ForegroundColor Gray
+    } else {
+        $PythonExe = "python"
+    }
+}
+
+$CorePyMeta = Test-PythonSpec -Exe $PythonExe -ExpectedMajor 3 -ExpectedMinor 12
+if (-not $CorePyMeta.Matches) {
+    $msg = "检测到 Core/AI Python 为 $($CorePyMeta.Version) ($($CorePyMeta.Arch))；实测基线为 Python 3.12 x64 (cu128 + onnxruntime-gpu 1.26.0)。"
+    if (-not $AllowUntestedPython) {
+        throw "$msg 请使用 `-PythonExe <Python3.12路径>`（例如 `-PythonExe C:\Python312\python.exe`），或显式加 `-AllowUntestedPython` 跳过版本校验。"
+    }
+    Write-Warning $msg
+}
+
+Write-Host "=== [1/3] 初始化 Core 桌面环境 (.venv-core) [$($CorePyMeta.Version) $($CorePyMeta.Arch)] ===" -ForegroundColor Green
 $CoreVenv = Join-Path $RepoRoot ".venv-core"
 $CorePy = Join-Path $CoreVenv "Scripts\python.exe"
 if (-not (Test-Path $CorePy)) {
@@ -46,22 +109,80 @@ if (-not (Test-Path $CorePy)) {
 }
 Invoke-Checked $CorePy @("-m", "pip", "install", "--upgrade", "pip")
 Invoke-Checked $CorePy @("-m", "pip", "install", "-r", (Join-Path $RepoRoot "requirements-windows.txt"))
+Invoke-Checked $CorePy @("-m", "pip", "check")
 Invoke-Checked $CorePy @("scripts\check_env.py", "--write-report", "SYSTEM_REPORT.md")
 
 if (-not $SkipAI) {
-    Write-Host "=== [2/2] 初始化隔离 RTX 5060 Ti AI Worker 环境 (.venv-ai) ===" -ForegroundColor Green
+    Write-Host "=== [2/3] 初始化隔离 RTX 5060 Ti AI Worker 环境 (.venv-ai) [$TorchSpec $TorchaudioSpec @ $CudaIndexUrl] ===" -ForegroundColor Green
     $AiVenv = Join-Path $RepoRoot ".venv-ai"
     $AiPy = Join-Path $AiVenv "Scripts\python.exe"
     if (-not (Test-Path $AiPy)) {
         Invoke-Checked $PythonExe @("-m", "venv", $AiVenv)
     }
     Invoke-Checked $AiPy @("-m", "pip", "install", "--upgrade", "pip")
-    Invoke-Checked $AiPy @("-m", "pip", "install", "torch", "torchaudio", "--index-url", $CudaIndexUrl)
+    Invoke-Checked $AiPy @("-m", "pip", "install", $TorchSpec, $TorchaudioSpec, "--index-url", $CudaIndexUrl)
     Invoke-Checked $AiPy @("-m", "pip", "install", "-r", (Join-Path $RepoRoot "requirements-ai.txt"))
+    Invoke-Checked $AiPy @("-m", "pip", "check")
     Invoke-Checked $AiPy @("scripts\check_env.py", "--json", "--check-ai-packages", "--write-report", "SYSTEM_REPORT.md")
+}
+
+# 检查 FFmpeg 查找位置 (PATH 或仓库本地路径)
+$FfmpegFound = $null
+$FfmpegCmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
+if ($FfmpegCmd) {
+    $FfmpegFound = $FfmpegCmd.Source
+} else {
+    foreach ($cand in @(
+        (Join-Path $RepoRoot "ffmpeg.exe"),
+        (Join-Path $RepoRoot "ffmpeg\bin\ffmpeg.exe"),
+        (Join-Path $RepoRoot "tools\ffmpeg\bin\ffmpeg.exe")
+    )) {
+        if (Test-Path $cand) {
+            $FfmpegFound = $cand
+            break
+        }
+    }
+}
+if ($FfmpegFound) {
+    Write-Host "[FFmpeg] 已检测到: $FfmpegFound" -ForegroundColor Green
+} else {
+    Write-Warning "[FFmpeg] 未检测到 ffmpeg.exe。WAV 输入可走 soundfile，但部分解码/音频格式需 FFmpeg。建议执行 `winget install Gyan.FFmpeg` 或将 ffmpeg.exe 放入 PATH / 仓库根目录。"
+}
+
+$MidiReadyCreated = $false
+if (-not $SkipMidi) {
+    if (-not $MidiPythonExe) {
+        $MidiPythonExe = Resolve-LauncherPython -SpecVersion "3.11"
+    }
+    if ($MidiPythonExe) {
+        $MidiPyMeta = Test-PythonSpec -Exe $MidiPythonExe -ExpectedMajor 3 -ExpectedMinor 11
+        if (-not $MidiPyMeta.Matches -and -not $AllowUntestedPython) {
+            Write-Warning "跳过 .venv-midi 创建：检测到的 MIDI 解释器为 $($MidiPyMeta.Version) ($($MidiPyMeta.Arch))，Basic Pitch + TensorFlow 2.15 需要 Python 3.11 x64。"
+        } else {
+            Write-Host "=== [3/3] 初始化隔离 CPU MIDI 环境 (.venv-midi) [$($MidiPyMeta.Version) $($MidiPyMeta.Arch)] ===" -ForegroundColor Green
+            $MidiVenv = Join-Path $RepoRoot ".venv-midi"
+            $MidiPy = Join-Path $MidiVenv "Scripts\python.exe"
+            if (-not (Test-Path $MidiPy)) {
+                Invoke-Checked $MidiPythonExe @("-m", "venv", $MidiVenv)
+            }
+            Invoke-Checked $MidiPy @("-m", "pip", "install", "--upgrade", "pip")
+            Invoke-Checked $MidiPy @("-m", "pip", "install", "-r", (Join-Path $RepoRoot "requirements-midi.txt"))
+            Invoke-Checked $MidiPy @("-m", "pip", "check")
+            Invoke-Checked $MidiPy @("scripts\check_env.py", "--json", "--check-midi-packages", "--no-write")
+            $MidiReadyCreated = $true
+        }
+    } else {
+        Write-Host "=== [3/3] 跳过 .venv-midi（未找到 Python 3.11 x64；GUI 将提示配置或走轻量单音回退） ===" -ForegroundColor Yellow
+        Write-Host "如需启用 Spotify Basic Pitch CPU MIDI 转录，请先安装 Python 3.11 x64 后执行:" -ForegroundColor Yellow
+        Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1 -SkipAI -MidiPythonExe <Python3.11路径>" -ForegroundColor Yellow
+    }
 }
 
 Write-Host ""
 Write-Host "初始化完成！启动命令示例:" -ForegroundColor Green
 Write-Host "  .\.venv-core\Scripts\python.exe capture_test.py --name QQMusic.exe --fallback-system"
-Write-Host "  .\.venv-core\Scripts\python.exe main.py --ai-python .\.venv-ai\Scripts\python.exe"
+if ($MidiReadyCreated) {
+    Write-Host "  .\.venv-core\Scripts\python.exe main.py --ai-python .\.venv-ai\Scripts\python.exe --midi-python .\.venv-midi\Scripts\python.exe"
+} else {
+    Write-Host "  .\.venv-core\Scripts\python.exe main.py --ai-python .\.venv-ai\Scripts\python.exe"
+}

@@ -13,6 +13,7 @@ import zipfile
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
 from core.logging import BoundedMemoryLogHandler, PerformanceLogger
 from core.models import ResourceSnapshot, SystemHardwareReport
+from core.paths import find_ffmpeg_executable
 from core.system_probe import generate_system_report_markdown
 
 
@@ -55,6 +56,7 @@ def export_diagnostic_bundle(
     resource_limits: ResourceLimits,
     ai_config: AIConfig,
     ai_python_executable: str = "",
+    midi_python_executable: str = "",
     resource_snapshot: Optional[ResourceSnapshot] = None,
     perf_logger: Optional[PerformanceLogger] = None,
     log_handler: Optional[BoundedMemoryLogHandler] = None,
@@ -88,6 +90,8 @@ def export_diagnostic_bundle(
         "resource_limits": asdict(resource_limits),
         "ai_config": asdict(ai_config),
         "ai_python_executable": _sanitize_text(str(ai_python_executable or "")),
+        "midi_python_executable": _sanitize_text(str(midi_python_executable or "")),
+        "ffmpeg_executable": _sanitize_text(find_ffmpeg_executable() or ""),
     }
     summary_json = _sanitize_text(json.dumps(summary_payload, ensure_ascii=False, indent=2, default=str))
 

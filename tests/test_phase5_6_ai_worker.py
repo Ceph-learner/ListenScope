@@ -7,6 +7,7 @@ import threading
 import time
 import types
 import wave
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -256,24 +257,19 @@ def test_cancel_ai_job_at_every_stage_cleans_temps(tmp_path, target_stage: AIJob
     rm.close()
 
 
-def test_external_ai_venv_subprocess_mode(tmp_path) -> None:
+def test_external_ai_venv_subprocess_mode(tmp_path, external_python) -> None:
     """Verify Core -> external AI Worker CLI subprocess protocol (`-m ai.worker`) works cleanly."""
     wav_path = tmp_path / "ext_in.wav"
     _create_stereo_wav(wav_path, duration_sec=2.0)
-
-    # Inject a tiny wrapper command script or pass dummy python path? Note `_launch_worker_locked` resolves Path!
-    # Pass sys.executable by testing execute via subprocess directly OR verify symlink to force external branch.
-    py_link = tmp_path / "ai_python"
-    py_link.symlink_to(sys.executable)
 
     rm = ResourceManager()
     rm.set_simulation_overrides(SimulationOverrides(system_ram_available_mb=12000.0))
     mgr = AIJobManager(
         rm,
         performance_logger=PerformanceLogger(log_dir=tmp_path / "perf"),
-        ai_python_executable=str(py_link),
+        ai_python_executable=external_python,
     )
-    # Note: symlink.resolve() == sys.executable.resolve(), so test _cli_main explicitly via subprocess too
+    assert mgr._uses_external_python()
     req = AIJobRequest(
         task_id="ext_job",
         input_wav_path=str(wav_path),
@@ -312,7 +308,7 @@ def test_external_ai_venv_subprocess_mode(tmp_path) -> None:
 
     proc = subprocess.run(
         [sys.executable, "-m", "ai.worker", "--request-json", str(req_json), "--config-json", str(cfg_json), "--cancel-flag", str(cancel_flag)],
-        cwd="/home/antigravity/ListenScope",
+        cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         text=True,
         timeout=20.0,

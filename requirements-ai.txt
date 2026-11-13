@@ -1,17 +1,23 @@
-# ListenScope AI Worker Isolated Environment Dependencies (RTX 5060 Ti 8GB VRAM / Blackwell sm_120)
-# Install PyTorch CUDA build FIRST according to RTX 5060 Ti Blackwell compatibility:
-#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
-#   (or cu130 / newer matching driver; PyTorch >= 2.7.0 required for sm_120)
+# ListenScope AI Worker Isolated Environment Dependencies (Python 3.12 x64 / RTX 5060 Ti 8GB VRAM / Blackwell sm_120)
 #
-# Then install matching ONNX Runtime GPU + separation + Basic Pitch packages:
-# Verify afterwards using: python scripts/check_env.py --write-report
+# Verified baseline on Windows 11 + RTX 5060 Ti 8GB VRAM + Python 3.12.16 x64:
+# 1. Install PyTorch CUDA 12.8 build FIRST (matching Blackwell sm_120):
+#      pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+# 2. Install AI separation packages below (Basic Pitch is intentionally excluded here because
+#    basic-pitch 0.4.0 requires tensorflow<2.15.1 / Python <=3.11; see requirements-midi.txt).
+# 3. onnxruntime-gpu MUST stay <1.27 with cu128 PyTorch builds (ORT 1.27+ switched to CUDA 13; 1.26.0 tested).
+# 4. Ensure `ffmpeg` (ffmpeg.exe) is on PATH or placed alongside ListenScope/cwd for audio-separator/pydub.
+# 5. Round 2 verified clean GPU separation with stock ORT settings (no temporary sitecustomize.py needed).
+# 6. Verify afterwards with: python scripts/check_env.py --json --check-ai-packages --write-report
+
 numpy>=1.24.0
 scipy>=1.10.0
 psutil>=5.9.0
 nvidia-ml-py>=12.0.0
 soundfile>=0.12.0
-onnxruntime-gpu>=1.21.0
-audio-separator[gpu]>=0.30.0
-demucs>=4.0.1
-basic-pitch[onnx]>=0.4.0
+onnxruntime-gpu>=1.21.0,<1.27
+audio-separator[gpu]>=0.48.0
+# audio-separator 0.48.0 imports audioread at module load even when using soundfile output.
+audioread>=3.1.0
+demucs>=4.1.0
 mido>=1.3.0

@@ -143,7 +143,7 @@ def stream_chunked_separation(
     stem_names: tuple[str, ...],
     separate_chunk_fn: Callable[[np.ndarray, int], dict[str, np.ndarray]],
     *,
-    chunk_seconds: float = 20.0,
+    chunk_seconds: float = 6.0,
     overlap_seconds: float = 1.0,
     cancel_check: Optional[Callable[[], bool]] = None,
     progress_cb: Optional[Callable[[int, int, str], None]] = None,

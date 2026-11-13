@@ -95,9 +95,9 @@ def _deserialize_request(data: dict[str, Any]) -> AIJobRequest:
         stem_mode=str(data["stem_mode"]),
         model_id=str(data["model_id"]),
         use_gpu=bool(data.get("use_gpu", True)),
-        segment_seconds=int(data.get("segment_seconds", 10)),
+        segment_seconds=int(data.get("segment_seconds", 6)),
         overlap=float(data.get("overlap", 0.25)),
-        chunk_seconds=float(data.get("chunk_seconds", 20.0)),
+        chunk_seconds=float(data.get("chunk_seconds", 6.0)),
         simulate_oom=bool(data.get("simulate_oom", False)),
         simulate_delay_sec=float(data.get("simulate_delay_sec", 0.0)),
         use_mock_backend=bool(data.get("use_mock_backend", False)),
@@ -479,7 +479,7 @@ def _cli_main() -> int:
 
     def _emit(prog: AIJobProgress) -> None:
         print(
-            json.dumps({"type": "progress", "payload": _serialize_dataclass(prog)}, ensure_ascii=False),
+            json.dumps({"type": "progress", "payload": _serialize_dataclass(prog)}),
             file=ipc_out,
             flush=True,
         )
@@ -493,7 +493,7 @@ def _cli_main() -> int:
             ai_config=cfg,
         )
         print(
-            json.dumps({"type": "result", "payload": _serialize_dataclass(res)}, ensure_ascii=False),
+            json.dumps({"type": "result", "payload": _serialize_dataclass(res)}),
             file=ipc_out,
             flush=True,
         )
