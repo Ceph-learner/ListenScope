@@ -1,0 +1,279 @@
+"""Resource-guarded 4-stem HTDemucs separation backend for RTX 5060 Ti 8GB VRAM."""
+
+from __future__ import annotations
+
+import logging
+from math import gcd
+from pathlib import Path
+import tempfile
+from typing import Any, Optional
+
+import numpy as np
+from scipy.signal import resample_poly
+
+from ai.backend import SeparationBackend
+from ai.models import AIModelSpec
+from ai.resource_guard import is_oom_exception, release_torch_and_memory
+from core.config import AIConfig
+from core.models import OOMRecoveryAction
+
+from .mdx_backend import SeparationOOMError, _read_wav_f32, _write_pcm16_wav
+
+logger = logging.getLogger(__name__)
+
+
+def _resample_chunk(pcm_f32: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
+    if src_rate == dst_rate or pcm_f32.shape[0] == 0:
+        return pcm_f32.astype(np.float32, copy=False)
+    g = gcd(int(src_rate), int(dst_rate))
+    up = int(dst_rate) // g
+    down = int(src_rate) // g
+    return resample_poly(pcm_f32, up, down, axis=0).astype(np.float32, copy=False)
+
+
+class DemucsSeparatorBackend(SeparationBackend):
+    """HTDemucs 4-stem backend enforcing jobs=1, shifts=1, overlap=0.25, segment<=10s, and bounded OOM step-down."""
+
+    def __init__(
+        self,
+        model_spec: AIModelSpec,
+        *,
+        use_gpu: bool = True,
+        segment_seconds: Optional[int] = None,
+        overlap: float = 0.25,
+        ai_config: Optional[AIConfig] = None,
+        output_dir: Optional[Path] = None,
+    ) -> None:
+        cfg = ai_config or AIConfig()
+        capped_segment = min(int(segment_seconds or 10), max(cfg.demucs_segment_ladder))
+        super().__init__(
+            model_spec,
+            use_gpu=use_gpu,
+            segment_seconds=capped_segment,
+            overlap=float(overlap),
+            ai_config=cfg,
+        )
+        self.output_dir = Path(output_dir) if output_dir else Path(tempfile.gettempdir()) / "listenscope_ai"
+        self._mode: str = "none"  # "demucs" or "audio_separator"
+        self._model: Any = None
+        self._torch: Any = None
+        self._apply_model_fn: Any = None
+        self._device: str = "cpu"
+        self._separator: Any = None
+        self._tmp_root: Optional[tempfile.TemporaryDirectory[str]] = None
+
+    def _segment_ladder(self) -> list[int]:
+        ladder = [s for s in self.ai_config.demucs_segment_ladder if s <= self.segment_seconds]
+        if not ladder:
+            ladder = [min(self.ai_config.demucs_segment_ladder)]
+        elif self.segment_seconds not in ladder:
+            ladder.insert(0, self.segment_seconds)
+        return sorted(set(ladder), reverse=True)
+
+    def load_model(self) -> None:
+        if self._loaded:
+            return
+
+        # Prefer direct demucs Python API so weights stay loaded across streaming chunks without per-chunk reload
+        try:
+            import torch  # type: ignore[import-not-found]
+            from demucs.apply import apply_model  # type: ignore[import-not-found]
+            from demucs.pretrained import get_model  # type: ignore[import-not-found]
+
+            if self.use_gpu and not torch.cuda.is_available():
+                raise RuntimeError("请求 GPU HTDemucs 分轨，但当前 torch.cuda.is_available() 为 False。")
+
+            model_name = self.model_spec.separator_filename.replace(".yaml", "")
+            model = get_model(model_name)
+            device = "cuda" if self.use_gpu else "cpu"
+            model.to(device)
+            model.eval()
+
+            self._torch = torch
+            self._apply_model_fn = apply_model
+            self._model = model
+            self._device = device
+            self._mode = "demucs"
+            self._loaded = True
+            return
+        except ImportError:
+            logger.info("Direct `demucs` package unavailable, falling back to `audio-separator` Demucs loader.")
+        except Exception as exc:
+            self.unload_model()
+            if is_oom_exception(exc):
+                raise SeparationOOMError(
+                    f"加载 HTDemucs 到显存时 OOM: {exc}",
+                    recovery_options=[
+                        OOMRecoveryAction.REDUCE_SEGMENT,
+                        OOMRecoveryAction.LIGHTER_MODEL,
+                        OOMRecoveryAction.CPU_FALLBACK,
+                    ],
+                ) from exc
+            raise
+
+        try:
+            from audio_separator.separator import Separator  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise RuntimeError(
+                "未安装 `demucs` 或 `audio-separator`。请在 AI Worker 环境安装: pip install demucs audio-separator[gpu]"
+            ) from exc
+
+        self._tmp_root = tempfile.TemporaryDirectory(prefix="ls_demucs_")
+        chunk_out_dir = Path(self._tmp_root.name) / "out"
+        chunk_out_dir.mkdir(parents=True, exist_ok=True)
+        self._separator = Separator(
+            output_dir=str(chunk_out_dir),
+            output_format="WAV",
+            use_soundfile=True,
+            use_autocast=bool(self.use_gpu),
+            demucs_params={
+                "segment_size": int(self.segment_seconds),
+                "shifts": int(self.ai_config.demucs_shifts),  # Strict shifts=1
+                "overlap": float(self.overlap),
+                "segments_enabled": True,
+            },
+        )
+        self._separator.load_model(model_filename=self.model_spec.separator_filename)
+        self._mode = "audio_separator"
+        self._loaded = True
+
+    def separate_chunk(self, chunk_f32: np.ndarray, sample_rate: int) -> dict[str, np.ndarray]:
+        if not self._loaded:
+            raise RuntimeError("Demucs model is not loaded")
+
+        ladder = self._segment_ladder()
+        max_attempts = 1 + int(self.ai_config.max_oom_retries)
+        tried_segments: list[int] = []
+        last_oom: Optional[BaseException] = None
+
+        for attempt_idx in range(min(max_attempts, len(ladder))):
+            seg = ladder[attempt_idx]
+            tried_segments.append(seg)
+            try:
+                if self._mode == "demucs":
+                    return self._separate_with_demucs(chunk_f32, sample_rate, segment_sec=seg)
+                return self._separate_with_audio_separator(chunk_f32, sample_rate, segment_sec=seg)
+            except Exception as exc:
+                release_torch_and_memory()
+                if is_oom_exception(exc):
+                    last_oom = exc
+                    logger.warning("HTDemucs OOM at segment=%ss (attempt %s/%s)", seg, attempt_idx + 1, max_attempts)
+                    continue
+                raise
+
+        raise SeparationOOMError(
+            f"HTDemucs 显存不足 (OOM)，尝试 segment={tried_segments} 后仍超出限制: {last_oom}",
+            recovery_options=[
+                OOMRecoveryAction.REDUCE_SEGMENT,
+                OOMRecoveryAction.LIGHTER_MODEL,
+                OOMRecoveryAction.CPU_FALLBACK,
+            ],
+            tried_segments=tried_segments,
+        )
+
+    def _separate_with_demucs(
+        self,
+        chunk_f32: np.ndarray,
+        sample_rate: int,
+        *,
+        segment_sec: int,
+    ) -> dict[str, np.ndarray]:
+        torch = self._torch
+        model = self._model
+        model_sr = int(getattr(model, "samplerate", 44100))
+        target_frames = int(chunk_f32.shape[0])
+
+        work = _resample_chunk(chunk_f32, sample_rate, model_sr)
+        tensor = None
+        sources = None
+        try:
+            tensor = torch.from_numpy(work.T).unsqueeze(0).to(self._device, dtype=torch.float32)
+            with torch.inference_mode():
+                sources = self._apply_model_fn(
+                    model,
+                    tensor,
+                    shifts=int(self.ai_config.demucs_shifts),  # Strict shifts=1
+                    split=True,
+                    overlap=float(self.overlap),
+                    segment=float(segment_sec),
+                    jobs=int(self.ai_config.demucs_jobs),       # Strict jobs=1
+                    num_workers=0,
+                    progress=False,
+                    device=self._device,
+                )[0]
+
+            source_names = list(getattr(model, "sources", self.model_spec.stems))
+            out: dict[str, np.ndarray] = {}
+            for idx, name in enumerate(source_names):
+                stem_np = sources[idx].detach().cpu().numpy().T.astype(np.float32, copy=False)
+                restored = _resample_chunk(stem_np, model_sr, sample_rate)
+                if restored.shape[0] > target_frames:
+                    restored = restored[:target_frames]
+                elif restored.shape[0] < target_frames:
+                    pad = np.zeros((target_frames - restored.shape[0], restored.shape[1]), dtype=np.float32)
+                    restored = np.vstack([restored, pad])
+                out[name] = restored
+            return out
+        finally:
+            if tensor is not None:
+                del tensor
+            if sources is not None:
+                del sources
+            release_torch_and_memory()
+
+    def _separate_with_audio_separator(
+        self,
+        chunk_f32: np.ndarray,
+        sample_rate: int,
+        *,
+        segment_sec: int,
+    ) -> dict[str, np.ndarray]:
+        assert self._tmp_root is not None and self._separator is not None
+        tmp_base = Path(self._tmp_root.name)
+        in_wav = tmp_base / "chunk_in.wav"
+        out_dir = tmp_base / "out"
+        for leftover in out_dir.glob("*"):
+            leftover.unlink(missing_ok=True)
+        _write_pcm16_wav(in_wav, chunk_f32, sample_rate)
+        target_frames = int(chunk_f32.shape[0])
+
+        try:
+            self._separator.arch_specific_params["Demucs"]["segment_size"] = int(segment_sec)
+        except Exception:
+            pass
+
+        try:
+            output_names = {
+                "Vocals": "stem_vocals",
+                "Drums": "stem_drums",
+                "Bass": "stem_bass",
+                "Other": "stem_other",
+            }
+            out_files = self._separator.separate(str(in_wav), output_names)
+            resolved = [Path(f) if Path(f).is_absolute() else out_dir / Path(f) for f in out_files]
+            stems: dict[str, np.ndarray] = {}
+            for stem in self.model_spec.stems:
+                matched = next((p for p in resolved if stem.lower() in p.name.lower()), None)
+                if matched is None or not matched.exists():
+                    raise RuntimeError(f"Demucs 分块输出缺少 '{stem}': {resolved}")
+                arr, _ = _read_wav_f32(matched, target_frames=target_frames)
+                stems[stem] = arr
+            return stems
+        finally:
+            in_wav.unlink(missing_ok=True)
+            for leftover in out_dir.glob("*"):
+                leftover.unlink(missing_ok=True)
+
+    def unload_model(self) -> None:
+        self._model = None
+        self._apply_model_fn = None
+        self._separator = None
+        self._loaded = False
+        self._mode = "none"
+        if self._tmp_root is not None:
+            try:
+                self._tmp_root.cleanup()
+            except Exception:
+                pass
+            self._tmp_root = None
+        release_torch_and_memory()

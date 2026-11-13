@@ -1,7 +1,8 @@
 """Centralized configuration and conservative resource limits for ListenScope.
 
-All RAM, VRAM, and audio buffer thresholds live here rather than being scattered
-across modules. Conservative defaults are calibrated for the target user PC:
+All RAM, VRAM, audio buffer, analysis, and AI separation thresholds live here
+rather than being scattered across modules. Conservative defaults are calibrated
+for the target user PC:
 - OS: Windows 10/11 (20H1+ for WASAPI Process Loopback)
 - GPU: NVIDIA GeForce RTX 5060 Ti with 8GB VRAM (NOT 16GB VRAM)
 - System RAM: 16GB RAM
@@ -103,3 +104,70 @@ class AudioConfig:
             raise ValueError("capture_queue_maxsize must be positive")
         if self.ring_buffer_seconds <= 0:
             raise ValueError("ring_buffer_seconds must be positive")
+
+
+@dataclass(frozen=True)
+class AnalysisConfig:
+    """Bounded CPU-only DSP & visualization parameters."""
+
+    fft_size: int = 4096
+    hop_size: int = 1024
+    log_freq_bins: int = 96
+    min_freq_hz: float = 27.5
+    max_freq_hz: float = 16000.0
+    spectrum_history_seconds: int = 30      # Bounded UI spectrogram history (30-60s)
+    chroma_history_seconds: int = 120       # Bounded chroma history (max 120s)
+    key_window_seconds: int = 36            # Sliding window for Krumhansl-Schmuckler
+    tempo_window_seconds: int = 24          # Sliding onset window for BPM estimation
+    analysis_rate_hz: float = 15.0          # ~66ms cadence on CPU worker
+    silence_threshold_dbfs: float = -60.0
+    waveform_display_points: int = 512
+
+    def __post_init__(self) -> None:
+        if self.fft_size < 512:
+            raise ValueError("fft_size too small")
+        if self.spectrum_history_seconds > 60:
+            raise ValueError("spectrum_history_seconds must remain bounded <= 60s")
+        if self.chroma_history_seconds > 120:
+            raise ValueError("chroma_history_seconds must remain bounded <= 120s")
+
+
+@dataclass(frozen=True)
+class AIConfig:
+    """Conservative AI separation limits calibrated for RTX 5060 Ti 8GB VRAM + 16GB RAM."""
+
+    # History excerpt & streaming chunk limits
+    default_max_history_ai_seconds: float = 60.0
+    long_audio_chunk_seconds: float = 20.0
+    long_audio_overlap_seconds: float = 1.0
+
+    # Demucs strict safety defaults (Section 14)
+    demucs_jobs: int = 1
+    demucs_shifts: int = 1
+    demucs_overlap: float = 0.25
+    demucs_segment_ladder: tuple[int, ...] = (10, 8, 6, 4)
+
+    # MDX / ONNX 2-stem safety defaults (Section 13 & 15)
+    mdx_batch_size: int = 1
+    mdx_segment_size: int = 256
+    mdx_overlap: float = 0.25
+
+    # Worker lifecycle & emergency stop
+    worker_graceful_cancel_timeout_sec: float = 1.5
+    max_oom_retries: int = 1
+    allow_experimental_roformer: bool = False  # Disabled until verified on RTX 5060 Ti 8GB
+
+    # Experimental near-real-time 2-stem streaming defaults (Section 19)
+    live_chunk_seconds: float = 2.0
+    live_overlap_seconds: float = 0.25
+    live_max_buffer_seconds: float = 6.0
+
+    def __post_init__(self) -> None:
+        if self.demucs_jobs != 1:
+            raise ValueError("demucs_jobs must be 1 on 16GB RAM / 8GB VRAM")
+        if self.demucs_shifts != 1:
+            raise ValueError("demucs_shifts must default to 1")
+        if self.max_oom_retries > 2:
+            raise ValueError("max_oom_retries must be bounded (<=2)")
+        if self.live_max_buffer_seconds <= self.live_chunk_seconds:
+            raise ValueError("live_max_buffer_seconds must exceed live_chunk_seconds")

@@ -1,0 +1,565 @@
+"""Phase 8 Experimental near-real-time 2-stem separator (disabled by default).
+
+Strict safeguards:
+- Default OFF; must be explicitly started by the user.
+- 2-stem only (vocals + instrumental), default low-VRAM MDX model.
+- Inference runs inside a dedicated isolated `spawn` worker subprocess.
+- Strictly bounded input lag and bounded output ring buffer (`live_max_buffer_seconds`).
+- Automatically stops if ResourceManager enters Warning or Critical state, or if
+  RTF exceeds real-time safety cleanly, leaving CPU capture & spectrum untouched.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict
+import logging
+import multiprocessing
+from pathlib import Path
+import queue
+import sys
+import threading
+import time
+from typing import Any, Callable, Optional
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai.backend import build_separation_backend
+from ai.models import MODEL_REGISTRY
+from ai.resource_guard import release_torch_and_memory
+from audio.ring_buffer import FixedRingBuffer
+from core.config import AIConfig, AudioConfig, TargetHardwareSpec
+from core.models import LiveSeparationMetrics, ResourceStatus
+from core.resource_manager import ResourceManager
+from core.system_probe import (
+    _probe_gpus_nvml,
+    _probe_gpus_nvidia_smi,
+    _probe_onnxruntime,
+    _probe_pytorch,
+    evaluate_gpu_ai_readiness,
+)
+
+from .benchmark import LiveBenchmarkResult, benchmark_live_model
+from .overlap_add import OverlapAddAccumulator
+
+logger = logging.getLogger(__name__)
+
+
+def _live_worker_entry(
+    ai_cfg_dict: dict[str, Any],
+    model_id: str,
+    sample_rate: int,
+    use_gpu: bool,
+    use_mock_backend: bool,
+    simulate_delay_sec: float,
+    req_q: Any,
+    res_q: Any,
+    stop_ev: Any,
+) -> None:
+    """Subprocess running single 2-stem model continuously while live mode is enabled."""
+    cfg = AIConfig(**ai_cfg_dict)
+    backend = None
+    try:
+        if use_gpu and not use_mock_backend:
+            gpus, _, _ = _probe_gpus_nvml()
+            if not gpus:
+                gpus, _, _ = _probe_gpus_nvidia_smi()
+            ready, reason = evaluate_gpu_ai_readiness(
+                gpus,
+                _probe_pytorch(),
+                _probe_onnxruntime(),
+                target=TargetHardwareSpec(),
+            )
+            if not ready:
+                res_q.put({"type": "error", "error": reason or "GPU AI 环境未就绪"})
+                return
+
+        backend = build_separation_backend(
+            model_id,
+            use_gpu=use_gpu,
+            overlap=cfg.mdx_overlap,
+            ai_config=cfg,
+            use_mock_backend=use_mock_backend,
+            simulate_delay_sec=simulate_delay_sec,
+        )
+        backend.load_model()
+        res_q.put({"type": "ready"})
+
+        while not stop_ev.is_set():
+            try:
+                item = req_q.get(timeout=0.08)
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            seq, chunk_bytes, shape = item
+            chunk = np.frombuffer(chunk_bytes, dtype=np.float32).reshape(shape)
+            t0 = time.monotonic()
+            stems = backend.separate_chunk(chunk, sample_rate)
+            infer_sec = time.monotonic() - t0
+            voc = np.asarray(stems["vocals"], dtype=np.float32)
+            inst = np.asarray(stems["instrumental"], dtype=np.float32)
+            try:
+                res_q.put_nowait(
+                    {
+                        "type": "chunk",
+                        "seq": seq,
+                        "vocals": voc.tobytes(),
+                        "instrumental": inst.tobytes(),
+                        "shape": voc.shape,
+                        "infer_sec": infer_sec,
+                    }
+                )
+            except queue.Full:
+                pass
+    except Exception as exc:
+        try:
+            res_q.put({"type": "error", "error": f"实时分轨 worker 异常: {exc}"})
+        except Exception:
+            pass
+    finally:
+        if backend is not None:
+            try:
+                backend.unload_model()
+            except Exception:
+                pass
+            del backend
+        release_torch_and_memory()
+
+
+class ExperimentalLiveSeparator:
+    """Near-real-time 2-stem processor reading recent chunks from FixedRingBuffer."""
+
+    def __init__(
+        self,
+        ring_buffer: FixedRingBuffer,
+        resource_manager: ResourceManager,
+        *,
+        ai_config: Optional[AIConfig] = None,
+        audio_config: Optional[AudioConfig] = None,
+        is_offline_job_busy_fn: Optional[Callable[[], bool]] = None,
+    ) -> None:
+        self.ring_buffer = ring_buffer
+        self.resource_manager = resource_manager
+        self.ai_config = ai_config or AIConfig()
+        self.audio_config = audio_config or ring_buffer.audio_config
+        self._is_offline_job_busy_fn = is_offline_job_busy_fn
+
+        sr = self.audio_config.sample_rate
+        ch = self.audio_config.channels
+        self._chunk_frames = max(sr // 2, int(round(self.ai_config.live_chunk_seconds * sr)))
+        self._overlap_frames = max(0, int(round(self.ai_config.live_overlap_seconds * sr)))
+        self._hop_frames = max(sr // 4, self._chunk_frames - self._overlap_frames)
+
+        # Bounded output circular storage for assembled vocals & instrumental
+        self._out_cap_frames = max(sr * 2, int(round(self.ai_config.live_max_buffer_seconds * sr)))
+        self._out_vocals = np.zeros((self._out_cap_frames, ch), dtype=np.float32)
+        self._out_inst = np.zeros((self._out_cap_frames, ch), dtype=np.float32)
+        self._out_write_pos = 0
+        self._out_available = 0
+
+        self._lock = threading.RLock()
+        self._active = False
+        self._stop_event = threading.Event()
+        self._feed_thread: Optional[threading.Thread] = None
+
+        self._proc: Optional[multiprocessing.Process] = None
+        self._req_q: Any = None
+        self._res_q: Any = None
+        self._proc_stop_ev: Any = None
+
+        self._model_id = "mdx_low_vram_2stem"
+        self._last_read_abs_frame = 0
+        self._dropped_chunks = 0
+        self._latest_rtf = 0.0
+        self._latest_latency_ms = 0.0
+        self._vocals_gain = 1.0
+        self._inst_gain = 1.0
+        self._status_message = "实验功能已关闭 (默认关闭)"
+        self._overlap_add = OverlapAddAccumulator(channels=ch, overlap_frames=self._overlap_frames)
+
+    def set_gains(self, vocals_gain: float, inst_gain: float) -> None:
+        with self._lock:
+            self._vocals_gain = max(0.0, min(1.5, float(vocals_gain)))
+            self._inst_gain = max(0.0, min(1.5, float(inst_gain)))
+
+    @property
+    def is_active(self) -> bool:
+        with self._lock:
+            return self._active
+
+    def latest_metrics(self) -> LiveSeparationMetrics:
+        snap = self.resource_manager.sample()
+        with self._lock:
+            buf_sec = self._out_available / float(self.audio_config.sample_rate)
+            return LiveSeparationMetrics(
+                active=self._active,
+                model_id=self._model_id,
+                latency_ms=round(self._latest_latency_ms, 1),
+                rtf=round(self._latest_rtf, 3),
+                main_ram_mb=round(snap.main_ram_mb, 1),
+                worker_ram_mb=round(snap.ai_worker_ram_mb, 1),
+                vram_free_mb=round(snap.vram_free_mb, 1) if snap.vram_free_mb is not None else None,
+                gpu_util_pct=snap.gpu_utilization_pct,
+                buffer_seconds=round(buf_sec, 2),
+                max_buffer_seconds=self.ai_config.live_max_buffer_seconds,
+                dropped_chunks=self._dropped_chunks,
+                status_message=self._status_message,
+            )
+
+    def run_benchmark(
+        self,
+        model_id: str = "mdx_low_vram_2stem",
+        *,
+        use_gpu: bool = True,
+        use_mock_backend: bool = False,
+        simulate_delay_sec: float = 0.0,
+    ) -> LiveBenchmarkResult:
+        return benchmark_live_model(
+            model_id=model_id,
+            use_gpu=use_gpu,
+            use_mock_backend=use_mock_backend,
+            simulate_delay_sec=simulate_delay_sec,
+            ai_config=self.ai_config,
+            audio_config=self.audio_config,
+        )
+
+    def start(
+        self,
+        *,
+        model_id: str = "mdx_low_vram_2stem",
+        use_gpu: bool = True,
+        use_mock_backend: bool = False,
+        simulate_delay_sec: float = 0.0,
+        skip_benchmark: bool = False,
+        gpu_ai_ready: Optional[bool] = None,
+        gpu_block_reason: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        with self._lock:
+            if self._active:
+                return True, "实验性实时分轨已在运行中。"
+            if self._is_offline_job_busy_fn is not None and self._is_offline_job_busy_fn():
+                return False, "已有离线 AI 分轨任务运行中（硬限制=1），请先停止或等待其完成。"
+
+            spec = MODEL_REGISTRY.get(model_id)
+            if spec is None or spec.stem_mode != "2stem":
+                return False, "实验性实时分轨仅支持 2-stem 模型。"
+
+            allowed, reason = self.resource_manager.can_start_ai_job(
+                stem_mode="2stem",
+                require_gpu=(use_gpu and not use_mock_backend),
+                gpu_ai_ready=gpu_ai_ready,
+                gpu_block_reason=gpu_block_reason,
+            )
+            if not allowed:
+                self._status_message = f"拒绝启动: {reason}"
+                return False, reason
+
+            pre_snap = self.resource_manager.sample()
+            if pre_snap.status != ResourceStatus.NORMAL:
+                detail = "；".join(pre_snap.status_reasons) or pre_snap.status.value
+                msg = f"当前资源处于 {pre_snap.status.value} 状态（{detail}），禁止开启实验性持续实时分轨。"
+                self._status_message = msg
+                return False, msg
+
+            if not skip_benchmark:
+                bench = self.run_benchmark(
+                    model_id=model_id,
+                    use_gpu=use_gpu,
+                    use_mock_backend=use_mock_backend,
+                    simulate_delay_sec=simulate_delay_sec,
+                )
+                self._latest_rtf = bench.rtf
+                if not bench.can_run_realtime:
+                    self._status_message = bench.message
+                    return False, bench.message
+
+            self._model_id = model_id
+            self._dropped_chunks = 0
+            self._latest_latency_ms = 0.0
+            self._out_vocals.fill(0.0)
+            self._out_inst.fill(0.0)
+            self._out_write_pos = 0
+            self._out_available = 0
+            self._overlap_add.reset()
+            self._last_read_abs_frame = self.ring_buffer.total_written_frames
+
+            ctx = multiprocessing.get_context("spawn")
+            req_q = ctx.Queue(maxsize=2)
+            res_q = ctx.Queue(maxsize=4)
+            stop_ev = ctx.Event()
+            proc = ctx.Process(
+                target=_live_worker_entry,
+                args=(
+                    asdict(self.ai_config),
+                    model_id,
+                    self.audio_config.sample_rate,
+                    use_gpu,
+                    use_mock_backend,
+                    simulate_delay_sec,
+                    req_q,
+                    res_q,
+                    stop_ev,
+                ),
+                name="ListenScope-LiveSepWorker",
+                daemon=True,
+            )
+            proc.start()
+
+            self._proc = proc
+            self._req_q = req_q
+            self._res_q = res_q
+            self._proc_stop_ev = stop_ev
+            self._stop_event.clear()
+
+        # Wait briefly for worker model ready signal (up to 15s)
+        ready_deadline = time.monotonic() + 15.0
+        ready_ok = False
+        err_msg = "实时分轨 worker 启动超时"
+        while time.monotonic() < ready_deadline:
+            try:
+                msg = res_q.get(timeout=0.1)
+                if msg.get("type") == "ready":
+                    ready_ok = True
+                    break
+                if msg.get("type") == "error":
+                    err_msg = str(msg.get("error", err_msg))
+                    break
+            except queue.Empty:
+                if not proc.is_alive():
+                    err_msg = f"实时分轨 worker 意外退出 (exitcode={proc.exitcode})"
+                    break
+
+        if not ready_ok:
+            self.stop(status_message=err_msg)
+            return False, err_msg
+
+        with self._lock:
+            self._active = True
+            self._status_message = f"实验性 2-stem 近实时分轨运行中 ({model_id})"
+            self.resource_manager.update_runtime_state(
+                active_ai_jobs=1,
+                loaded_models=1,
+                current_model=model_id,
+                current_task="experimental_live_2stem",
+                ai_worker_pid=proc.pid,
+                ai_buffer_seconds=0.0,
+            )
+            self._feed_thread = threading.Thread(
+                target=self._run_loop,
+                name="ListenScope-LiveSepCoordinator",
+                daemon=True,
+            )
+            self._feed_thread.start()
+        return True, self._status_message
+
+    def _append_output(self, vocals: np.ndarray, inst: np.ndarray) -> None:
+        n = int(min(vocals.shape[0], inst.shape[0]))
+        if n <= 0:
+            return
+        with self._lock:
+            if n >= self._out_cap_frames:
+                self._out_vocals[:, :] = vocals[-self._out_cap_frames :]
+                self._out_inst[:, :] = inst[-self._out_cap_frames :]
+                self._out_write_pos = 0
+                self._out_available = self._out_cap_frames
+                return
+            end = self._out_write_pos + n
+            if end <= self._out_cap_frames:
+                self._out_vocals[self._out_write_pos : end] = vocals[:n]
+                self._out_inst[self._out_write_pos : end] = inst[:n]
+            else:
+                first = self._out_cap_frames - self._out_write_pos
+                self._out_vocals[self._out_write_pos :] = vocals[:first]
+                self._out_inst[self._out_write_pos :] = inst[:first]
+                self._out_vocals[: n - first] = vocals[first:n]
+                self._out_inst[: n - first] = inst[first:n]
+            self._out_write_pos = end % self._out_cap_frames
+            self._out_available = min(self._out_cap_frames, self._out_available + n)
+
+    def pull_mixed_block(
+        self,
+        num_frames: int,
+        *,
+        vocals_gain: Optional[float] = None,
+        inst_gain: Optional[float] = None,
+    ) -> np.ndarray:
+        """Read latest assembled 2-stem block from fixed live ring buffer."""
+        with self._lock:
+            vg = self._vocals_gain if vocals_gain is None else float(vocals_gain)
+            ig = self._inst_gain if inst_gain is None else float(inst_gain)
+            take = min(num_frames, self._out_available)
+            out = np.zeros((num_frames, self.audio_config.channels), dtype=np.float32)
+            if take <= 0:
+                return out
+            start = (self._out_write_pos - take) % self._out_cap_frames
+            if start + take <= self._out_cap_frames:
+                voc = self._out_vocals[start : start + take]
+                inst = self._out_inst[start : start + take]
+            else:
+                first = self._out_cap_frames - start
+                voc = np.vstack([self._out_vocals[start:], self._out_vocals[: take - first]])
+                inst = np.vstack([self._out_inst[start:], self._out_inst[: take - first]])
+            mixed = np.clip(voc * vg + inst * ig, -1.0, 1.0)
+            out[-take:] = mixed
+            return out
+
+    def _run_loop(self) -> None:
+        sr = self.audio_config.sample_rate
+        chunk_duration = self._chunk_frames / float(sr)
+        seq = 0
+
+        while not self._stop_event.is_set():
+            snap = self.resource_manager.sample()
+            if snap.status in (ResourceStatus.WARNING, ResourceStatus.CRITICAL):
+                reason = "；".join(snap.status_reasons) or f"资源状态进入 {snap.status.value}"
+                logger.warning("ExperimentalLiveSeparator auto-stopping: %s", reason)
+                self._cleanup_worker_only()
+                with self._lock:
+                    self._active = False
+                    self._status_message = f"已自动停止实时分轨（{reason}）；基础频谱分析继续运行。"
+                self.resource_manager.update_runtime_state(
+                    active_ai_jobs=0,
+                    loaded_models=0,
+                    current_model=None,
+                    current_task=None,
+                    ai_worker_pid=None,
+                    ai_buffer_seconds=0.0,
+                )
+                return
+
+            # Drain any completed separated chunks from worker
+            if self._res_q is not None:
+                while True:
+                    try:
+                        msg = self._res_q.get_nowait()
+                    except queue.Empty:
+                        break
+                    except Exception:
+                        break
+                    mtype = msg.get("type")
+                    if mtype == "error":
+                        err = str(msg.get("error", "Worker 异常"))
+                        self._cleanup_worker_only()
+                        with self._lock:
+                            self._active = False
+                            self._status_message = f"实时分轨异常停止: {err}"
+                        self.resource_manager.update_runtime_state(
+                            active_ai_jobs=0,
+                            loaded_models=0,
+                            current_model=None,
+                            current_task=None,
+                            ai_worker_pid=None,
+                            ai_buffer_seconds=0.0,
+                        )
+                        return
+                    if mtype == "chunk":
+                        shape = tuple(msg["shape"])
+                        voc = np.frombuffer(msg["vocals"], dtype=np.float32).reshape(shape)
+                        inst = np.frombuffer(msg["instrumental"], dtype=np.float32).reshape(shape)
+                        infer_sec = float(msg.get("infer_sec", 0.0))
+                        assembled = self._overlap_add.process_chunk({"vocals": voc, "instrumental": inst})
+                        self._append_output(assembled["vocals"], assembled["instrumental"])
+                        rtf = infer_sec / max(0.01, chunk_duration)
+                        with self._lock:
+                            self._latest_rtf = rtf
+                            self._latest_latency_ms = infer_sec * 1000.0 + (self._overlap_frames / float(sr)) * 1000.0
+                        if rtf >= 1.25:
+                            logger.warning("Live separation RTF=%.2f >= 1.25, dropping stale backlog", rtf)
+
+            newest = self.ring_buffer.total_written_frames
+            backlog_frames = newest - self._last_read_abs_frame
+            max_buf_frames = int(round(self.ai_config.live_max_buffer_seconds * sr))
+
+            if backlog_frames > max_buf_frames:
+                # Drop older buffered audio so memory/latency never exceed cap
+                with self._lock:
+                    self._dropped_chunks += 1
+                self._last_read_abs_frame = max(0, newest - self._chunk_frames)
+                backlog_frames = newest - self._last_read_abs_frame
+
+            if backlog_frames >= self._chunk_frames and self._req_q is not None:
+                read_start = max(self.ring_buffer.oldest_abs_frame, self._last_read_abs_frame)
+                read_end = min(newest, read_start + self._chunk_frames)
+                pcm = self.ring_buffer.read_range(read_start, read_end)
+                if pcm.shape[0] >= self._chunk_frames:
+                    try:
+                        self._req_q.put_nowait((seq, pcm.tobytes(), pcm.shape))
+                        seq += 1
+                        self._last_read_abs_frame = read_start + self._hop_frames
+                    except queue.Full:
+                        with self._lock:
+                            self._dropped_chunks += 1
+                        self._last_read_abs_frame = newest - self._overlap_frames
+
+            backlog_sec = max(0.0, (newest - self._last_read_abs_frame) / float(sr))
+            self.resource_manager.update_runtime_state(
+                ai_buffer_seconds=min(self.ai_config.live_max_buffer_seconds, backlog_sec)
+            )
+            self._stop_event.wait(timeout=0.05)
+
+    def _cleanup_worker_only(self) -> None:
+        if self._proc_stop_ev is not None:
+            try:
+                self._proc_stop_ev.set()
+            except Exception:
+                pass
+        if self._req_q is not None:
+            try:
+                self._req_q.put_nowait(None)
+            except Exception:
+                pass
+        if self._proc is not None:
+            proc = self._proc
+            proc.join(timeout=1.0)
+            if proc.is_alive():
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                proc.join(timeout=0.5)
+            if proc.is_alive():
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                proc.join(timeout=0.3)
+            self._proc = None
+        for q in (self._req_q, self._res_q):
+            if q is not None:
+                try:
+                    while True:
+                        q.get_nowait()
+                except Exception:
+                    pass
+                close_fn = getattr(q, "close", None)
+                if callable(close_fn):
+                    try:
+                        close_fn()
+                    except Exception:
+                        pass
+        self._req_q = None
+        self._res_q = None
+        self._proc_stop_ev = None
+
+    def stop(self, *, status_message: str = "实验功能已停止") -> None:
+        self._stop_event.set()
+        thread = self._feed_thread
+        self._feed_thread = None
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        self._cleanup_worker_only()
+        with self._lock:
+            self._active = False
+            self._status_message = status_message
+        self.resource_manager.update_runtime_state(
+            active_ai_jobs=0,
+            loaded_models=0,
+            current_model=None,
+            current_task=None,
+            ai_worker_pid=None,
+            ai_buffer_seconds=0.0,
+        )

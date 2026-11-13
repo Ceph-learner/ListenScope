@@ -1,4 +1,5 @@
-# ListenScope Phase 1 Windows WASAPI Audio Capture Dependencies
+# ListenScope Core Windows Application Dependencies (GUI + CPU Analysis + WASAPI Process Loopback)
+# Kept strictly separate from AI Worker GPU dependencies (see requirements-ai.txt)
 -r requirements-core.txt
 proc-tap>=1.1.1
 pycaw>=20240210

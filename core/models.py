@@ -1,9 +1,10 @@
-"""Typed data models for system probes, resource monitoring, and audio capture."""
+"""Typed data models for system probes, resource monitoring, audio capture, DSP analysis, AI jobs, and MIDI."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
 
@@ -17,6 +18,25 @@ class CaptureMode(str, Enum):
     PROCESS_LOOPBACK = "process_loopback"
     SYSTEM_LOOPBACK = "system_loopback"
     SYNTHETIC_SIMULATION = "synthetic_simulation"
+
+
+class AIJobState(str, Enum):
+    IDLE = "Idle"
+    PREPARING = "Preparing"
+    LOADING_MODEL = "LoadingModel"
+    INFERRING = "Inferring"
+    WRITING = "Writing"
+    COMPLETED = "Completed"
+    CANCELLED = "Cancelled"
+    OOM_ERROR = "OOMError"
+    FAILED = "Failed"
+    EMERGENCY_STOPPED = "EmergencyStopped"
+
+
+class OOMRecoveryAction(str, Enum):
+    REDUCE_SEGMENT = "reduce_segment"
+    LIGHTER_MODEL = "lighter_model"
+    CPU_FALLBACK = "cpu_fallback"
 
 
 @dataclass
@@ -114,7 +134,7 @@ class AudioProcessInfo:
     pid: int
     name: str
     exe: Optional[str] = None
-    session_state: str = "unknown"  # active, inactive, expired, unknown
+    session_state: str = "unknown"
     parent_pid: Optional[int] = None
     parent_name: Optional[str] = None
     child_pids: list[int] = field(default_factory=list)
@@ -150,3 +170,146 @@ class CaptureStats:
     is_running: bool = False
     warning_message: Optional[str] = None
     last_error: Optional[str] = None
+
+
+@dataclass
+class ChordEstimate:
+    primary: str
+    secondary: str
+    stability: str  # High, Medium, Low, Silent
+    correlation: float
+    margin: float
+    is_silent: bool = False
+
+
+@dataclass
+class KeyEstimate:
+    primary: str
+    secondary: str
+    stability: str  # High, Medium, Low, Insufficient
+    correlation: float
+    margin: float
+    relation_note: str = ""
+    key_signature_note: str = "注意：调性中心(Key)与调号(Key Signature)不同，关系大小调/调式混合可能共享调号"
+    modulation_hint: bool = False
+
+
+@dataclass
+class TempoEstimate:
+    bpm: Optional[float]
+    stability: str  # High, Medium, Low, Unknown
+    confidence_score: float
+
+
+@dataclass
+class PitchEstimate:
+    frequency_hz: Optional[float]
+    note_name: str
+    cents_offset: float
+    confidence: float
+
+
+@dataclass
+class AnalysisSnapshot:
+    timestamp: float
+    waveform_min: list[float]
+    waveform_max: list[float]
+    fft_freqs_hz: list[float]
+    fft_db: list[float]
+    log_freqs_hz: list[float]
+    log_spectrum_db: list[float]
+    chroma_12: list[float]
+    chord: ChordEstimate
+    key: KeyEstimate
+    tempo: TempoEstimate
+    pitch: PitchEstimate
+    rms_dbfs: float
+    peak_dbfs: float
+    window_seconds: float
+
+
+@dataclass
+class AIJobRequest:
+    task_id: str
+    input_wav_path: str
+    output_dir: str
+    stem_mode: str  # "2stem" or "4stem"
+    model_id: str
+    use_gpu: bool = True
+    segment_seconds: int = 10
+    overlap: float = 0.25
+    chunk_seconds: float = 20.0
+    simulate_oom: bool = False
+    simulate_delay_sec: float = 0.0
+    use_mock_backend: bool = False
+
+
+@dataclass
+class AIJobProgress:
+    task_id: str
+    state: AIJobState
+    progress: float  # 0.0 to 1.0
+    message: str = ""
+    current_chunk: int = 0
+    total_chunks: int = 0
+    worker_pid: Optional[int] = None
+    peak_ram_mb: float = 0.0
+    peak_vram_mb: Optional[float] = None
+
+
+@dataclass
+class AIJobResult:
+    task_id: str
+    state: AIJobState
+    stem_paths: dict[str, str] = field(default_factory=dict)
+    elapsed_sec: float = 0.0
+    input_duration_sec: float = 0.0
+    rtf: Optional[float] = None
+    device_used: str = "CPU"
+    model_id: str = ""
+    architecture: str = ""
+    oom_occurred: bool = False
+    fallback_used: bool = False
+    recovery_options: list[OOMRecoveryAction] = field(default_factory=list)
+    start_ram_mb: float = 0.0
+    peak_ram_mb: float = 0.0
+    end_ram_mb: float = 0.0
+    start_vram_mb: Optional[float] = None
+    peak_vram_mb: Optional[float] = None
+    end_vram_mb: Optional[float] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class LiveSeparationMetrics:
+    active: bool
+    model_id: str
+    latency_ms: float
+    rtf: float
+    main_ram_mb: float
+    worker_ram_mb: float
+    vram_free_mb: Optional[float]
+    gpu_util_pct: Optional[float]
+    buffer_seconds: float
+    max_buffer_seconds: float
+    dropped_chunks: int
+    status_message: str
+
+
+@dataclass
+class MidiNoteCandidate:
+    pitch_midi: int
+    note_name: str
+    start_sec: float
+    end_sec: float
+    velocity: int
+    confidence: float
+
+
+@dataclass
+class MidiTranscriptionResult:
+    source_stem_name: str
+    output_midi_path: Optional[Path]
+    notes: list[MidiNoteCandidate] = field(default_factory=list)
+    backend_used: str = "basic-pitch"
+    warning: Optional[str] = None

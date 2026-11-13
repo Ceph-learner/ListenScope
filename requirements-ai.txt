@@ -1,0 +1,17 @@
+# ListenScope AI Worker Isolated Environment Dependencies (RTX 5060 Ti 8GB VRAM / Blackwell sm_120)
+# Install PyTorch CUDA build FIRST according to RTX 5060 Ti Blackwell compatibility:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+#   (or cu130 / newer matching driver; PyTorch >= 2.7.0 required for sm_120)
+#
+# Then install matching ONNX Runtime GPU + separation + Basic Pitch packages:
+# Verify afterwards using: python scripts/check_env.py --write-report
+numpy>=1.24.0
+scipy>=1.10.0
+psutil>=5.9.0
+nvidia-ml-py>=12.0.0
+soundfile>=0.12.0
+onnxruntime-gpu>=1.21.0
+audio-separator[gpu]>=0.30.0
+demucs>=4.0.1
+basic-pitch[onnx]>=0.4.0
+mido>=1.3.0

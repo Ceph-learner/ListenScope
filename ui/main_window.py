@@ -1,0 +1,521 @@
+"""ListenScope MainWindow: desktop UI uniting capture, real-time DSP, 120s A/B, AI separation, mixer, and Emergency Stop."""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import numpy as np
+from PySide6 import QtCore, QtWidgets
+
+from ai.models import list_models
+from audio.playback import StemMixerEngine
+from core.config import AIConfig, ResourceLimits
+from core.logging import PerformanceRecord
+from core.models import (
+    AIJobProgress,
+    AIJobResult,
+    AnalysisSnapshot,
+    AudioProcessInfo,
+    CaptureMode,
+    CaptureStats,
+    LiveSeparationMetrics,
+    MidiTranscriptionResult,
+    ResourceSnapshot,
+    SystemHardwareReport,
+)
+
+from .chroma_widget import ChromaAndHarmonyWidget
+from .mixer_widget import StemMixerWidget
+from .resource_widget import ResourceMonitorBar, ResourceStatusPanel
+from .settings_dialog import SettingsDialog
+from .spectrum_widget import SpectrumAnalysisWidget
+
+
+DARK_STYLESHEET = """
+QMainWindow, QWidget {
+    background-color: #14161A;
+    color: #E6EAF0;
+    font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    font-size: 12px;
+}
+QGroupBox {
+    border: 1px solid #2C323C;
+    border-radius: 6px;
+    margin-top: 8px;
+    padding-top: 10px;
+    font-weight: 600;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: #B4BECB;
+}
+QPushButton {
+    background-color: #232830;
+    border: 1px solid #38414E;
+    border-radius: 5px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #2E3540;
+}
+QPushButton:checked {
+    background-color: #1F6FEB;
+    border-color: #4EA8DE;
+}
+QPushButton:disabled {
+    color: #6B7480;
+    background-color: #1B1E24;
+}
+QComboBox, QDoubleSpinBox, QLineEdit, QPlainTextEdit, QTableWidget {
+    background-color: #1A1E24;
+    border: 1px solid #303742;
+    border-radius: 4px;
+    padding: 3px 6px;
+}
+QTabWidget::pane {
+    border: 1px solid #2C323C;
+}
+QTabBar::tab {
+    background: #1C2026;
+    padding: 7px 14px;
+    border: 1px solid #2C323C;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+}
+QTabBar::tab:selected {
+    background: #28303B;
+    color: #7EE2B8;
+    font-weight: 600;
+}
+"""
+
+
+class ExperimentalLiveWidget(QtWidgets.QWidget):
+    """Phase 8 Experimental Near-Real-Time 2-Stem tab (default OFF)."""
+
+    benchmark_requested = QtCore.Signal(str)
+    start_requested = QtCore.Signal(str)
+    stop_requested = QtCore.Signal()
+    balance_changed = QtCore.Signal(float, float)
+
+    def __init__(self, ai_config: AIConfig, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.ai_config = ai_config
+        root = QtWidgets.QVBoxLayout(self)
+        root.setSpacing(10)
+
+        banner = QtWidgets.QLabel(
+            "⚠️ 实验功能 (参考 Moises Live 体验)：默认关闭！仅支持 2-stem (人声 + 伴奏)，并在独立子进程运行；\n"
+            "若检测 RTF >= 1.0 或系统 RAM/VRAM 进入警戒线，将自动停止以保护 8GB 显存与 16GB 内存安全，普通实时频谱继续运行。"
+        )
+        banner.setWordWrap(True)
+        banner.setStyleSheet(
+            "padding: 10px; background: #2A2310; color: #FFD166; border: 1px solid #F5A623; border-radius: 6px;"
+        )
+        root.addWidget(banner)
+
+        ctrl = QtWidgets.QHBoxLayout()
+        self.model_combo = QtWidgets.QComboBox()
+        for m in list_models(stem_mode="2stem", ai_config=ai_config, include_experimental=False):
+            self.model_combo.addItem(f"{m.display_name} [{m.architecture}]", m.model_id)
+
+        self.bench_btn = QtWidgets.QPushButton("运行 RTF 速度基准测试")
+        self.bench_btn.clicked.connect(lambda: self.benchmark_requested.emit(self.selected_model_id()))
+        self.toggle_btn = QtWidgets.QPushButton("开启实验性近实时分轨")
+        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.clicked.connect(self._on_toggle)
+
+        ctrl.addWidget(QtWidgets.QLabel("2-Stem 模型:"))
+        ctrl.addWidget(self.model_combo, 1)
+        ctrl.addWidget(self.bench_btn)
+        ctrl.addWidget(self.toggle_btn)
+        root.addLayout(ctrl)
+
+        self.bench_lbl = QtWidgets.QLabel("基准测试结果: 尚未运行")
+        self.bench_lbl.setWordWrap(True)
+        root.addWidget(self.bench_lbl)
+
+        # Balance sliders
+        bal_box = QtWidgets.QGroupBox("实时人声 / 伴奏混音比例")
+        bal_form = QtWidgets.QFormLayout(bal_box)
+        self.vocals_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.vocals_slider.setRange(0, 150)
+        self.vocals_slider.setValue(100)
+        self.inst_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.inst_slider.setRange(0, 150)
+        self.inst_slider.setValue(100)
+        self.vocals_slider.valueChanged.connect(self._emit_balance)
+        self.inst_slider.valueChanged.connect(self._emit_balance)
+        bal_form.addRow("人声 (Vocals):", self.vocals_slider)
+        bal_form.addRow("伴奏 (Instrumental):", self.inst_slider)
+        root.addWidget(bal_box)
+
+        # Telemetry metrics
+        met_box = QtWidgets.QGroupBox("实时分轨监控指标")
+        met_grid = QtWidgets.QGridLayout(met_box)
+        self.lbl_state = QtWidgets.QLabel("状态: 已关闭 (默认关闭)")
+        self.lbl_latency = QtWidgets.QLabel("延迟: 0.0 ms")
+        self.lbl_rtf = QtWidgets.QLabel("RTF: 0.000")
+        self.lbl_mem = QtWidgets.QLabel("RAM (主/Worker): -")
+        self.lbl_vram = QtWidgets.QLabel("空闲 VRAM / GPU%: -")
+        self.lbl_buf = QtWidgets.QLabel("实时缓冲 / 丢弃块: 0.0 / 6.0 s (Dropped=0)")
+        met_grid.addWidget(self.lbl_state, 0, 0, 1, 2)
+        met_grid.addWidget(self.lbl_latency, 1, 0)
+        met_grid.addWidget(self.lbl_rtf, 1, 1)
+        met_grid.addWidget(self.lbl_mem, 2, 0)
+        met_grid.addWidget(self.lbl_vram, 2, 1)
+        met_grid.addWidget(self.lbl_buf, 3, 0, 1, 2)
+        root.addWidget(met_box)
+        root.addStretch(1)
+
+    def selected_model_id(self) -> str:
+        return str(self.model_combo.currentData() or "mdx_low_vram_2stem")
+
+    def _on_toggle(self, checked: bool) -> None:
+        if checked:
+            self.start_requested.emit(self.selected_model_id())
+        else:
+            self.stop_requested.emit()
+
+    def _emit_balance(self) -> None:
+        self.balance_changed.emit(self.vocals_slider.value() / 100.0, self.inst_slider.value() / 100.0)
+
+    @QtCore.Slot(str)
+    def set_benchmark_text(self, text: str) -> None:
+        self.bench_lbl.setText(text)
+
+    def update_metrics(self, m: LiveSeparationMetrics) -> None:
+        self.toggle_btn.blockSignals(True)
+        self.toggle_btn.setChecked(m.active)
+        self.toggle_btn.setText("停止实验性近实时分轨" if m.active else "开启实验性近实时分轨")
+        self.toggle_btn.blockSignals(False)
+
+        self.lbl_state.setText(f"状态: {m.status_message}")
+        self.lbl_latency.setText(f"分块估计延迟: {m.latency_ms:.1f} ms")
+        self.lbl_rtf.setText(f"实时率 RTF: {m.rtf:.3f} {'(可实时)' if 0 < m.rtf < 1.0 else ''}")
+        self.lbl_mem.setText(f"RAM (主={m.main_ram_mb:.1f} MB / Worker={m.worker_ram_mb:.1f} MB)")
+        vram_txt = f"{m.vram_free_mb:.0f} MB" if m.vram_free_mb is not None else "N/A"
+        util_txt = f"{m.gpu_util_pct:.0f}%" if m.gpu_util_pct is not None else "N/A"
+        self.lbl_vram.setText(f"空闲 VRAM={vram_txt} | GPU={util_txt}")
+        self.lbl_buf.setText(
+            f"缓冲: {m.buffer_seconds:.2f} / {m.max_buffer_seconds:.1f} s | 丢弃块(Bounded Drop): {m.dropped_chunks}"
+        )
+
+
+class ListenScopeMainWindow(QtWidgets.QMainWindow):
+    """Primary desktop interface for ListenScope."""
+
+    capture_toggle_requested = QtCore.Signal(bool, object)  # (start_bool, source_descriptor_dict)
+    refresh_sources_requested = QtCore.Signal()
+    ab_select_recent_requested = QtCore.Signal(float)
+    ab_set_range_sec_requested = QtCore.Signal(float, float)
+    ab_play_requested = QtCore.Signal()
+    ab_stop_requested = QtCore.Signal()
+    ai_separate_requested = QtCore.Signal(str, str, int, bool)  # (stem_mode, model_id, segment, use_gpu)
+    emergency_stop_requested = QtCore.Signal()
+    settings_applied = QtCore.Signal(object, object, str)
+
+    def __init__(
+        self,
+        *,
+        hardware_report: SystemHardwareReport,
+        resource_limits: ResourceLimits,
+        ai_config: AIConfig,
+        mixer_engine: StemMixerEngine,
+        ai_python_executable: str = "",
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("ListenScope — 本地音乐分析 · A/B 循环 · 安全资源防护 AI 分轨")
+        self.resize(1340, 860)
+        self.setStyleSheet(DARK_STYLESHEET)
+
+        self._hardware_report = hardware_report
+        self._resource_limits = resource_limits
+        self._ai_config = ai_config
+        self._ai_python_executable = ai_python_executable
+        self._closing_handler = None
+
+        central = QtWidgets.QWidget()
+        self.setCentralWidget(central)
+        main_layout = QtWidgets.QVBoxLayout(central)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(8)
+
+        # 1. TOP BAR: Source selector + Capture + RAM/VRAM + AI status + Settings + ALWAYS-VISIBLE Emergency Stop
+        top_bar = QtWidgets.QHBoxLayout()
+        top_bar.setSpacing(8)
+
+        top_bar.addWidget(QtWidgets.QLabel("音频源:"))
+        self.source_combo = QtWidgets.QComboBox()
+        self.source_combo.setMinimumWidth(260)
+        self.refresh_btn = QtWidgets.QPushButton("刷新进程")
+        self.refresh_btn.clicked.connect(self.refresh_sources_requested.emit)
+
+        self.capture_btn = QtWidgets.QPushButton("开始捕获")
+        self.capture_btn.setCheckable(True)
+        self.capture_btn.clicked.connect(self._on_capture_clicked)
+
+        self.capture_status_lbl = QtWidgets.QLabel("未捕获")
+        self.capture_status_lbl.setStyleSheet("padding: 3px 8px; background: #1C2026; border-radius: 4px;")
+
+        self.resource_bar = ResourceMonitorBar()
+
+        self.ai_status_badge = QtWidgets.QLabel("AI: Idle")
+        self.ai_status_badge.setStyleSheet("padding: 3px 8px; background: #1C2026; border: 1px solid #303742; border-radius: 4px;")
+
+        self.settings_btn = QtWidgets.QPushButton("设置 / 系统状态")
+        self.settings_btn.clicked.connect(self.open_settings_dialog)
+
+        self.emergency_stop_btn = QtWidgets.QPushButton("紧急停止 AI")
+        self.emergency_stop_btn.setStyleSheet(
+            "QPushButton { background-color: #B81D24; color: #FFFFFF; border: 2px solid #FF6B6B; "
+            "font-weight: 700; padding: 6px 14px; border-radius: 6px; }"
+            "QPushButton:hover { background-color: #D9262E; }"
+        )
+        self.emergency_stop_btn.clicked.connect(self.emergency_stop_requested.emit)
+
+        top_bar.addWidget(self.source_combo)
+        top_bar.addWidget(self.refresh_btn)
+        top_bar.addWidget(self.capture_btn)
+        top_bar.addWidget(self.capture_status_lbl)
+        top_bar.addStretch(1)
+        top_bar.addWidget(self.resource_bar)
+        top_bar.addWidget(self.ai_status_badge)
+        top_bar.addWidget(self.settings_btn)
+        top_bar.addWidget(self.emergency_stop_btn)
+        main_layout.addLayout(top_bar)
+
+        # Dismissible warning / notice banner (QQ Music A/B hint, System Loopback warning, GPU block)
+        self.notice_banner = QtWidgets.QLabel("")
+        self.notice_banner.setWordWrap(True)
+        self.notice_banner.setVisible(False)
+        self.notice_banner.setStyleSheet(
+            "padding: 6px 10px; background: #332400; color: #FFD166; border: 1px solid #F5A623; border-radius: 5px;"
+        )
+        main_layout.addWidget(self.notice_banner)
+
+        # 2. CENTER TABS
+        self.tabs = QtWidgets.QTabWidget()
+        self.spectrum_widget = SpectrumAnalysisWidget()
+        self.chroma_widget = ChromaAndHarmonyWidget()
+        self.mixer_widget = StemMixerWidget(mixer_engine)
+        self.resource_panel = ResourceStatusPanel()
+        self.live_widget = ExperimentalLiveWidget(ai_config)
+
+        self.tabs.addTab(self.spectrum_widget, "1. 实时频谱 & 波形")
+        self.tabs.addTab(self.chroma_widget, "2. Chroma / 和弦 / 调性 / BPM")
+        self.tabs.addTab(self.mixer_widget, "3. 分轨混音 & MIDI 扒谱")
+        self.tabs.addTab(self.resource_panel, "4. 系统资源 & 性能日志")
+        self.tabs.addTab(self.live_widget, "5. 实验功能: 近实时分轨 (默认关闭)")
+        main_layout.addWidget(self.tabs, 1)
+
+        # 3. BOTTOM 120s HISTORY TIMELINE + A/B LOOP + AI TRIGGER BAR
+        bottom_box = QtWidgets.QGroupBox("最近 120s 播放历史环形缓冲 · A/B 循环与片段 AI 分轨 (仅保留最近 120s / ~46MB)")
+        bottom_l = QtWidgets.QVBoxLayout(bottom_box)
+
+        row_a = QtWidgets.QHBoxLayout()
+        self.history_coverage_lbl = QtWidgets.QLabel("已缓冲: 0.0 / 120.0 s")
+        self.recent_10_btn = QtWidgets.QPushButton("选最近 10s")
+        self.recent_30_btn = QtWidgets.QPushButton("选最近 30s")
+        self.recent_60_btn = QtWidgets.QPushButton("选最近 60s")
+        self.recent_10_btn.clicked.connect(lambda: self._pick_recent(10.0))
+        self.recent_30_btn.clicked.connect(lambda: self._pick_recent(30.0))
+        self.recent_60_btn.clicked.connect(lambda: self._pick_recent(60.0))
+
+        self.start_ago_spin = QtWidgets.QDoubleSpinBox()
+        self.start_ago_spin.setRange(1.0, 120.0)
+        self.start_ago_spin.setValue(30.0)
+        self.start_ago_spin.setPrefix("倒退 ")
+        self.start_ago_spin.setSuffix(" s")
+
+        self.end_ago_spin = QtWidgets.QDoubleSpinBox()
+        self.end_ago_spin.setRange(0.0, 119.0)
+        self.end_ago_spin.setValue(0.0)
+        self.end_ago_spin.setPrefix("至倒退 ")
+        self.end_ago_spin.setSuffix(" s")
+
+        self.apply_ab_btn = QtWidgets.QPushButton("设定 A/B 区间")
+        self.apply_ab_btn.clicked.connect(
+            lambda: self.ab_set_range_sec_requested.emit(self.start_ago_spin.value(), self.end_ago_spin.value())
+        )
+
+        self.ab_play_btn = QtWidgets.QPushButton("A/B 循环播放")
+        self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
+        self.ab_play_btn.clicked.connect(self.ab_play_requested.emit)
+        self.ab_stop_btn.clicked.connect(self.ab_stop_requested.emit)
+
+        row_a.addWidget(self.history_coverage_lbl)
+        row_a.addWidget(self.recent_10_btn)
+        row_a.addWidget(self.recent_30_btn)
+        row_a.addWidget(self.recent_60_btn)
+        row_a.addWidget(self.start_ago_spin)
+        row_a.addWidget(self.end_ago_spin)
+        row_a.addWidget(self.apply_ab_btn)
+        row_a.addWidget(self.ab_play_btn)
+        row_a.addWidget(self.ab_stop_btn)
+        row_a.addStretch(1)
+        bottom_l.addLayout(row_a)
+
+        row_b = QtWidgets.QHBoxLayout()
+        self.ai_2stem_combo = QtWidgets.QComboBox()
+        self._refresh_model_combos()
+        self.ai_gpu_chk = QtWidgets.QCheckBox("优先 GPU (需通过 RTX 5060 Ti 检查)")
+        self.ai_gpu_chk.setChecked(hardware_report.gpu_ai_ready)
+
+        self.segment_spin = QtWidgets.QSpinBox()
+        self.segment_spin.setRange(4, 10)
+        self.segment_spin.setValue(10)
+        self.segment_spin.setPrefix("Demucs seg=")
+        self.segment_spin.setSuffix("s")
+
+        self.sep_2stem_btn = QtWidgets.QPushButton("AI 2-Stem 分轨 (人声/伴奏)")
+        self.sep_2stem_btn.clicked.connect(self._on_sep_2stem)
+        self.sep_4stem_btn = QtWidgets.QPushButton("AI 4-Stem 分轨 (HTDemucs)")
+        self.sep_4stem_btn.clicked.connect(self._on_sep_4stem)
+
+        row_b.addWidget(QtWidgets.QLabel("2-Stem 模型:"))
+        row_b.addWidget(self.ai_2stem_combo)
+        row_b.addWidget(self.segment_spin)
+        row_b.addWidget(self.ai_gpu_chk)
+        row_b.addStretch(1)
+        row_b.addWidget(self.sep_2stem_btn)
+        row_b.addWidget(self.sep_4stem_btn)
+        bottom_l.addLayout(row_b)
+
+        main_layout.addWidget(bottom_box)
+
+    def set_closing_handler(self, fn) -> None:
+        self._closing_handler = fn
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._closing_handler is not None:
+            try:
+                self._closing_handler()
+            except Exception:
+                pass
+        super().closeEvent(event)
+
+    def _refresh_model_combos(self) -> None:
+        self.ai_2stem_combo.clear()
+        for m in list_models(stem_mode="2stem", ai_config=self._ai_config):
+            self.ai_2stem_combo.addItem(m.display_name, m.model_id)
+
+    def _pick_recent(self, sec: float) -> None:
+        self.start_ago_spin.setValue(sec)
+        self.end_ago_spin.setValue(0.0)
+        self.ab_select_recent_requested.emit(sec)
+
+    def _on_sep_2stem(self) -> None:
+        model_id = str(self.ai_2stem_combo.currentData() or "mdx_low_vram_2stem")
+        self.ai_separate_requested.emit("2stem", model_id, 256, self.ai_gpu_chk.isChecked())
+
+    def _on_sep_4stem(self) -> None:
+        self.ai_separate_requested.emit("4stem", "htdemucs_4stem", self.segment_spin.value(), self.ai_gpu_chk.isChecked())
+
+    def _on_capture_clicked(self, checked: bool) -> None:
+        desc = self.source_combo.currentData() or {"kind": "synthetic", "pattern": "switching"}
+        self.capture_toggle_requested.emit(checked, desc)
+
+    def populate_audio_sources(self, processes: list[AudioProcessInfo], *, include_synthetic: bool = True) -> None:
+        prev = self.source_combo.currentData()
+        self.source_combo.clear()
+        for p in processes:
+            self.source_combo.addItem(
+                f"[进程] {p.name} (PID {p.pid}, RSS {p.rss_mb:.0f}MB)",
+                {"kind": "process", "pid": p.pid, "name": p.name},
+            )
+        self.source_combo.addItem(
+            "[兜底] 系统 WASAPI Loopback (会混入其他应用声音)",
+            {"kind": "system_loopback"},
+        )
+        if include_synthetic:
+            self.source_combo.addItem(
+                "[测试信号] Synthetic Switching (440Hz/静音/659Hz)",
+                {"kind": "synthetic", "pattern": "switching"},
+            )
+        if prev is not None:
+            for idx in range(self.source_combo.count()):
+                if self.source_combo.itemData(idx) == prev:
+                    self.source_combo.setCurrentIndex(idx)
+                    break
+
+    def set_capture_active_ui(self, active: bool) -> None:
+        self.capture_btn.blockSignals(True)
+        self.capture_btn.setChecked(active)
+        self.capture_btn.setText("停止捕获" if active else "开始捕获")
+        self.capture_btn.blockSignals(False)
+
+    def show_banner_message(self, text: str) -> None:
+        if not text:
+            self.notice_banner.setVisible(False)
+            self.notice_banner.setText("")
+        else:
+            self.notice_banner.setText(text)
+            self.notice_banner.setVisible(True)
+
+    def update_capture_stats(self, stats: CaptureStats, ring_available_sec: float) -> None:
+        self.set_capture_active_ui(stats.is_running)
+        silence = "静音" if stats.is_silent else "有信号"
+        self.capture_status_lbl.setText(
+            f"{stats.mode.value} | {stats.process_name} | RMS {stats.rms_dbfs:.1f} dBFS [{silence}] | "
+            f"Drop(Over)={stats.buffer_overruns} Under={stats.buffer_underruns}"
+        )
+        self.history_coverage_lbl.setText(f"已缓冲: {ring_available_sec:.1f} / 120.0 s")
+        if stats.mode == CaptureMode.SYSTEM_LOOPBACK and stats.warning_message:
+            self.show_banner_message(stats.warning_message)
+        elif stats.last_error:
+            self.show_banner_message(stats.last_error)
+
+    def update_resource_snapshot(
+        self,
+        snap: ResourceSnapshot,
+        perf_records: list[PerformanceRecord],
+        logs: list[str],
+    ) -> None:
+        self.resource_bar.update_snapshot(snap)
+        self.resource_panel.update_snapshot(snap)
+        self.resource_panel.update_performance_records(perf_records)
+        self.resource_panel.update_logs(logs)
+
+    def update_analysis_snapshot(
+        self,
+        snap: AnalysisSnapshot,
+        spectrogram: Optional[np.ndarray],
+        chroma_history: Optional[np.ndarray],
+    ) -> None:
+        self.spectrum_widget.update_analysis(snap, spectrogram=spectrogram)
+        self.chroma_widget.update_analysis(snap, chroma_history=chroma_history)
+
+    def update_ai_progress(self, prog: AIJobProgress) -> None:
+        self.ai_status_badge.setText(f"AI: {prog.state.value} ({int(round(prog.progress * 100))}%)")
+        self.mixer_widget.update_ai_progress(prog)
+
+    def handle_ai_result(self, res: AIJobResult) -> None:
+        self.ai_status_badge.setText(f"AI: {res.state.value}")
+        self.mixer_widget.handle_ai_result(res)
+
+    def update_live_metrics(self, metrics: LiveSeparationMetrics) -> None:
+        self.live_widget.update_metrics(metrics)
+
+    def display_midi_result(self, result: MidiTranscriptionResult) -> None:
+        self.mixer_widget.display_midi_result(result)
+
+    def open_settings_dialog(self) -> None:
+        dlg = SettingsDialog(
+            self._hardware_report,
+            self._resource_limits,
+            self._ai_config,
+            ai_python_executable=self._ai_python_executable,
+            parent=self,
+        )
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            if dlg.updated_limits is not None and dlg.updated_ai_config is not None:
+                self._resource_limits = dlg.updated_limits
+                self._ai_config = dlg.updated_ai_config
+                self._ai_python_executable = dlg.updated_ai_python
+                self._refresh_model_combos()
+                self.settings_applied.emit(self._resource_limits, self._ai_config, self._ai_python_executable)

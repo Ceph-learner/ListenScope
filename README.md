@@ -1,59 +1,73 @@
 # ListenScope
 
-完全免费、离线、本地运行的 Windows 音乐分析与扒谱辅助工具（当前已完成 **Phase 0 环境与资源监控基础** 与 **Phase 1 Windows WASAPI 音频捕获 PoC**）。
+**完全免费、离线、本地运行** 的 Windows 音乐分析、A/B 循环与扒谱辅助桌面软件。无需下载 QQ 音乐加密歌曲文件、无需解密缓存、无需绕过 DRM，即可一边在 QQ 音乐（或任意桌面应用）正常听歌，一边实时分析频谱/Chroma/和弦/调性/BPM，并对最近 120 秒历史片段进行 A/B 循环与本地 AI 分轨（2-Stem / 4-Stem）及单轨 MIDI 转录。
 
-## 硬性目标硬件约束（不可误写）
+---
 
-- **目标系统**: Windows 10 / 11 (20H1+, Build >= 19041)
-- **GPU**: NVIDIA GeForce RTX 5060 Ti (Blackwell, `sm_120`)
-- **GPU 显存**: **8GB VRAM**（非 16GB VRAM）
+## 硬性目标硬件规范与资源安全原则
+
+- **目标系统**: Windows 10 / 11 (20H1+, Build >= `19041`)
+- **目标 GPU**: `NVIDIA GeForce RTX 5060 Ti` (Blackwell, `sm_120`)
+- **GPU 显存**: **8GB VRAM**（严格按 8GB 预算，绝非 16GB VRAM）
 - **系统内存**: **16GB RAM**
 
-所有默认资源策略均以 **8GB VRAM + 16GB RAM** 为硬边界：
-- 实时基础分析默认仅使用 CPU，不加载 PyTorch。
-- 音频队列与监测历史均为固定有界上限，禁止无限增长。
-- 后续阶段 AI 分轨将在独立子进程中严格串行运行（每次最多 1 个模型、1 个任务）。
+核心安全准则：
+1. **CPU 实时基础分析**：波形、FFT/对数频谱、12-bin Chroma、和弦、调性、BPM 全部纯 CPU 轻量运行，默认不加载 PyTorch。
+2. **120 秒固定 PCM 环形缓冲**：统一 `48kHz / stereo / float32`（固定预分配 ~46.08 MB），禁止无限音频队列、禁止保留整场历史。
+3. **AI 独立子进程 + 严格串行单模型**：每次最多 1 个任务、1 个模型；按需加载、流式分块推理、任务结束后释放引用并退出子进程由 OS 回收 100% RAM/VRAM。
+4. **明确 GPU 准入检查**：启动时检测驱动、NVML、`torch.cuda.is_available()`、`sm_120` 核函数、ONNX Runtime `CUDAExecutionProvider`；不满足直接阻断并提示修复，不静默伪装正常。
+5. **随时可用的红色「紧急停止 AI」按钮**：强制结束 worker、清理 IPC 与不完整临时输出、重采样 RAM/VRAM，主界面与实时捕获永不中断。
 
-## 当前仓库范围（仅 Phase 0 + Phase 1）
+---
 
-按项目开发顺序，当前仅实现并验证：
-1. **Phase 0 (`core/system_probe.py`, `scripts/check_env.py`, `core/resource_manager.py`)**:
-   - 系统 RAM/可用 RAM、GPU/VRAM/驱动（NVML + `nvidia-smi` fallback）、PyTorch CUDA/`sm_120` 冒烟检测、ONNX Runtime `CUDAExecutionProvider` 检测。
-   - 自动生成 `SYSTEM_REPORT.md`。
-   - `ResourceManager` + `ResourceLimits`：集中管理 RAM/VRAM 警戒线与 AI 启动准入控制。
-2. **Phase 1 (`audio/`, `capture_test.py`)**:
-   - 枚举音频会话进程（Windows 通过 `pycaw` + `psutil`，支持 QQ 音乐、浏览器、播放器、Cubase 等任意应用，不硬编码 exe 名）。
-   - Windows WASAPI Process Loopback 主路径（`proctap`）与 System WASAPI Loopback 兜底路径（`PyAudioWPatch`，强制提示“其他应用声音可能被混入”）。
-   - 内部统一转换为 `48000 Hz / 2ch / float32` PCM。
-   - `capture_test.py` 实时显示 PID、进程名、采样率、声道、RMS、Peak、每秒 frames、buffer underrun/overrun、RAM/VRAM 状态。
+## 模块架构
 
-> [!WARNING]
-> 本仓库目前在 **Linux 开发沙箱** 中完成代码与单元测试编写，**Windows WASAPI Process Loopback 与 RTX 5060 Ti 真机测试尚未在 Windows 真机验证**。请在目标 Windows 电脑上按下方步骤实测。
-
-## Windows 真机安装与验证步骤（Phase 0 + Phase 1）
-
-```powershell
-# 1. 创建独立 Core 虚拟环境（Python 3.11 或 3.12）
-python -m venv .venv-core
-.\.venv-core\Scripts\activate
-pip install -r requirements-windows.txt
-
-# 2. 运行 Phase 0 硬件与环境检测并更新 SYSTEM_REPORT.md
-python scripts\check_env.py --write-report
-
-# 3. 列出当前正在发声的进程（播放 QQ 音乐后运行）
-python capture_test.py --list-procs
-
-# 4. 捕获 QQ 音乐（或任意应用，如 chrome.exe / Cubase13.exe）
-python capture_test.py --name QQMusic.exe --fallback-system
-
-# 5. 或使用交互式进程选择
-python capture_test.py
+```text
+ListenScope/
+├── core/               # Hardware probe (Phase 0), ResourceLimits, ResourceManager, PerformanceLogger
+├── audio/              # WASAPI Process/System Loopback, PCM normalize, FixedRingBuffer(120s), HistoryABPlayer, StemMixerEngine
+├── analysis/           # CPU DSP: SpectrumAnalyzer, ChromaExtractor, ChordDetector, KeyDetector, TempoEstimator, PitchEstimator, Basic Pitch MIDI adapter
+├── ai/                 # Model registry, chunked streaming WAV guard, isolated AIWorkerProcess, AIJobManager + Emergency Stop
+├── separation/         # Genuine 2-stem MDX-ONNX backend & strict resource-capped 4-stem HTDemucs backend
+├── streaming/          # Phase 8 Experimental Near-Real-Time 2-stem separator (default OFF, RTF benchmark + auto-stop)
+├── ui/                 # PySide6 + PyQtGraph GUI (Spectrum, Chroma/Harmony, Mixer/MIDI, Resource Monitor, Settings, MainWindow)
+├── packaging/          # PyInstaller Core spec (excludes CUDA/PyTorch bloat)
+├── docs/PACKAGING.md   # Split Core vs AI Worker deployment & Windows checklist A-J
+├── capture_test.py     # Phase 1 CLI Capture + ResourceManager PoC
+└── main.py             # Desktop application entry point
 ```
 
-## 运行自动化测试
+---
+
+## 环境 Honest Status 说明（重要）
+
+> [!WARNING]
+> 当前代码与自动化单元测试均在 **Linux x86_64 开发沙箱（无 NVIDIA GPU / 非 Windows）** 中完成：
+> - **已验证**：`SYSTEM_REPORT.md` 硬件探测、`ResourceManager` 阈值/急停逻辑、120s 固定预分配 `FixedRingBuffer`、CPU DSP 音高/和弦/调性/BPM 准确性、A/B 循环与 `StemMixerEngine` 流式导出、真实 `spawn` 多进程 AI Worker 连续运行无泄漏/取消清理/OOM 3选1/低内存拒绝与急停/30分钟(1800s)流式分块/强杀恢复/实验性实时分轨限流与基准测试、`PySide6` 无头界面 (`QT_QPA_PLATFORM=offscreen`) 完整联调。
+> - **未在 Windows 真机验证**：Windows `WASAPI Process Loopback` 对 `QQMusic.exe` 的实际捕获、真实 RTX 5060 Ti (`8GB VRAM`, `sm_120`) 上 PyTorch `cu128`+ / ONNX Runtime `CUDAExecutionProvider` / `audio-separator` / `basic-pitch` 的实测显存峰值与延迟，以及 PyInstaller `.exe` 打包测试。请在真机按 [PACKAGING.md](docs/PACKAGING.md) 验证。
+
+---
+
+## 快速运行
+
+### 1. 运行自动化测试套件
 
 ```bash
-pip install pytest
 pytest -v
+```
+
+### 2. 非 Windows 合成测试信号启动桌面 UI（演示 / 调试）
+
+```bash
+python main.py --simulate
+```
+
+### 3. Windows 真机安装与运行
+
+详见 [docs/PACKAGING.md](docs/PACKAGING.md) 进行双环境部署（`.venv-core` + `.venv-ai`），并先执行：
+
+```powershell
+python scripts\check_env.py --write-report
+python capture_test.py --name QQMusic.exe --fallback-system
+python main.py --ai-python .\.venv-ai\Scripts\python.exe
 ```

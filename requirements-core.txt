@@ -1,5 +1,11 @@
-# ListenScope Phase 0 & Phase 1 Core Dependencies (CPU-only, no PyTorch/AI)
+# ListenScope Core GUI & CPU DSP Dependencies (NO PyTorch / NO CUDA / Lightweight < 1GB RAM target)
 numpy>=1.24.0
 scipy>=1.10.0
 psutil>=5.9.0
 nvidia-ml-py>=12.0.0
+PySide6>=6.8.0,<6.10  # Pinned <6.10 (6.8 LTS verified clean; 6.12.0 has Signal.emit C-extension refcount regression)
+pyqtgraph>=0.13.7
+librosa>=0.10.2
+soundfile>=0.12.0
+sounddevice>=0.4.6
+mido>=1.3.0
