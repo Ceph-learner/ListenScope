@@ -160,6 +160,8 @@ def _iter_aligned_mono_48k_frames(
                     yield center_sec, frame
                     buf = buf[hop_size:]
                     global_sample_offset += hop_size
+                if buf.size > 0 and buf.base is not None:
+                    buf = np.array(buf, dtype=np.float32, copy=True)
         finally:
             for _k, h, *_ in readers:
                 try:
@@ -532,12 +534,13 @@ def analyze_harmony_and_chords(
     source_label: str,
     max_seconds: float = 120.0,
     segment_sec: float = 0.5,
+    include_sevenths: bool = False,
 ) -> tuple[str, float, KeyEstimate, TempoEstimate, list[ChordTimelineSegment]]:
     """Stream harmonic source(s) to extract Key, BPM, and merged ChordTimelineSegments."""
     cfg = AnalysisConfig(analysis_rate_hz=CANONICAL_SR / 1024.0)
     spec = SpectrumAnalyzer(sample_rate=CANONICAL_SR, config=cfg)
     chroma_ext = ChromaExtractor(sample_rate=CANONICAL_SR, config=cfg)
-    chord_det = ChordDetector(ema_alpha=0.55)
+    chord_det = ChordDetector(ema_alpha=0.55, include_sevenths=include_sevenths)
     key_det = KeyDetector(min_active_frames=12)
 
     fft_size = cfg.fft_size
@@ -643,6 +646,7 @@ def analyze_stems_offline(
     stem_paths: dict[str, str | Path],
     *,
     max_seconds: float = 120.0,
+    include_sevenths: bool = False,
 ) -> StemDeepAnalysisReport:
     """Run non-destructive streaming CPU analysis over separated stem WAVs."""
     by_key = {k.strip().lower(): Path(v) for k, v in stem_paths.items() if Path(v).exists()}
@@ -668,7 +672,10 @@ def analyze_stems_offline(
         harm_label = first_k
 
     source_label, duration_sec, key_est, harm_tempo, chord_timeline = analyze_harmony_and_chords(
-        harm_sources, source_label=harm_label, max_seconds=max_seconds
+        harm_sources,
+        source_label=harm_label,
+        max_seconds=max_seconds,
+        include_sevenths=include_sevenths,
     )
 
     bass_res = analyze_bass_stem(by_key["bass"], max_seconds=max_seconds) if "bass" in by_key else None

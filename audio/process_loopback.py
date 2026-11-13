@@ -56,6 +56,7 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
         self._stop_event = threading.Event()
         self._watchdog_thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
+        self._timing_lock = threading.Lock()
         self._last_chunk_time: float = 0.0
         self._was_active_audio: bool = False
 
@@ -97,8 +98,9 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
 
             self.queue.reset_open()
             self._stop_event.clear()
-            self._last_chunk_time = time.monotonic()
-            self._was_active_audio = False
+            with self._timing_lock:
+                self._last_chunk_time = time.monotonic()
+                self._was_active_audio = False
 
             if self._tap_factory is not None:
                 tap = self._tap_factory(
@@ -110,6 +112,7 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 try:
                     from proctap import ProcessAudioCapture  # type: ignore[import-not-found]
                 except ImportError as exc:
+                    self.queue.close()
                     raise RuntimeError(
                         "未安装 proc-tap，无法启动 WASAPI Process Loopback。请运行: pip install proc-tap"
                     ) from exc
@@ -121,6 +124,7 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                         resample_quality=self._resample_quality,  # type: ignore[arg-type]
                     )
                 except Exception as exc:
+                    self.queue.close()
                     raise RuntimeError(f"初始化 WASAPI Process Loopback 失败 (PID={self._pid}): {exc}") from exc
 
             # Inspect native process-specific flag & cache format before audio callback begins firing
@@ -142,6 +146,16 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
             try:
                 tap.start()
             except Exception as exc:
+                try:
+                    if hasattr(tap, "close"):
+                        tap.close()
+                    elif hasattr(tap, "stop"):
+                        tap.stop()
+                except Exception:
+                    pass
+                self._cached_fmt = {}
+                self.queue.close()
+                self._stats.set_running(False)
                 self._stats.set_error(f"启动 Process Loopback 失败: {exc}")
                 raise RuntimeError(f"启动 WASAPI Process Loopback 失败: {exc}") from exc
 
@@ -177,9 +191,12 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
 
         try:
             now = time.monotonic()
+            with self._timing_lock:
+                was_active = self._was_active_audio
+                last_chunk_t = self._last_chunk_time
             # Measure unexpected gap while audio was actively flowing (vs normal pause)
-            if self._was_active_audio and self._last_chunk_time > 0.0:
-                gap_ms = (now - self._last_chunk_time) * 1000.0
+            if was_active and last_chunk_t > 0.0:
+                gap_ms = (now - last_chunk_t) * 1000.0
                 if gap_ms > self.audio_config.underrun_gap_threshold_ms:
                     self._stats.record_underrun(1)
 
@@ -221,8 +238,9 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 queue_size=len(self.queue),
                 overruns=self.queue.overruns,
             )
-            self._was_active_audio = not is_silent
-            self._last_chunk_time = now
+            with self._timing_lock:
+                self._was_active_audio = not is_silent
+                self._last_chunk_time = now
         except Exception as exc:
             logger.exception("Error processing WASAPI process loopback chunk")
             self._stats.set_error(f"音频块处理异常: {exc}")
@@ -253,8 +271,12 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
 
                 # If paused and WASAPI stops pushing packets for >350ms, decay meter to silence
                 now = time.monotonic()
-                if self._last_chunk_time > 0.0 and (now - self._last_chunk_time) > 0.35:
-                    self._was_active_audio = False
+                decay_needed = False
+                with self._timing_lock:
+                    if self._last_chunk_time > 0.0 and (now - self._last_chunk_time) > 0.35:
+                        self._was_active_audio = False
+                        decay_needed = True
+                if decay_needed:
                     silent_stub = np.empty((0, self.audio_config.channels), dtype=np.float32)
                     self._stats.record_chunk(
                         silent_stub,

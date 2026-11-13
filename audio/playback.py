@@ -337,31 +337,35 @@ class StemMixerEngine:
         """Register stem WAV files using streaming handles (supports 16/24/32-bit/float32 & resampling)."""
         self.clear()
         with self._lock:
-            for stem_name, raw_path in stem_paths.items():
-                path = Path(raw_path)
-                if not path.exists():
-                    continue
-                handle = _StemHandle(path)
-                native_frames = handle.total_frames
-                sr = handle.sample_rate
-                ch = handle.channels
-                engine_frames = (
-                    native_frames
-                    if sr == self.sample_rate
-                    else int(round(native_frames * (self.sample_rate / float(max(1, sr)))))
-                )
-                self._wave_handles[stem_name] = handle
-                self._tracks[stem_name] = StemTrackState(
-                    name=stem_name,
-                    path=path,
-                    duration_sec=native_frames / float(max(1, sr)),
-                    total_frames=engine_frames,
-                    sample_rate=sr,
-                    channels=ch,
-                    native_total_frames=native_frames,
-                )
-                self._max_frames = max(self._max_frames, engine_frames)
-            return dict(self._tracks)
+            try:
+                for stem_name, raw_path in stem_paths.items():
+                    path = Path(raw_path)
+                    if not path.exists():
+                        continue
+                    handle = _StemHandle(path)
+                    native_frames = handle.total_frames
+                    sr = handle.sample_rate
+                    ch = handle.channels
+                    engine_frames = (
+                        native_frames
+                        if sr == self.sample_rate
+                        else int(round(native_frames * (self.sample_rate / float(max(1, sr)))))
+                    )
+                    self._wave_handles[stem_name] = handle
+                    self._tracks[stem_name] = StemTrackState(
+                        name=stem_name,
+                        path=path,
+                        duration_sec=native_frames / float(max(1, sr)),
+                        total_frames=engine_frames,
+                        sample_rate=sr,
+                        channels=ch,
+                        native_total_frames=native_frames,
+                    )
+                    self._max_frames = max(self._max_frames, engine_frames)
+                return dict(self._tracks)
+            except Exception:
+                self.clear()
+                raise
 
     def set_mute(self, stem_name: str, muted: bool) -> None:
         with self._lock:
@@ -425,10 +429,14 @@ class StemMixerEngine:
             return track.volume if (track.solo and not track.muted) else 0.0
         return 0.0 if track.muted else track.volume
 
-    def _read_track_chunk(self, name: str, start_frame: int, num_frames: int) -> np.ndarray:
-        handle = self._wave_handles.get(name)
-        track = self._tracks.get(name)
-        if handle is None or track is None or start_frame >= track.total_frames or num_frames <= 0:
+    def _read_track_chunk_from_handle(
+        self,
+        handle: _StemHandle,
+        track: StemTrackState,
+        start_frame: int,
+        num_frames: int,
+    ) -> np.ndarray:
+        if start_frame >= track.total_frames or num_frames <= 0:
             return np.zeros((num_frames, self.channels), dtype=np.float32)
 
         if track.sample_rate == self.sample_rate:
@@ -461,6 +469,13 @@ class StemMixerEngine:
             padded[: raw_arr.shape[0]] = raw_arr
             return padded
         return raw_arr
+
+    def _read_track_chunk(self, name: str, start_frame: int, num_frames: int) -> np.ndarray:
+        handle = self._wave_handles.get(name)
+        track = self._tracks.get(name)
+        if handle is None or track is None:
+            return np.zeros((num_frames, self.channels), dtype=np.float32)
+        return self._read_track_chunk_from_handle(handle, track, start_frame, num_frames)
 
     def render_block(self, num_frames: int, *, advance: bool = True) -> np.ndarray:
         """Render synchronized mixed audio block across active stems."""
@@ -497,36 +512,42 @@ class StemMixerEngine:
         return mix
 
     def export_mix_streaming(self, out_path: Path | str, *, chunk_frames: int = 48000) -> Path:
-        """Export current mute/solo/volume mix cleanly in chunks without duplicating stems in RAM."""
+        """Export current mute/solo/volume mix cleanly in chunks without blocking concurrent playback."""
         path = Path(out_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             if self._max_frames <= 0:
                 raise ValueError("当前没有可导出的分离音轨。")
-            saved_pos = self._position_frame
-            saved_playing = self._is_playing
+            max_frames = int(self._max_frames)
             any_solo = any(t.solo for t in self._tracks.values())
-            try:
-                with wave.open(str(path), "wb") as out_wf:
-                    out_wf.setnchannels(self.channels)
-                    out_wf.setsampwidth(2)
-                    out_wf.setframerate(self.sample_rate)
+            export_specs: list[tuple[StemTrackState, float]] = []
+            for track in self._tracks.values():
+                gain = self._effective_gain(track, any_solo)
+                if gain > 1e-6:
+                    export_specs.append((StemTrackState(**track.__dict__), gain))
 
-                    cursor = 0
-                    while cursor < self._max_frames:
-                        n = min(chunk_frames, self._max_frames - cursor)
-                        mix = np.zeros((n, self.channels), dtype=np.float32)
-                        for name, track in self._tracks.items():
-                            gain = self._effective_gain(track, any_solo)
-                            if gain <= 1e-6:
-                                continue
-                            mix += self._read_track_chunk(name, cursor, n) * gain
-                        np.clip(mix, -1.0, 1.0, out=mix)
-                        out_wf.writeframes((mix * 32767.0).astype(np.int16).tobytes())
-                        cursor += n
-            finally:
-                self._position_frame = saved_pos
-                self._is_playing = saved_playing
+        local_handles: list[tuple[_StemHandle, StemTrackState, float]] = []
+        try:
+            for track, gain in export_specs:
+                local_handles.append((_StemHandle(track.path), track, gain))
+
+            with wave.open(str(path), "wb") as out_wf:
+                out_wf.setnchannels(self.channels)
+                out_wf.setsampwidth(2)
+                out_wf.setframerate(self.sample_rate)
+
+                cursor = 0
+                while cursor < max_frames:
+                    n = min(chunk_frames, max_frames - cursor)
+                    mix = np.zeros((n, self.channels), dtype=np.float32)
+                    for handle, track, gain in local_handles:
+                        mix += self._read_track_chunk_from_handle(handle, track, cursor, n) * gain
+                    np.clip(mix, -1.0, 1.0, out=mix)
+                    out_wf.writeframes((mix * 32767.0).astype(np.int16).tobytes())
+                    cursor += n
+        finally:
+            for handle, _, _ in local_handles:
+                handle.close()
         return path
 
     def get_stem_waveform_envelope(self, stem_name: str, num_points: int = 240) -> tuple[np.ndarray, np.ndarray]:

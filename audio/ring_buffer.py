@@ -130,6 +130,37 @@ class FixedRingBuffer:
             out[first_part:] = self._buffer[: count - first_part]
         return out
 
+    def snapshot_envelope(self, num_points: int = 300) -> tuple[np.ndarray, np.ndarray, float]:
+        """Compute bounded chronological min/max waveform envelope without copying the 46MB ring buffer."""
+        n_pts = max(1, int(num_points))
+        mins = np.zeros(n_pts, dtype=np.float32)
+        maxs = np.zeros(n_pts, dtype=np.float32)
+        with self._lock:
+            avail = min(self._total_written_frames, self.capacity_frames)
+            if avail <= 0:
+                return mins, maxs, 0.0
+            avail_sec = avail / float(self.sample_rate)
+            start_ring = (self._write_pos - avail) % self.capacity_frames
+            cap = self.capacity_frames
+            buf = self._buffer
+            for i in range(n_pts):
+                b0 = (i * avail) // n_pts
+                b1 = ((i + 1) * avail) // n_pts
+                if b1 <= b0:
+                    b1 = min(avail, b0 + 1)
+                span = b1 - b0
+                if span <= 0:
+                    continue
+                if span <= 96:
+                    idxs = (start_ring + np.arange(b0, b1, dtype=np.int64)) % cap
+                else:
+                    idxs = (start_ring + np.linspace(b0, b1 - 1, 96, dtype=np.int64)) % cap
+                seg = buf[idxs]
+                mono = 0.5 * (seg[:, 0] + seg[:, 1])
+                mins[i] = float(np.min(mono))
+                maxs[i] = float(np.max(mono))
+            return mins, maxs, avail_sec
+
     def export_wav_streaming(
         self,
         out_path: Path | str,
@@ -205,6 +236,10 @@ class FixedRingBuffer:
                 src_sr = int(sf_file.samplerate)
                 src_ch = max(1, int(sf_file.channels))
                 src_total = int(sf_file.frames)
+                if src_sr <= 0:
+                    raise ValueError(f"无效音频采样率: {src_sr}")
+                if src_total <= 0:
+                    raise ValueError(f"音频文件不包含有效帧: {src.name}")
                 max_src_frames = int(round(limit_sec * src_sr))
                 truncated = src_total > max_src_frames
                 step = max(256, int(round(chunk_seconds * src_sr)))
@@ -233,7 +268,7 @@ class FixedRingBuffer:
                         total_dst_frames += int(canon.shape[0])
                 return total_dst_frames / float(self.sample_rate), truncated
         except Exception as sf_exc:
-            if src.suffix.lower() not in (".wav", ".wave"):
+            if src.suffix.lower() not in (".wav", ".wave") or isinstance(sf_exc, ValueError):
                 raise RuntimeError(f"无法读取音频文件 {src.name}: {sf_exc}") from sf_exc
 
         with wave.open(str(src), "rb") as wf:
@@ -241,6 +276,10 @@ class FixedRingBuffer:
             src_ch = max(1, int(wf.getnchannels()))
             sw = int(wf.getsampwidth())
             src_total = int(wf.getnframes())
+            if src_sr <= 0:
+                raise ValueError(f"无效 WAV 采样率: {src_sr}")
+            if src_total <= 0:
+                raise ValueError(f"WAV 文件不包含有效帧: {src.name}")
             max_src_frames = int(round(limit_sec * src_sr))
             truncated = src_total > max_src_frames
             dtype_map = {1: "int16", 2: "int16", 3: "int24", 4: "int32"}

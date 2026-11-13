@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import argparse
+from dataclasses import asdict, dataclass
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import time
 from typing import Optional
 
@@ -11,7 +17,15 @@ import numpy as np
 from ai.backend import build_separation_backend
 from ai.models import MODEL_REGISTRY
 from ai.resource_guard import release_torch_and_memory
-from core.config import AIConfig, AudioConfig
+from core.config import AIConfig, AudioConfig, TargetHardwareSpec
+from core.paths import get_bundle_root, subprocess_no_window_kwargs
+from core.system_probe import (
+    _probe_gpus_nvml,
+    _probe_gpus_nvidia_smi,
+    _probe_onnxruntime,
+    _probe_pytorch,
+    evaluate_gpu_ai_readiness,
+)
 
 
 @dataclass
@@ -53,6 +67,19 @@ def benchmark_live_model(
     n_chunks = max(1, int(round(test_duration_sec / chunk_sec)))
     actual_dur = (n_chunks * chunk_frames) / float(sr)
 
+    if use_gpu and not use_mock_backend:
+        gpus, _, _ = _probe_gpus_nvml()
+        if not gpus:
+            gpus, _, _ = _probe_gpus_nvidia_smi()
+        ready, reason = evaluate_gpu_ai_readiness(
+            gpus,
+            _probe_pytorch(),
+            _probe_onnxruntime(),
+            target=TargetHardwareSpec(),
+        )
+        if not ready:
+            raise RuntimeError(reason or "PyTorch/CUDA 或 ONNX Runtime GPU 未就绪，拒绝 GPU 基准测试。")
+
     t = np.arange(chunk_frames, dtype=np.float32) / float(sr)
     wave_sig = (0.25 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
     chunk = np.column_stack([wave_sig, wave_sig]).astype(np.float32, copy=False)
@@ -70,7 +97,6 @@ def benchmark_live_model(
     device_label = "MockCPU" if use_mock_backend else ("GPU-CUDA" if use_gpu else "CPU")
     try:
         backend.load_model()
-        # Warm-up 1 chunk before timing real steady-state throughput if > 1 chunk
         t0 = time.monotonic()
         for _ in range(n_chunks):
             _ = backend.separate_chunk(chunk, sr)
@@ -100,3 +126,143 @@ def benchmark_live_model(
             pass
         del backend
         release_torch_and_memory()
+
+
+def benchmark_live_model_isolated(
+    model_id: str = "mdx_low_vram_2stem",
+    *,
+    ai_python_executable: Optional[str | Path] = None,
+    use_gpu: bool = True,
+    use_mock_backend: bool = False,
+    simulate_delay_sec: float = 0.0,
+    test_duration_sec: float = 4.0,
+    ai_config: Optional[AIConfig] = None,
+    audio_config: Optional[AudioConfig] = None,
+    timeout_sec: float = 60.0,
+) -> LiveBenchmarkResult:
+    """Execute `benchmark_live_model` cleanly in an isolated subprocess (never inside GUI main process)."""
+    exe = str(ai_python_executable).strip() if ai_python_executable else ""
+    if not exe:
+        if getattr(sys, "frozen", False) and not use_mock_backend:
+            raise RuntimeError(
+                "独立 AI 环境 (.venv-ai) 未配置：Windows 打包版主程序不包含 PyTorch/ONNX Runtime，"
+                "请在「设置 -> 资源安全阈值 & AI 配置」中指定 .venv-ai\\Scripts\\python.exe。"
+            )
+        exe = sys.executable
+
+    exe_path = Path(exe)
+    if not exe_path.exists():
+        raise FileNotFoundError(f"找不到 AI Python 解释器: {exe}")
+
+    bundle_root = get_bundle_root()
+    env = os.environ.copy()
+    existing_pp = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
+
+    ai_cfg_payload = json.dumps(asdict(ai_config or AIConfig()), ensure_ascii=False)
+    aud_cfg_payload = json.dumps(asdict(audio_config or AudioConfig()), ensure_ascii=False)
+
+    cmd = [
+        str(exe_path),
+        "-m",
+        "streaming.benchmark",
+        "--json",
+        "--model-id",
+        model_id,
+        "--simulate-delay-sec",
+        str(float(simulate_delay_sec)),
+        "--test-duration-sec",
+        str(float(test_duration_sec)),
+        "--ai-config-json-str",
+        ai_cfg_payload,
+        "--audio-config-json-str",
+        aud_cfg_payload,
+    ]
+    cmd.append("--use-gpu" if use_gpu else "--no-gpu")
+    if use_mock_backend:
+        cmd.append("--use-mock-backend")
+
+    proc = subprocess.run(
+        cmd,
+        cwd=str(bundle_root),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_sec,
+        check=False,
+        **subprocess_no_window_kwargs(),
+    )
+    if proc.returncode != 0:
+        err_tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-5:]
+        raise RuntimeError(
+            f"RTF 基准子进程失败 (exitcode={proc.returncode}): {' | '.join(err_tail) or '未知错误'}"
+        )
+
+    raw_out = proc.stdout.strip()
+    lines = [ln.strip() for ln in raw_out.splitlines() if ln.strip()]
+    candidate = lines[-1] if lines else raw_out
+    brace = candidate.find("{")
+    if brace > 0:
+        candidate = candidate[brace:]
+    payload = json.loads(candidate)
+    if payload.get("error"):
+        raise RuntimeError(str(payload["error"]))
+    return LiveBenchmarkResult(
+        model_id=str(payload["model_id"]),
+        device_used=str(payload["device_used"]),
+        test_duration_sec=float(payload["test_duration_sec"]),
+        elapsed_sec=float(payload["elapsed_sec"]),
+        rtf=float(payload["rtf"]),
+        can_run_realtime=bool(payload["can_run_realtime"]),
+        message=str(payload["message"]),
+    )
+
+
+def _cli_main() -> int:
+    ipc_out = sys.stdout
+    parser = argparse.ArgumentParser(description="ListenScope Isolated Live 2-Stem RTF Benchmark")
+    parser.add_argument("--model-id", type=str, default="mdx_low_vram_2stem")
+    parser.add_argument("--use-gpu", dest="use_gpu", action="store_true", default=True)
+    parser.add_argument("--no-gpu", dest="use_gpu", action="store_false")
+    parser.add_argument("--use-mock-backend", action="store_true")
+    parser.add_argument("--simulate-delay-sec", type=float, default=0.0)
+    parser.add_argument("--test-duration-sec", type=float, default=4.0)
+    parser.add_argument("--ai-config-json-str", type=str, default=None)
+    parser.add_argument("--audio-config-json-str", type=str, default=None)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    ai_cfg = AIConfig(**json.loads(args.ai_config_json_str)) if args.ai_config_json_str else AIConfig()
+    aud_cfg = AudioConfig(**json.loads(args.audio_config_json_str)) if args.audio_config_json_str else AudioConfig()
+
+    if args.json:
+        sys.stdout = sys.stderr
+    try:
+        res = benchmark_live_model(
+            model_id=args.model_id,
+            use_gpu=args.use_gpu,
+            use_mock_backend=args.use_mock_backend,
+            simulate_delay_sec=args.simulate_delay_sec,
+            test_duration_sec=args.test_duration_sec,
+            ai_config=ai_cfg,
+            audio_config=aud_cfg,
+        )
+        if args.json:
+            print(json.dumps(asdict(res), ensure_ascii=False), file=ipc_out, flush=True)
+        else:
+            print(res.message)
+        return 0
+    except Exception as exc:
+        if args.json:
+            print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=ipc_out, flush=True)
+        else:
+            print(f"Benchmark error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        sys.stdout = ipc_out
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())

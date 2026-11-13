@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
+import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
 from ai.models import list_models
@@ -237,6 +238,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ab_set_range_sec_requested = QtCore.Signal(float, float)
     ab_play_requested = QtCore.Signal()
     ab_stop_requested = QtCore.Signal()
+    ab_export_wav_requested = QtCore.Signal(str)
     ai_separate_requested = QtCore.Signal(str, str, int, bool)  # (stem_mode, model_id, segment, use_gpu)
     emergency_stop_requested = QtCore.Signal()
     settings_applied = QtCore.Signal(object, object, str)
@@ -261,8 +263,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._resource_limits = resource_limits
         self._ai_config = ai_config
         self._ai_python_executable = ai_python_executable
+        self._last_verified_ai_probe: Optional[dict[str, Any]] = None
         self._closing_handler = None
         self._last_capture_banner: Optional[str] = None
+        self._syncing_ab_region = False
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -352,28 +356,28 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.recent_60_btn.clicked.connect(lambda: self._pick_recent(60.0))
 
         self.start_ago_spin = QtWidgets.QDoubleSpinBox()
-        self.start_ago_spin.setRange(1.0, 120.0)
+        self.start_ago_spin.setRange(0.5, 120.0)
         self.start_ago_spin.setValue(30.0)
         self.start_ago_spin.setPrefix("倒退 ")
         self.start_ago_spin.setSuffix(" s")
 
         self.end_ago_spin = QtWidgets.QDoubleSpinBox()
-        self.end_ago_spin.setRange(0.0, 119.0)
+        self.end_ago_spin.setRange(0.0, 119.5)
         self.end_ago_spin.setValue(0.0)
         self.end_ago_spin.setPrefix("至倒退 ")
         self.end_ago_spin.setSuffix(" s")
 
         self.apply_ab_btn = QtWidgets.QPushButton("设定 A/B 区间")
-        self.apply_ab_btn.clicked.connect(
-            lambda: self.ab_set_range_sec_requested.emit(self.start_ago_spin.value(), self.end_ago_spin.value())
-        )
+        self.apply_ab_btn.clicked.connect(self._on_apply_ab_clicked)
 
         self.ab_play_btn = QtWidgets.QPushButton("A/B 循环播放")
         self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
+        self.ab_export_wav_btn = QtWidgets.QPushButton("导出 A/B 片段 WAV")
         self.import_audio_btn = QtWidgets.QPushButton("导入本地音频(<=120s)")
         self.import_audio_btn.setToolTip("流式读取本地 WAV/FLAC/OGG 的前 <=120s 至历史环形缓冲（禁止全文件一次加载）")
         self.ab_play_btn.clicked.connect(self.ab_play_requested.emit)
         self.ab_stop_btn.clicked.connect(self.ab_stop_requested.emit)
+        self.ab_export_wav_btn.clicked.connect(self._on_ab_export_clicked)
         self.import_audio_btn.clicked.connect(self._on_import_audio_clicked)
 
         row_a.addWidget(self.history_coverage_lbl)
@@ -385,15 +389,40 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_a.addWidget(self.apply_ab_btn)
         row_a.addWidget(self.ab_play_btn)
         row_a.addWidget(self.ab_stop_btn)
+        row_a.addWidget(self.ab_export_wav_btn)
         row_a.addWidget(self.import_audio_btn)
         row_a.addStretch(1)
         bottom_l.addLayout(row_a)
+
+        # Interactive 120s Waveform Overview + Draggable A/B Selector
+        self.history_overview_plot = pg.PlotWidget()
+        self.history_overview_plot.setMinimumHeight(58)
+        self.history_overview_plot.setMaximumHeight(72)
+        self.history_overview_plot.setBackground("#14161A")
+        self.history_overview_plot.setXRange(-120.0, 0.0, padding=0.01)
+        self.history_overview_plot.setYRange(-1.05, 1.05)
+        self.history_overview_plot.hideAxis("left")
+        self.history_overview_plot.setLabel("bottom", "120s 历史波形与 A/B 选区 (-120s ~ 0s最新)", units="s")
+        self.history_overview_plot.setMouseEnabled(x=False, y=False)
+        self._hist_max_curve = self.history_overview_plot.plot(pen=pg.mkPen("#4EA8DE", width=1.0))
+        self._hist_min_curve = self.history_overview_plot.plot(pen=pg.mkPen("#4EA8DE", width=1.0))
+        self.ab_region = pg.LinearRegionItem(
+            values=(-30.0, 0.0),
+            bounds=(-120.0, 0.0),
+            brush=(46, 194, 126, 48),
+            pen=pg.mkPen("#2EC27E", width=1.5),
+        )
+        self.ab_region.setZValue(10)
+        self.history_overview_plot.addItem(self.ab_region)
+        self.ab_region.sigRegionChanged.connect(self._on_ab_region_dragged)
+        self.ab_region.sigRegionChangeFinished.connect(self._on_ab_region_finished)
+        bottom_l.addWidget(self.history_overview_plot)
 
         row_b = QtWidgets.QHBoxLayout()
         self.ai_2stem_combo = QtWidgets.QComboBox()
         self._refresh_model_combos()
         self.ai_gpu_chk = QtWidgets.QCheckBox("优先 GPU (需通过 RTX 5060 Ti 检查)")
-        self.ai_gpu_chk.setChecked(hardware_report.gpu_ai_ready)
+        self.update_hardware_report(hardware_report, auto_sync_gpu_chk=True)
 
         self.segment_spin = QtWidgets.QSpinBox()
         self.segment_spin.setRange(4, 10)
@@ -417,10 +446,29 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         main_layout.addWidget(bottom_box)
 
+    @property
+    def last_verified_ai_probe(self) -> Optional[dict[str, Any]]:
+        return self._last_verified_ai_probe
+
     def set_closing_handler(self, fn) -> None:
         self._closing_handler = fn
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        plot_widgets = (
+            self.history_overview_plot,
+            self.spectrum_widget.wave_plot,
+            self.spectrum_widget.fft_plot,
+            self.spectrum_widget.log_plot,
+            self.spectrum_widget.spec_plot,
+            self.chroma_widget.chroma_bar_plot,
+            self.chroma_widget.chroma_hist_plot,
+            self.mixer_widget.piano_roll_plot,
+        )
+        for pw in plot_widgets:
+            try:
+                pw.clear()
+            except Exception:
+                pass
         if self._closing_handler is not None:
             try:
                 self._closing_handler()
@@ -433,10 +481,75 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         for m in list_models(stem_mode="2stem", ai_config=self._ai_config):
             self.ai_2stem_combo.addItem(m.display_name, m.model_id)
 
+    def update_hardware_report(
+        self,
+        report: SystemHardwareReport,
+        *,
+        auto_sync_gpu_chk: bool = False,
+    ) -> None:
+        self._hardware_report = report
+        if report.gpu_ai_ready:
+            dev_name = report.pytorch.device_name or (report.gpus[0].name if report.gpus else "NVIDIA GPU")
+            self.ai_gpu_chk.setToolTip(f"GPU AI 已就绪：{dev_name} (CUDA={report.pytorch.cuda_build}, ONNX CUDA=OK)")
+        else:
+            self.ai_gpu_chk.setToolTip(f"GPU AI 当前受阻：{report.gpu_ai_block_reason or '未通过 CUDA/ONNX 检查'}")
+        if auto_sync_gpu_chk:
+            self.ai_gpu_chk.setChecked(bool(report.gpu_ai_ready))
+
+    def _set_ab_region_from_ago(self, start_ago: float, end_ago: float) -> None:
+        s_ago = max(0.5, min(120.0, float(start_ago)))
+        e_ago = max(0.0, min(s_ago - 0.5, float(end_ago)))
+        self._syncing_ab_region = True
+        try:
+            self.ab_region.setRegion((-s_ago, -e_ago))
+        finally:
+            self._syncing_ab_region = False
+
+    def _on_ab_region_dragged(self) -> None:
+        if self._syncing_ab_region:
+            return
+        lo, hi = self.ab_region.getRegion()
+        start_ago = max(0.5, min(120.0, -float(lo)))
+        end_ago = max(0.0, min(start_ago - 0.5, -float(hi)))
+        self._syncing_ab_region = True
+        try:
+            self.start_ago_spin.setValue(round(start_ago, 2))
+            self.end_ago_spin.setValue(round(end_ago, 2))
+        finally:
+            self._syncing_ab_region = False
+
+    def _on_ab_region_finished(self) -> None:
+        if self._syncing_ab_region:
+            return
+        self._on_ab_region_dragged()
+        start_ago = float(self.start_ago_spin.value())
+        end_ago = float(self.end_ago_spin.value())
+        if start_ago - end_ago < 0.5:
+            start_ago = min(120.0, end_ago + 0.5)
+            end_ago = max(0.0, start_ago - 0.5)
+            self._set_ab_region_from_ago(start_ago, end_ago)
+        self.ab_set_range_sec_requested.emit(start_ago, end_ago)
+
+    def _on_apply_ab_clicked(self) -> None:
+        start_ago = float(self.start_ago_spin.value())
+        end_ago = float(self.end_ago_spin.value())
+        self._set_ab_region_from_ago(start_ago, end_ago)
+        self.ab_set_range_sec_requested.emit(start_ago, end_ago)
+
     def _pick_recent(self, sec: float) -> None:
         self.start_ago_spin.setValue(sec)
         self.end_ago_spin.setValue(0.0)
+        self._set_ab_region_from_ago(sec, 0.0)
         self.ab_select_recent_requested.emit(sec)
+
+    def update_history_overview(self, mins: np.ndarray, maxs: np.ndarray, avail_sec: float) -> None:
+        if avail_sec <= 0.0 or mins.size == 0 or maxs.size == 0:
+            self._hist_max_curve.setData([], [])
+            self._hist_min_curve.setData([], [])
+            return
+        x = np.linspace(-float(avail_sec), 0.0, int(mins.shape[0]), dtype=np.float32)
+        self._hist_max_curve.setData(x, np.asarray(maxs, dtype=np.float32))
+        self._hist_min_curve.setData(x, np.asarray(mins, dtype=np.float32))
 
     def _on_sep_2stem(self) -> None:
         model_id = str(self.ai_2stem_combo.currentData() or "mdx_low_vram_2stem")
@@ -448,6 +561,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _on_capture_clicked(self, checked: bool) -> None:
         desc = self.source_combo.currentData() or {"kind": "synthetic", "pattern": "switching"}
         self.capture_toggle_requested.emit(checked, desc)
+
+    def _on_ab_export_clicked(self) -> None:
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "导出 A/B 历史片段 WAV",
+            str(Path("exports") / "ab_excerpt.wav"),
+            "WAV Audio (*.wav)",
+        )
+        if file_path:
+            self.ab_export_wav_requested.emit(file_path)
 
     def _on_import_audio_clicked(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -580,5 +703,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self._resource_limits = dlg.updated_limits
                 self._ai_config = dlg.updated_ai_config
                 self._ai_python_executable = dlg.updated_ai_python
+                self._last_verified_ai_probe = dlg.verified_ai_probe
+                if dlg.verified_ai_probe is not None:
+                    self.update_hardware_report(dlg.verified_report, auto_sync_gpu_chk=True)
                 self._refresh_model_combos()
                 self.settings_applied.emit(self._resource_limits, self._ai_config, self._ai_python_executable)

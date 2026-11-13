@@ -10,7 +10,7 @@ from PySide6 import QtCore, QtWidgets
 
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
 from core.models import SystemHardwareReport
-from core.system_probe import probe_external_ai_environment
+from core.system_probe import apply_external_ai_probe_to_report, probe_external_ai_environment
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -35,6 +35,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._updated_limits: Optional[ResourceLimits] = None
         self._updated_ai_config: Optional[AIConfig] = None
         self._updated_ai_python: str = ai_python_executable
+        self._verified_ai_probe: Optional[dict[str, Any]] = None
         self._dialog_closed = False
         self._probe_finished.connect(self._on_ai_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
 
@@ -62,17 +63,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self._populate_status_table(hardware_report)
         st_layout.addWidget(self.status_table, 1)
 
-        if not hardware_report.gpu_ai_ready or not hardware_report.is_windows:
-            warn_text = hardware_report.gpu_ai_block_reason or ""
-            if not hardware_report.is_windows:
-                warn_text = (
-                    f"⚠️ 当前在 {hardware_report.os_system} 运行：WASAPI Process Loopback 与 RTX 5060 Ti CUDA 未在 Windows 真机验证。\n"
-                    + warn_text
-                )
-            alert = QtWidgets.QLabel(warn_text.strip())
-            alert.setWordWrap(True)
-            alert.setStyleSheet("padding: 8px; background: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 6px;")
-            st_layout.addWidget(alert)
+        self.status_alert_lbl = QtWidgets.QLabel("")
+        self.status_alert_lbl.setWordWrap(True)
+        self.status_alert_lbl.setStyleSheet("padding: 8px; background: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 6px;")
+        st_layout.addWidget(self.status_alert_lbl)
+        self._refresh_status_alert(hardware_report)
 
         tabs.addTab(status_tab, "系统状态")
 
@@ -161,6 +156,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self._dialog_closed = True
         super().closeEvent(event)
 
+    def _refresh_status_alert(self, r: SystemHardwareReport) -> None:
+        if not r.gpu_ai_ready or not r.is_windows:
+            warn_text = r.gpu_ai_block_reason or ""
+            if not r.is_windows:
+                warn_text = (
+                    f"⚠️ 当前在 {r.os_system} 运行：WASAPI Process Loopback 与 RTX 5060 Ti CUDA 未在 Windows 真机验证。\n"
+                    + warn_text
+                )
+            self.status_alert_lbl.setText(warn_text.strip())
+            self.status_alert_lbl.setVisible(True)
+        else:
+            self.status_alert_lbl.setVisible(False)
+            self.status_alert_lbl.setText("")
+
     def _browse_ai_python(self) -> None:
         start_dir = str(Path(self.ai_python_edit.text().strip()).parent) if self.ai_python_edit.text().strip() else str(Path.cwd())
         selected, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -190,6 +199,7 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         self.verify_ai_env_btn.setEnabled(True)
         if not isinstance(result, dict) or not result.get("ok"):
+            self._verified_ai_probe = None
             err = result.get("error", "未知错误") if isinstance(result, dict) else str(result)
             self.ai_probe_result_lbl.setText(f"❌ 检测失败: {err}")
             self.ai_probe_result_lbl.setStyleSheet(
@@ -197,11 +207,16 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             return
 
+        self._verified_ai_probe = dict(result)
+        self._report = apply_external_ai_probe_to_report(self._report, result)
+        self._populate_status_table(self._report)
+        self._refresh_status_alert(self._report)
+
         pt = result.get("pytorch") or {}
         ort = result.get("onnxruntime") or {}
         pkgs = result.get("ai_packages") or {}
-        gpu_ready = bool(result.get("gpu_ai_ready"))
-        block_reason = result.get("gpu_ai_block_reason") or ""
+        gpu_ready = bool(self._report.gpu_ai_ready)
+        block_reason = self._report.gpu_ai_block_reason or ""
         pkg_summary = ", ".join(
             f"{k}={'OK' if (v or {}).get('installed') else 'MISS'}"
             for k, v in pkgs.items()
@@ -276,7 +291,10 @@ class SettingsDialog(QtWidgets.QDialog):
                 live_overlap_seconds=self._orig_ai_cfg.live_overlap_seconds,
                 live_max_buffer_seconds=self._orig_ai_cfg.live_max_buffer_seconds,
             )
-            self._updated_ai_python = self.ai_python_edit.text().strip()
+            entered_py = self.ai_python_edit.text().strip()
+            self._updated_ai_python = entered_py
+            if self._verified_ai_probe is not None and str(self._verified_ai_probe.get("python_executable", "")) != entered_py:
+                self._verified_ai_probe = None
         except ValueError as exc:
             QtWidgets.QMessageBox.warning(self, "参数无效", str(exc))
             return
@@ -293,3 +311,11 @@ class SettingsDialog(QtWidgets.QDialog):
     @property
     def updated_ai_python(self) -> str:
         return self._updated_ai_python
+
+    @property
+    def verified_ai_probe(self) -> Optional[dict[str, Any]]:
+        return self._verified_ai_probe
+
+    @property
+    def verified_report(self) -> SystemHardwareReport:
+        return self._report

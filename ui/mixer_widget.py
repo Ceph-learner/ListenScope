@@ -191,6 +191,8 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.export_btn = QtWidgets.QPushButton("导出混合 WAV")
         self.deep_analyze_btn = QtWidgets.QPushButton("深度分析分轨 (和弦/Bass/鼓/旋律)")
         self.deep_analyze_btn.setEnabled(False)
+        self.sevenths_chk = QtWidgets.QCheckBox("扩展和弦 (maj7/m7/7/sus4)")
+        self.sevenths_chk.setToolTip("离线深度分轨和声识别是否启用 7 和弦与 sus4 模板（实时视图仍保持 12 大/小三和弦标准）")
         self.export_sheet_btn = QtWidgets.QPushButton("导出扒谱报告")
         self.export_sheet_btn.setEnabled(False)
 
@@ -207,6 +209,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         ctrl_bar.addWidget(self.loop_chk)
         ctrl_bar.addWidget(self.export_btn)
         ctrl_bar.addWidget(self.deep_analyze_btn)
+        ctrl_bar.addWidget(self.sevenths_chk)
         ctrl_bar.addWidget(self.export_sheet_btn)
         ctrl_bar.addSpacing(8)
 
@@ -257,7 +260,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         deep_tab = QtWidgets.QWidget()
         deep_l = QtWidgets.QVBoxLayout(deep_tab)
         self.deep_summary_lbl = QtWidgets.QLabel(
-            "分轨完成后点击上方「深度分析分轨」：离线流式解析时间轴和弦进行、Bass 根音、鼓组 Kick/Snare/Hi-Hat 16 步律动及主旋律音域（不打断 QQ 音乐实时捕获）。"
+            "分轨完成后点击上方「深度分析分轨」：离线流式解析时间轴和弦进行、Bass 根音、鼓组 Kick/Snare/Hi-Hat 16 步律动及主旋律音域（支持点击表格行跳转混音试听位置）。"
         )
         self.deep_summary_lbl.setWordWrap(True)
         self.deep_summary_lbl.setStyleSheet(
@@ -269,11 +272,13 @@ class StemMixerWidget(QtWidgets.QWidget):
         )
         self.chord_timeline_table.horizontalHeader().setStretchLastSection(True)
         self.chord_timeline_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.chord_timeline_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.chord_timeline_table.cellClicked.connect(self._on_chord_row_clicked)
         deep_l.addWidget(self.deep_summary_lbl)
         deep_l.addWidget(self.chord_timeline_table, 1)
         self.analysis_tabs.addTab(deep_tab, "和弦进行 & Bass/鼓/旋律深度分析")
 
-        # Sub-tab 2: Piano Roll (PyQtGraph horizontal bar visualizer)
+        # Sub-tab 2: Piano Roll (PyQtGraph horizontal bar visualizer + synchronized playhead cursor)
         pr_tab = QtWidgets.QWidget()
         pr_l = QtWidgets.QVBoxLayout(pr_tab)
         self.piano_roll_plot = pg.PlotWidget(title="MIDI 钢琴卷帘预览 (Pitch vs Time)")
@@ -281,6 +286,15 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.piano_roll_plot.showGrid(x=True, y=True, alpha=0.25)
         self.piano_roll_plot.setLabel("bottom", "Time", units="s")
         self.piano_roll_plot.setLabel("left", "Pitch")
+        self._piano_roll_cursor = pg.InfiniteLine(
+            pos=0.0,
+            angle=90,
+            movable=False,
+            pen=pg.mkPen("#FF6B6B", width=1.6),
+        )
+        self._piano_roll_cursor.setVisible(False)
+        self._piano_roll_cursor.setZValue(20)
+        self.piano_roll_plot.addItem(self._piano_roll_cursor)
         pr_l.addWidget(self.piano_roll_plot)
         self.analysis_tabs.addTab(pr_tab, "MIDI 钢琴卷帘 (Piano Roll)")
 
@@ -288,7 +302,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         midi_tab = QtWidgets.QWidget()
         midi_l = QtWidgets.QVBoxLayout(midi_tab)
         midi_hdr = QtWidgets.QHBoxLayout()
-        self.midi_info_lbl = QtWidgets.QLabel("尚未执行分轨 MIDI 转录（Basic Pitch 仅作用于单一分轨）。")
+        self.midi_info_lbl = QtWidgets.QLabel("尚未执行分轨 MIDI 转录（Basic Pitch 仅作用于单一分轨；点击音符行可跳转至对应时间位置）。")
         self.midi_info_lbl.setWordWrap(True)
         self.save_midi_btn = QtWidgets.QPushButton("另存 MIDI (.mid)")
         self.save_midi_btn.setEnabled(False)
@@ -301,12 +315,18 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.midi_table.setHorizontalHeaderLabels(["音符", "MIDI 编号", "开始 (s)", "结束 (s)", "力度"])
         self.midi_table.horizontalHeader().setStretchLastSection(True)
         self.midi_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.midi_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.midi_table.cellClicked.connect(self._on_midi_row_clicked)
         midi_l.addWidget(self.midi_table)
         self.analysis_tabs.addTab(midi_tab, "MIDI 音符明细表")
 
         splitter.addWidget(self.analysis_tabs)
         splitter.setSizes([240, 220])
         root.addWidget(splitter, 1)
+
+    @property
+    def include_sevenths(self) -> bool:
+        return bool(self.sevenths_chk.isChecked())
 
     def _on_play_clicked(self) -> None:
         self.before_play_requested.emit()
@@ -317,6 +337,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         if max_f > 0:
             target = int(round((self.seek_slider.value() / 1000.0) * max_f))
             self.mixer_engine.seek(target)
+            self.sync_playback_position()
 
     def _on_seek_value_changed(self, value: int) -> None:
         if self.seek_slider.isSliderDown():
@@ -324,11 +345,41 @@ class StemMixerWidget(QtWidgets.QWidget):
             if max_f > 0:
                 target = int(round((value / 1000.0) * max_f))
                 self.mixer_engine.seek(target)
+                self._piano_roll_cursor.setValue(self.mixer_engine.position_sec)
+
+    def _seek_to_sec(self, start_sec: float) -> None:
+        sr = max(1, self.mixer_engine.sample_rate)
+        target = int(round(max(0.0, float(start_sec)) * sr))
+        self.mixer_engine.seek(target)
+        self.sync_playback_position()
+
+    @QtCore.Slot(int, int)
+    def _on_chord_row_clicked(self, row: int, _col: int) -> None:
+        item = self.chord_timeline_table.item(row, 0)
+        if item is None:
+            return
+        try:
+            self._seek_to_sec(float(item.text()))
+        except ValueError:
+            pass
+
+    @QtCore.Slot(int, int)
+    def _on_midi_row_clicked(self, row: int, _col: int) -> None:
+        item = self.midi_table.item(row, 2)
+        if item is None:
+            return
+        try:
+            self._seek_to_sec(float(item.text()))
+        except ValueError:
+            pass
 
     def sync_playback_position(self) -> None:
         dur = self.mixer_engine.total_duration_sec
         pos = self.mixer_engine.position_sec
         self.time_lbl.setText(f"{_fmt_sec(pos)} / {_fmt_sec(dur)}")
+        if self._piano_roll_item is not None:
+            self._piano_roll_cursor.setValue(pos)
+            self._piano_roll_cursor.setVisible(True)
         if not self.seek_slider.isSliderDown():
             val = int(round((pos / dur) * 1000.0)) if dur > 1e-6 else 0
             self.seek_slider.blockSignals(True)
@@ -419,8 +470,9 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.export_sheet_btn.setEnabled(False)
         self.chord_timeline_table.setRowCount(0)
         self.deep_summary_lbl.setText(
-            "分轨完成后点击上方「深度分析分轨」：离线流式解析时间轴和弦进行、Bass 根音、鼓组 Kick/Snare/Hi-Hat 16 步律动及主旋律音域（不打断 QQ 音乐实时捕获）。"
+            "分轨完成后点击上方「深度分析分轨」：离线流式解析时间轴和弦进行、Bass 根音、鼓组 Kick/Snare/Hi-Hat 16 步律动及主旋律音域（支持点击表格行跳转混音试听位置）。"
         )
+        self._piano_roll_cursor.setVisible(self._piano_roll_item is not None)
         self.sync_playback_position()
 
         for name, state in tracks.items():
@@ -522,6 +574,10 @@ class StemMixerWidget(QtWidgets.QWidget):
             self.piano_roll_plot.getAxis("left").setTicks([ticks])
             max_end = max(1.0, max(float(n.end_sec) for n in pr_notes) + 0.5)
             self.piano_roll_plot.setXRange(0.0, max_end)
+            self._piano_roll_cursor.setValue(self.mixer_engine.position_sec)
+            self._piano_roll_cursor.setVisible(True)
+        else:
+            self._piano_roll_cursor.setVisible(False)
 
         self.save_midi_btn.setEnabled(result.output_midi_path is not None and Path(result.output_midi_path).exists())
 

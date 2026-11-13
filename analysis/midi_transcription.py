@@ -119,6 +119,21 @@ def _fallback_monophonic_stem_to_notes(audio_path: Path, *, max_seconds: float =
     cur_conf: float = 0.0
     cur_rms: float = 0.0
 
+    def _flush(end_sec: float) -> None:
+        nonlocal cur_midi
+        if cur_midi is not None and (end_sec - cur_start) >= 0.08:
+            notes.append(
+                MidiNoteCandidate(
+                    pitch_midi=cur_midi,
+                    note_name=_midi_to_name(cur_midi),
+                    start_sec=round(cur_start, 3),
+                    end_sec=round(end_sec, 3),
+                    velocity=max(30, min(120, int(cur_rms * 200))),
+                    confidence=round(cur_conf, 3),
+                )
+            )
+        cur_midi = None
+
     for pos in range(0, max(1, mono.shape[0] - fft_size + 1), hop):
         frame = mono[pos : pos + fft_size]
         if frame.shape[0] < fft_size:
@@ -126,23 +141,13 @@ def _fallback_monophonic_stem_to_notes(audio_path: Path, *, max_seconds: float =
         rms = float(np.sqrt(np.mean(np.square(frame))))
         t_sec = pos / float(sr)
         if rms < 0.01:
-            if cur_midi is not None and (t_sec - cur_start) >= 0.08:
-                notes.append(
-                    MidiNoteCandidate(
-                        pitch_midi=cur_midi,
-                        note_name=_midi_to_name(cur_midi),
-                        start_sec=round(cur_start, 3),
-                        end_sec=round(t_sec, 3),
-                        velocity=max(30, min(120, int(cur_rms * 200))),
-                        confidence=round(cur_conf, 3),
-                    )
-                )
-            cur_midi = None
+            _flush(t_sec)
             continue
 
         mag = np.abs(np.fft.rfft(frame * win)).astype(np.float32)
         p = est.estimate_from_magnitude(mag, is_silent=False)
         if p.frequency_hz is None or p.confidence < 0.2:
+            _flush(t_sec)
             continue
         midi_num = int(round(69.0 + 12.0 * np.log2(p.frequency_hz / 440.0)))
         if cur_midi is None:
@@ -151,35 +156,14 @@ def _fallback_monophonic_stem_to_notes(audio_path: Path, *, max_seconds: float =
             cur_conf = p.confidence
             cur_rms = rms
         elif midi_num != cur_midi:
-            if (t_sec - cur_start) >= 0.08:
-                notes.append(
-                    MidiNoteCandidate(
-                        pitch_midi=cur_midi,
-                        note_name=_midi_to_name(cur_midi),
-                        start_sec=round(cur_start, 3),
-                        end_sec=round(t_sec, 3),
-                        velocity=max(30, min(120, int(cur_rms * 200))),
-                        confidence=round(cur_conf, 3),
-                    )
-                )
+            _flush(t_sec)
             cur_midi = midi_num
             cur_start = t_sec
             cur_conf = p.confidence
             cur_rms = rms
 
     if cur_midi is not None:
-        end_t = mono.shape[0] / float(sr)
-        if (end_t - cur_start) >= 0.08:
-            notes.append(
-                MidiNoteCandidate(
-                    pitch_midi=cur_midi,
-                    note_name=_midi_to_name(cur_midi),
-                    start_sec=round(cur_start, 3),
-                    end_sec=round(end_t, 3),
-                    velocity=max(30, min(120, int(cur_rms * 200))),
-                    confidence=round(cur_conf, 3),
-                )
-            )
+        _flush(mono.shape[0] / float(sr))
     return notes
 
 
@@ -255,6 +239,8 @@ def transcribe_stem_to_midi(
 
 
 def _cli_main() -> int:
+    import sys
+
     parser = argparse.ArgumentParser(description="ListenScope Basic Pitch MIDI Transcription CLI")
     parser.add_argument("--audio", type=Path, required=True)
     parser.add_argument("--output-midi", type=Path, required=True)
@@ -264,19 +250,25 @@ def _cli_main() -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    res = transcribe_stem_to_midi(
-        args.audio,
-        args.output_midi,
-        stem_name=args.stem_name,
-        allow_full_mix=args.allow_full_mix,
-        allow_cpu_pitch_fallback=args.allow_cpu_fallback,
-    )
+    ipc_out = sys.stdout
     if args.json:
-        payload = asdict(res)
-        payload["output_midi_path"] = str(res.output_midi_path) if res.output_midi_path is not None else None
-        print(json.dumps(payload, ensure_ascii=False))
-    else:
-        print(f"MIDI written: {res.output_midi_path} ({len(res.notes)} notes, backend={res.backend_used})")
+        sys.stdout = sys.stderr
+    try:
+        res = transcribe_stem_to_midi(
+            args.audio,
+            args.output_midi,
+            stem_name=args.stem_name,
+            allow_full_mix=args.allow_full_mix,
+            allow_cpu_pitch_fallback=args.allow_cpu_fallback,
+        )
+        if args.json:
+            payload = asdict(res)
+            payload["output_midi_path"] = str(res.output_midi_path) if res.output_midi_path is not None else None
+            print(json.dumps(payload, ensure_ascii=False), file=ipc_out, flush=True)
+        else:
+            print(f"MIDI written: {res.output_midi_path} ({len(res.notes)} notes, backend={res.backend_used})")
+    finally:
+        sys.stdout = ipc_out
     return 0
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -21,6 +22,7 @@ from .models import (
     PyTorchProbeInfo,
     SystemHardwareReport,
 )
+from .paths import get_bundle_root, subprocess_no_window_kwargs
 
 
 def _run_cmd_line(cmd: list[str], timeout: float = 5.0) -> Optional[str]:
@@ -31,6 +33,7 @@ def _run_cmd_line(cmd: list[str], timeout: float = 5.0) -> Optional[str]:
             text=True,
             timeout=timeout,
             check=False,
+            **subprocess_no_window_kwargs(),
         )
         if proc.returncode == 0:
             return proc.stdout.strip()
@@ -509,6 +512,12 @@ def probe_external_ai_environment(
     """Safely inspect an isolated AI worker Python interpreter via subprocess JSON probe."""
     exe = str(python_executable or "").strip()
     if not exe:
+        if getattr(sys, "frozen", False):
+            return {
+                "ok": False,
+                "error": "未指定独立 AI Python 路径 (.venv-ai\\Scripts\\python.exe)，打包版主程序不包含 PyTorch。",
+                "python_executable": "",
+            }
         exe = sys.executable
     exe_path = Path(exe)
     if not exe_path.exists():
@@ -518,7 +527,7 @@ def probe_external_ai_environment(
             "python_executable": exe,
         }
 
-    bundle_root = Path(__file__).resolve().parent.parent
+    bundle_root = get_bundle_root()
     env = os.environ.copy()
     existing_pp = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
@@ -530,8 +539,11 @@ def probe_external_ai_environment(
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_sec,
             check=False,
+            **subprocess_no_window_kwargs(),
         )
     except Exception as exc:
         return {
@@ -563,4 +575,92 @@ def probe_external_ai_environment(
     data["ok"] = True
     data["python_executable"] = str(exe_path)
     return data
+
+
+def apply_external_ai_probe_to_report(
+    report: SystemHardwareReport,
+    probe_data: dict[str, Any],
+    *,
+    target: TargetHardwareSpec = TargetHardwareSpec(),
+) -> SystemHardwareReport:
+    """Merge an isolated `.venv-ai` probe payload into the Core host `SystemHardwareReport`.
+
+    Re-runs `evaluate_gpu_ai_readiness()` on the probed PyTorch / ONNX Runtime / GPU
+    capabilities so a torch-free Core process correctly reflects RTX 5060 Ti AI readiness
+    when `.venv-ai` is configured, while strictly preserving BLOCKED status on any failure.
+    """
+    if not isinstance(probe_data, dict) or not probe_data.get("ok"):
+        err = probe_data.get("error") if isinstance(probe_data, dict) else "AI 环境探针失败"
+        return replace(
+            report,
+            gpu_ai_ready=False,
+            gpu_ai_block_reason=str(err or report.gpu_ai_block_reason or "AI 环境未通过验证"),
+        )
+
+    raw_gpus = probe_data.get("gpus")
+    gpus: list[GPUInfo] = list(report.gpus)
+    if isinstance(raw_gpus, list) and raw_gpus:
+        parsed_gpus: list[GPUInfo] = []
+        for g in raw_gpus:
+            if not isinstance(g, dict):
+                continue
+            parsed_gpus.append(
+                GPUInfo(
+                    index=int(g.get("index", 0)),
+                    name=str(g.get("name", "NVIDIA GPU")),
+                    total_vram_mb=float(g.get("total_vram_mb", 0.0)),
+                    used_vram_mb=float(g.get("used_vram_mb", 0.0)),
+                    free_vram_mb=float(g.get("free_vram_mb", 0.0)),
+                    utilization_pct=float(g["utilization_pct"]) if g.get("utilization_pct") is not None else None,
+                    driver_version=g.get("driver_version"),
+                    source=str(g.get("source", "nvml")),
+                )
+            )
+        if parsed_gpus:
+            gpus = parsed_gpus
+
+    pt_d = probe_data.get("pytorch") or {}
+    cc = pt_d.get("compute_capability")
+    cc_tuple: Optional[tuple[int, int]] = None
+    if isinstance(cc, (list, tuple)) and len(cc) >= 2:
+        try:
+            cc_tuple = (int(cc[0]), int(cc[1]))
+        except (TypeError, ValueError):
+            cc_tuple = None
+
+    pytorch_info = PyTorchProbeInfo(
+        installed=bool(pt_d.get("installed", False)),
+        version=pt_d.get("version"),
+        cuda_available=bool(pt_d.get("cuda_available", False)),
+        cuda_build=pt_d.get("cuda_build"),
+        device_count=int(pt_d.get("device_count", 0)),
+        device_name=pt_d.get("device_name"),
+        compute_capability=cc_tuple,
+        arch_list=[str(a) for a in (pt_d.get("arch_list") or [])],
+        supports_sm_120=pt_d.get("supports_sm_120"),
+        kernel_smoke_test_passed=pt_d.get("kernel_smoke_test_passed"),
+        error=pt_d.get("error"),
+    )
+
+    ort_d = probe_data.get("onnxruntime") or {}
+    ort_info = OnnxRuntimeProbeInfo(
+        installed=bool(ort_d.get("installed", False)),
+        version=ort_d.get("version"),
+        providers=[str(p) for p in (ort_d.get("providers") or [])],
+        cuda_provider_available=bool(ort_d.get("cuda_provider_available", False)),
+        error=ort_d.get("error"),
+    )
+
+    gpu_ready, gpu_block_reason = evaluate_gpu_ai_readiness(gpus, pytorch_info, ort_info, target=target)
+    return replace(
+        report,
+        gpus=gpus,
+        nvidia_driver_version=probe_data.get("nvidia_driver_version") or report.nvidia_driver_version,
+        nvml_available=bool(probe_data.get("nvml_available", report.nvml_available)),
+        nvidia_smi_available=bool(probe_data.get("nvidia_smi_available", report.nvidia_smi_available)),
+        pytorch=pytorch_info,
+        onnxruntime=ort_info,
+        gpu_ai_ready=gpu_ready,
+        gpu_ai_block_reason=gpu_block_reason,
+    )
 

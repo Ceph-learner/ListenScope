@@ -426,6 +426,7 @@ def spawn_worker_entry(
 
 
 def _cli_main() -> int:
+    ipc_out = sys.stdout
     parser = argparse.ArgumentParser(description="ListenScope isolated AI Worker CLI runner")
     parser.add_argument("--request-json", type=Path, required=True)
     parser.add_argument("--config-json", type=Path, required=True)
@@ -440,20 +441,26 @@ def _cli_main() -> int:
     def _emit(prog: AIJobProgress) -> None:
         print(
             json.dumps({"type": "progress", "payload": _serialize_dataclass(prog)}, ensure_ascii=False),
+            file=ipc_out,
             flush=True,
         )
 
-    res = execute_worker_job(
-        req,
-        cancel_check=args.cancel_flag.exists,
-        emit_progress=_emit,
-        ai_config=cfg,
-    )
-    print(
-        json.dumps({"type": "result", "payload": _serialize_dataclass(res)}, ensure_ascii=False),
-        flush=True,
-    )
-    return 0 if res.state in (AIJobState.COMPLETED, AIJobState.CANCELLED) else 1
+    sys.stdout = sys.stderr
+    try:
+        res = execute_worker_job(
+            req,
+            cancel_check=args.cancel_flag.exists,
+            emit_progress=_emit,
+            ai_config=cfg,
+        )
+        print(
+            json.dumps({"type": "result", "payload": _serialize_dataclass(res)}, ensure_ascii=False),
+            file=ipc_out,
+            flush=True,
+        )
+        return 0 if res.state in (AIJobState.COMPLETED, AIJobState.CANCELLED) else 1
+    finally:
+        sys.stdout = ipc_out
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from core.models import ChordEstimate
 from .chroma import PITCH_CLASSES
 
 
-def _build_chord_templates() -> tuple[list[str], np.ndarray]:
+def _build_chord_templates(*, include_sevenths: bool = False) -> tuple[list[str], np.ndarray]:
     names: list[str] = []
     templates: list[np.ndarray] = []
     # Root weighted slightly higher than 3rd and 5th
@@ -24,6 +24,24 @@ def _build_chord_templates() -> tuple[list[str], np.ndarray]:
         names.append(f"{root_name}m")
         templates.append(np.roll(min_pattern, root_idx))
 
+    if include_sevenths:
+        maj7_p = np.array([1.0, 0, 0, 0, 0.82, 0, 0, 0.85, 0, 0, 0, 0.72], dtype=np.float32)
+        min7_p = np.array([1.0, 0, 0, 0.82, 0, 0, 0, 0.85, 0, 0, 0.72, 0], dtype=np.float32)
+        dom7_p = np.array([1.0, 0, 0, 0, 0.82, 0, 0, 0.85, 0, 0, 0.72, 0], dtype=np.float32)
+        sus4_p = np.array([1.0, 0, 0, 0, 0, 0.82, 0, 0.90, 0, 0, 0, 0], dtype=np.float32)
+        for p in (maj7_p, min7_p, dom7_p, sus4_p):
+            p /= np.linalg.norm(p)
+
+        for root_idx, root_name in enumerate(PITCH_CLASSES):
+            names.append(f"{root_name}maj7")
+            templates.append(np.roll(maj7_p, root_idx))
+            names.append(f"{root_name}m7")
+            templates.append(np.roll(min7_p, root_idx))
+            names.append(f"{root_name}7")
+            templates.append(np.roll(dom7_p, root_idx))
+            names.append(f"{root_name}sus4")
+            templates.append(np.roll(sus4_p, root_idx))
+
     return names, np.stack(templates, axis=0)
 
 
@@ -36,8 +54,10 @@ class ChordDetector:
         ema_alpha: float = 0.35,
         min_correlation: float = 0.58,
         min_margin_for_high: float = 0.08,
+        include_sevenths: bool = False,
     ) -> None:
-        self._names, self._templates = _build_chord_templates()
+        self._include_sevenths = bool(include_sevenths)
+        self._names, self._templates = _build_chord_templates(include_sevenths=self._include_sevenths)
         self._ema_alpha = ema_alpha
         self._min_correlation = min_correlation
         self._min_margin_for_high = min_margin_for_high

@@ -73,25 +73,31 @@ def main() -> int:
     target = TargetHardwareSpec()
     limits = ResourceLimits()
     audio_cfg = AudioConfig()
-    report = probe_system(target=target)
     out_path = None if args.no_write else args.write_report
-    md = generate_system_report_markdown(
-        report,
-        target=target,
-        limits=limits,
-        audio_cfg=audio_cfg,
-        output_path=out_path,
-    )
-
+    ipc_out = sys.stdout
     if args.json:
-        payload = report.to_dict()
-        if args.check_ai_packages:
-            payload["ai_packages"] = _probe_ai_packages()
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-    else:
-        print(md)
-        if out_path is not None:
-            print(f"[Saved] {out_path}")
+        sys.stdout = sys.stderr
+    try:
+        report = probe_system(target=target)
+        md = generate_system_report_markdown(
+            report,
+            target=target,
+            limits=limits,
+            audio_cfg=audio_cfg,
+            output_path=out_path,
+        )
+
+        if args.json:
+            payload = report.to_dict()
+            if args.check_ai_packages:
+                payload["ai_packages"] = _probe_ai_packages()
+            print(json.dumps(payload, ensure_ascii=False, indent=2), file=ipc_out, flush=True)
+        else:
+            print(md)
+            if out_path is not None:
+                print(f"[Saved] {out_path}")
+    finally:
+        sys.stdout = ipc_out
     return 0
 
 

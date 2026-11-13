@@ -22,7 +22,13 @@ import wave
 import numpy as np
 from PySide6 import QtCore, QtWidgets
 
-ROOT = Path(__file__).resolve().parent
+_SRC_DIR = Path(__file__).resolve().parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
+from core.paths import get_bundle_root, subprocess_no_window_kwargs
+
+ROOT = get_bundle_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -55,7 +61,11 @@ from core.models import (
 )
 from core.resource_manager import ResourceManager
 from core.settings_store import PersistedSettings, default_settings_path, load_settings, save_settings
-from core.system_probe import probe_system
+from core.system_probe import (
+    apply_external_ai_probe_to_report,
+    probe_external_ai_environment,
+    probe_system,
+)
 from streaming.live_separator import ExperimentalLiveSeparator
 from ui.main_window import ListenScopeMainWindow
 
@@ -63,7 +73,7 @@ from ui.main_window import ListenScopeMainWindow
 def _discover_ai_python_executable() -> Optional[str]:
     """Locate isolated `.venv-ai` Python executable across source & frozen PyInstaller layouts."""
     exe_dir = Path(sys.executable).resolve().parent
-    roots = [ROOT, exe_dir, exe_dir.parent]
+    roots = [ROOT, exe_dir, exe_dir.parent, exe_dir.parent.parent]
     candidates: list[Path] = []
     for base in roots:
         candidates.append(base / ".venv-ai" / "Scripts" / "python.exe")
@@ -186,6 +196,7 @@ class ListenScopeController:
             ai_config=self.ai_config,
             audio_config=self.audio_config,
             is_offline_job_busy_fn=lambda: self.ai_job_manager.is_busy,
+            ai_python_executable=ai_python_executable,
         )
 
         self._capture_backend: Optional[AudioCaptureBackend] = None
@@ -199,6 +210,8 @@ class ListenScopeController:
         self._ui_live_pending_q: queue.Queue[bool] = queue.Queue(maxsize=8)
         self._ui_midi_result_q: queue.Queue[tuple[Optional[MidiTranscriptionResult], Optional[str]]] = queue.Queue(maxsize=8)
         self._ui_deep_analysis_q: queue.Queue[tuple[Optional[StemDeepAnalysisReport], Optional[str]]] = queue.Queue(maxsize=4)
+        self._ui_hw_probe_q: queue.Queue[tuple[int, dict[str, Any]]] = queue.Queue(maxsize=4)
+        self._probe_seq = 0
         self._last_ai_request: Optional[AIJobRequest] = None
         self._latest_deep_report: Optional[StemDeepAnalysisReport] = None
         self._latest_midi_result: Optional[MidiTranscriptionResult] = None
@@ -228,6 +241,33 @@ class ListenScopeController:
         self._tick_counter = 0
         self._shutdown_done = False
 
+        if ai_python_executable:
+            self._schedule_external_ai_probe(ai_python_executable)
+
+    @staticmethod
+    def _is_external_python(ai_python: Optional[str]) -> bool:
+        if not ai_python:
+            return False
+        if getattr(sys, "frozen", False):
+            return True
+        try:
+            return Path(ai_python).resolve() != Path(sys.executable).resolve()
+        except Exception:
+            return True
+
+    def _schedule_external_ai_probe(self, ai_python: str) -> None:
+        if not ai_python or not self._is_external_python(ai_python) or not Path(ai_python).exists():
+            return
+        self._probe_seq += 1
+        seq = self._probe_seq
+
+        def _run() -> None:
+            res = probe_external_ai_environment(ai_python, timeout_sec=15.0)
+            if not getattr(self, "_shutdown_done", False):
+                self._put_latest(self._ui_hw_probe_q, (seq, res))
+
+        threading.Thread(target=_run, name="ListenScope-ExtAIProbe", daemon=True).start()
+
     @staticmethod
     def _put_latest(q: queue.Queue[Any], item: Any) -> None:
         while True:
@@ -254,6 +294,7 @@ class ListenScopeController:
         w.ab_set_range_sec_requested.connect(self._on_ab_set_range)
         w.ab_play_requested.connect(self._on_ab_play)
         w.ab_stop_requested.connect(self.ab_player.stop)
+        w.ab_export_wav_requested.connect(self._on_export_ab_wav)
         w.import_audio_requested.connect(self._on_import_audio_file)
         w.ai_separate_requested.connect(self._on_start_ai_separation)
         w.emergency_stop_requested.connect(self._on_emergency_stop)
@@ -363,6 +404,21 @@ class ListenScopeController:
             self.window.show_banner_message(hint)
         except Exception as exc:
             self.window.show_banner_message(f"A/B 回放失败: {exc}")
+
+    def _on_export_ab_wav(self, out_path: str) -> None:
+        if not out_path:
+            return
+        if self.ring_buffer.available_seconds < 0.2:
+            self.window.show_banner_message("当前 120s 环形缓冲可用音频不足，请先捕获或导入本地音频。")
+            return
+        if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
+            self.ab_player.select_recent_seconds(min(30.0, self.ring_buffer.available_seconds))
+        a_frame, b_frame = self.ab_player.loop_range
+        try:
+            saved, dur = self.ring_buffer.export_wav_streaming(out_path, a_frame, b_frame)
+            self.window.show_banner_message(f"✅ 已流式导出 A/B 片段 WAV ({dur:.2f}s): {saved}")
+        except Exception as exc:
+            self.window.show_banner_message(f"导出 A/B 片段失败: {exc}")
 
     def _on_mixer_before_play(self) -> None:
         self.ab_player.pause()
@@ -492,10 +548,16 @@ class ListenScopeController:
             )
             avail = self.ring_buffer.available_seconds
             if avail >= 0.5:
-                self.ab_player.select_recent_seconds(min(30.0, avail))
+                sel = min(30.0, avail)
+                self.ab_player.select_recent_seconds(sel)
+                self.window.start_ago_spin.setValue(round(sel, 2))
+                self.window.end_ago_spin.setValue(0.0)
+                self.window._set_ab_region_from_ago(sel, 0.0)
             self.window.history_coverage_lbl.setText(
                 f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s"
             )
+            mins, maxs, avail_sec = self.ring_buffer.snapshot_envelope(300)
+            self.window.update_history_overview(mins, maxs, avail_sec)
             if truncated:
                 self.window.show_banner_message(
                     f"⚠️ 本地音频已流式载入前 {imported_sec:.1f}s（超过 {self.audio_config.ring_buffer_seconds:.0f}s 上限已自动截断以保护内存），可直接 A/B 播放或 AI 分轨。"
@@ -522,25 +584,43 @@ class ListenScopeController:
                 dst_channels=self.audio_config.channels,
             )
             self.ring_buffer.write(canon)
+            mins, maxs, avail_sec = self.ring_buffer.snapshot_envelope(300)
+            self.window.update_history_overview(mins, maxs, avail_sec)
             self.window.tabs.setCurrentWidget(self.window.chroma_widget)
             self.window.show_banner_message(f"已将单轨 `{stem_name}` 载入实时和弦/音高分析视图（仅截取前 <=30s）。")
         except Exception as exc:
             self.window.show_banner_message(f"送入分析失败: {exc}")
 
-    def _on_deep_analyze_stems(self, stem_paths: dict[str, str]) -> None:
+    def _on_deep_analyze_stems(
+        self,
+        stem_paths: dict[str, str],
+        include_sevenths: Optional[bool] = None,
+    ) -> None:
         """Run non-destructive CPU streaming analysis over separated stems without touching live capture."""
         if not stem_paths:
             self.window.show_banner_message("当前没有可供深度分析的分轨 WAV 文件。")
             return
-        self.window.show_banner_message("⏳ 正在后台离线流式深度分析分轨 (和弦进行 / Bass / 鼓组 / 主旋律)...")
+        use_7ths = (
+            bool(self.window.mixer_widget.include_sevenths)
+            if include_sevenths is None
+            else bool(include_sevenths)
+        )
+        mode_tag = "扩展 7 和弦" if use_7ths else "标准三和弦"
+        self.window.show_banner_message(
+            f"⏳ 正在后台离线流式深度分析分轨 ({mode_tag} / Bass / 鼓组 / 主旋律)..."
+        )
         paths_copy = dict(stem_paths)
         max_sec = float(self.audio_config.ring_buffer_seconds)
 
         def _run() -> None:
             try:
-                report = analyze_stems_offline(paths_copy, max_seconds=max_sec)
+                report = analyze_stems_offline(
+                    paths_copy,
+                    max_seconds=max_sec,
+                    include_sevenths=use_7ths,
+                )
                 msg = (
-                    f"✅ 深度分轨分析完成 ({report.duration_sec:.1f}s)："
+                    f"✅ 深度分轨分析完成 ({report.duration_sec:.1f}s | {mode_tag})："
                     f"识别 {len(report.chord_timeline)} 段和弦 | 调性={report.estimated_key.primary}"
                 )
                 self._put_latest(self._ui_deep_analysis_q, (report, msg))
@@ -588,20 +668,16 @@ class ListenScopeController:
         self.window.show_banner_message(f"⏳ 正在后台执行 `{stem_name}` MIDI 转录...")
         ai_py = self.ai_job_manager.ai_python_executable
         mock_mode = self.use_mock_ai_for_demo
+        bundle_root = get_bundle_root()
 
         def _run() -> None:
             try:
-                use_ext = False
-                if ai_py and not mock_mode:
-                    try:
-                        use_ext = Path(ai_py).resolve() != Path(sys.executable).resolve()
-                    except Exception:
-                        use_ext = False
+                use_ext = bool(ai_py and not mock_mode and self._is_external_python(ai_py))
 
                 if use_ext and ai_py is not None:
                     env = os.environ.copy()
                     existing_pp = env.get("PYTHONPATH", "")
-                    env["PYTHONPATH"] = f"{ROOT}{os.pathsep}{existing_pp}" if existing_pp else str(ROOT)
+                    env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
                     cmd = [
                         ai_py,
                         "-m",
@@ -617,15 +693,22 @@ class ListenScopeController:
                     ]
                     proc = subprocess.run(
                         cmd,
-                        cwd=str(ROOT),
+                        cwd=str(bundle_root),
                         env=env,
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=180.0,
                         check=True,
+                        **subprocess_no_window_kwargs(),
                     )
                     lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
-                    data = json.loads(lines[-1])
+                    candidate = lines[-1] if lines else proc.stdout.strip()
+                    brace = candidate.find("{")
+                    if brace > 0:
+                        candidate = candidate[brace:]
+                    data = json.loads(candidate)
                     res = MidiTranscriptionResult(
                         source_stem_name=str(data["source_stem_name"]),
                         output_midi_path=Path(data["output_midi_path"]) if data.get("output_midi_path") else None,
@@ -697,6 +780,20 @@ class ListenScopeController:
         self.ai_job_manager.ai_config = ai_cfg
         self.ai_job_manager.ai_python_executable = ai_python or None
         self.live_separator.ai_config = ai_cfg
+        self.live_separator.ai_python_executable = ai_python or None
+
+        verified_probe = self.window.last_verified_ai_probe
+        if verified_probe is not None and str(verified_probe.get("python_executable", "")) == ai_python:
+            self._probe_seq += 1
+            self.hardware_report = apply_external_ai_probe_to_report(self.hardware_report, verified_probe)
+            self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)
+        elif ai_python and self._is_external_python(ai_python):
+            self._schedule_external_ai_probe(ai_python)
+        elif not ai_python:
+            self._probe_seq += 1
+            self.hardware_report = probe_system()
+            self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)
+
         try:
             saved = save_settings(
                 PersistedSettings(
@@ -714,6 +811,18 @@ class ListenScopeController:
         self._tick_counter += 1
 
         # Drain thread-safe UI notification queues
+        while True:
+            try:
+                seq, probe_data = self._ui_hw_probe_q.get_nowait()
+                if seq == self._probe_seq:
+                    self.hardware_report = apply_external_ai_probe_to_report(self.hardware_report, probe_data)
+                    self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)
+                    if self.hardware_report.gpu_ai_ready:
+                        self.window.show_banner_message(
+                            f"✅ 独立 AI 环境已通过 RTX 5060 Ti / CUDA / ONNX 检测，GPU AI 推理已解锁。"
+                        )
+            except queue.Empty:
+                break
         while True:
             try:
                 self.window.update_ai_progress(self._ui_ai_progress_q.get_nowait())
@@ -778,8 +887,8 @@ class ListenScopeController:
             )
             self.window.update_analysis_snapshot(asnap, spectrogram=spec_hist, chroma_history=chroma_hist)
 
-        # Update capture stats & resource monitor every ~4 ticks (~180-250ms)
-        if self._tick_counter % 4 == 0:
+        # Update capture stats, 120s history overview waveform & resource monitor on tick 1 and every ~4 ticks (~200ms)
+        if self._tick_counter == 1 or self._tick_counter % 4 == 0:
             if self._capture_backend is not None:
                 cstats = self._capture_backend.get_stats()
                 self.resource_manager.update_runtime_state(
@@ -789,6 +898,9 @@ class ListenScopeController:
                 self.window.update_capture_stats(cstats, self.ring_buffer.available_seconds)
             else:
                 self.window.history_coverage_lbl.setText(f"已缓冲: {self.ring_buffer.available_seconds:.1f} / 120.0 s")
+
+            mins, maxs, avail_sec = self.ring_buffer.snapshot_envelope(300)
+            self.window.update_history_overview(mins, maxs, avail_sec)
 
             rsnap = self.resource_manager.sample()
             self.window.update_resource_snapshot(
@@ -803,6 +915,7 @@ class ListenScopeController:
         if getattr(self, "_shutdown_done", False):
             return
         self._shutdown_done = True
+        self._probe_seq += 1
         if hasattr(self, "_timer"):
             self._timer.stop()
         self.stop_capture()

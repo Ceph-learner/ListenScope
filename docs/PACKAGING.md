@@ -84,7 +84,7 @@ pip install pyinstaller
 pyinstaller packaging\listenscope_core.spec --noconfirm
 ```
 
-打包输出位于 `dist\ListenScopeCore\ListenScope.exe`。打包规范（[`listenscope_core.spec`](../packaging/listenscope_core.spec)）会自动打包 `proctap` / `soundfile` 原生库并附带 `ai/`、`separation/`、`core/`、`analysis/`、`scripts/` 纯 Python 模块，以便外部 `.venv-ai\Scripts\python.exe` 同时执行音轨分离（`python -m ai.worker`）、Basic Pitch MIDI 转录（`python -m analysis.midi_transcription`）与设置面板 **“验证 AI 环境”**（`python -m scripts.check_env --json --check-ai-packages --no-write`）。运行后可在 **设置 -> 资源安全阈值 & AI 配置 -> 独立 AI Worker Python 路径** 通过「浏览...」与「验证 AI 环境」检查后点击 OK 持久化保存至 `~/.listenscope/settings.json`。
+打包输出位于 `dist\ListenScopeCore\ListenScope.exe`。打包规范（[`listenscope_core.spec`](../packaging/listenscope_core.spec)）会自动打包 `proctap` / `soundfile` 原生库并附带 `ai/`、`separation/`、`streaming/`、`audio/`、`core/`、`analysis/`、`scripts/` 纯 Python 模块（通过 [`core/paths.py`](../core/paths.py) 自动定位 `sys._MEIPASS` 并使用 `CREATE_NO_WINDOW` 静默启动子进程），以便外部 `.venv-ai\Scripts\python.exe` 同时执行音轨分离（`python -m ai.worker`）、实验性实时分轨（`python -m streaming.live_separator` / `streaming.benchmark`）、Basic Pitch MIDI 转录（`python -m analysis.midi_transcription`）与设置面板 **“验证 AI 环境”**（`python -m scripts.check_env --json --check-ai-packages --no-write`）。运行后可在 **设置 -> 资源安全阈值 & AI 配置 -> 独立 AI Worker Python 路径** 通过「浏览...」与「验证 AI 环境」检查后点击 OK，外部 `.venv-ai` GPU 就绪状态会实时同步主窗口勾选状态并持久化保存至 `~/.listenscope/settings.json`。
 
 ### Windows 真机音频设备排障说明（捕获前必看）
 

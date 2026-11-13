@@ -37,6 +37,8 @@ a = Analysis(
         (str(project_root / "requirements-ai.txt"), "."),
         (str(project_root / "ai"), "ai"),
         (str(project_root / "separation"), "separation"),
+        (str(project_root / "streaming"), "streaming"),
+        (str(project_root / "audio"), "audio"),
         (str(project_root / "core"), "core"),
         (str(project_root / "analysis"), "analysis"),
         (str(project_root / "scripts"), "scripts"),

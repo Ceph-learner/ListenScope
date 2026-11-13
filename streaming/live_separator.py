@@ -3,7 +3,7 @@
 Strict safeguards:
 - Default OFF; must be explicitly started by the user.
 - 2-stem only (vocals + instrumental), default low-VRAM MDX model.
-- Inference runs inside a dedicated isolated `spawn` worker subprocess.
+- Inference runs inside a dedicated isolated subprocess (`spawn` OR external `.venv-ai`).
 - Strictly bounded input lag and bounded output ring buffer (`live_max_buffer_seconds`).
 - Automatically stops if ResourceManager enters Warning or Critical state, or if
   RTF exceeds real-time safety cleanly, leaving CPU capture & spectrum untouched.
@@ -11,12 +11,19 @@ Strict safeguards:
 
 from __future__ import annotations
 
+import argparse
+import base64
+from collections import deque
 from dataclasses import asdict
+import json
 import logging
 import multiprocessing
+import os
 from pathlib import Path
 import queue
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any, Callable, Optional
@@ -33,6 +40,7 @@ from ai.resource_guard import release_torch_and_memory
 from audio.ring_buffer import FixedRingBuffer
 from core.config import AIConfig, AudioConfig, TargetHardwareSpec
 from core.models import LiveSeparationMetrics, ResourceStatus
+from core.paths import get_bundle_root, subprocess_no_window_kwargs
 from core.resource_manager import ResourceManager
 from core.system_probe import (
     _probe_gpus_nvml,
@@ -42,7 +50,7 @@ from core.system_probe import (
     evaluate_gpu_ai_readiness,
 )
 
-from .benchmark import LiveBenchmarkResult, benchmark_live_model
+from .benchmark import LiveBenchmarkResult, benchmark_live_model, benchmark_live_model_isolated
 from .overlap_add import OverlapAddAccumulator
 
 logger = logging.getLogger(__name__)
@@ -130,6 +138,97 @@ def _live_worker_entry(
         release_torch_and_memory()
 
 
+def _external_worker_cli(config_json: Path) -> int:
+    """External `.venv-ai` live 2-stem worker communicating via JSON + base64 over stdin/stdout."""
+    ipc_out = sys.stdout
+    sys.stdout = sys.stderr
+
+    def _send(obj: dict[str, Any]) -> None:
+        print(json.dumps(obj, ensure_ascii=False), file=ipc_out, flush=True)
+
+    backend = None
+    try:
+        cfg_payload = json.loads(config_json.read_text(encoding="utf-8"))
+        ai_cfg = AIConfig(**(cfg_payload.get("ai_config") or {}))
+        model_id = str(cfg_payload["model_id"])
+        sample_rate = int(cfg_payload["sample_rate"])
+        use_gpu = bool(cfg_payload.get("use_gpu", True))
+        use_mock_backend = bool(cfg_payload.get("use_mock_backend", False))
+        simulate_delay_sec = float(cfg_payload.get("simulate_delay_sec", 0.0))
+
+        if use_gpu and not use_mock_backend:
+            gpus, _, _ = _probe_gpus_nvml()
+            if not gpus:
+                gpus, _, _ = _probe_gpus_nvidia_smi()
+            ready, reason = evaluate_gpu_ai_readiness(
+                gpus,
+                _probe_pytorch(),
+                _probe_onnxruntime(),
+                target=TargetHardwareSpec(),
+            )
+            if not ready:
+                _send({"type": "error", "error": reason or "GPU AI 环境未就绪"})
+                return 1
+
+        backend = build_separation_backend(
+            model_id,
+            use_gpu=use_gpu,
+            overlap=ai_cfg.mdx_overlap,
+            ai_config=ai_cfg,
+            use_mock_backend=use_mock_backend,
+            simulate_delay_sec=simulate_delay_sec,
+        )
+        backend.load_model()
+        _send({"type": "ready"})
+
+        for line in sys.stdin:
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                req = json.loads(text)
+            except Exception:
+                continue
+            mtype = req.get("type")
+            if mtype == "stop":
+                break
+            if mtype != "chunk":
+                continue
+
+            seq = int(req["seq"])
+            shape = tuple(int(x) for x in req["shape"])
+            raw = base64.b64decode(req["pcm_b64"])
+            chunk = np.frombuffer(raw, dtype=np.float32).reshape(shape)
+            t0 = time.monotonic()
+            stems = backend.separate_chunk(chunk, sample_rate)
+            infer_sec = time.monotonic() - t0
+            voc = np.asarray(stems["vocals"], dtype=np.float32)
+            inst = np.asarray(stems["instrumental"], dtype=np.float32)
+            _send(
+                {
+                    "type": "chunk",
+                    "seq": seq,
+                    "shape": list(voc.shape),
+                    "infer_sec": infer_sec,
+                    "vocals_b64": base64.b64encode(voc.tobytes()).decode("ascii"),
+                    "instrumental_b64": base64.b64encode(inst.tobytes()).decode("ascii"),
+                }
+            )
+        return 0
+    except Exception as exc:
+        _send({"type": "error", "error": f"实时分轨 worker 异常: {exc}"})
+        return 1
+    finally:
+        if backend is not None:
+            try:
+                backend.unload_model()
+            except Exception:
+                pass
+            del backend
+        release_torch_and_memory()
+        sys.stdout = ipc_out
+
+
 class ExperimentalLiveSeparator:
     """Near-real-time 2-stem processor reading recent chunks from FixedRingBuffer."""
 
@@ -141,12 +240,14 @@ class ExperimentalLiveSeparator:
         ai_config: Optional[AIConfig] = None,
         audio_config: Optional[AudioConfig] = None,
         is_offline_job_busy_fn: Optional[Callable[[], bool]] = None,
+        ai_python_executable: Optional[str | Path] = None,
     ) -> None:
         self.ring_buffer = ring_buffer
         self.resource_manager = resource_manager
         self.ai_config = ai_config or AIConfig()
         self.audio_config = audio_config or ring_buffer.audio_config
         self._is_offline_job_busy_fn = is_offline_job_busy_fn
+        self.ai_python_executable = str(ai_python_executable) if ai_python_executable else None
 
         sr = self.audio_config.sample_rate
         ch = self.audio_config.channels
@@ -169,10 +270,20 @@ class ExperimentalLiveSeparator:
         self._feed_thread: Optional[threading.Thread] = None
         self._stream: Any = None
 
+        # Spawn multiprocessing worker handles
         self._proc: Optional[multiprocessing.Process] = None
         self._req_q: Any = None
         self._res_q: Any = None
         self._proc_stop_ev: Any = None
+
+        # External AI venv Popen worker handles
+        self._subproc: Optional[subprocess.Popen[str]] = None
+        self._subproc_tmp: Optional[tempfile.TemporaryDirectory[str]] = None
+        self._subproc_writer_thread: Optional[threading.Thread] = None
+        self._subproc_reader_thread: Optional[threading.Thread] = None
+        self._subproc_stderr_thread: Optional[threading.Thread] = None
+        self._subproc_stderr_tail: deque[str] = deque(maxlen=30)
+        self._worker_pid: Optional[int] = None
 
         self._model_id = "mdx_low_vram_2stem"
         self._last_read_abs_frame = 0
@@ -183,6 +294,14 @@ class ExperimentalLiveSeparator:
         self._inst_gain = 1.0
         self._status_message = "实验功能已关闭 (默认关闭)"
         self._overlap_add = OverlapAddAccumulator(channels=ch, overlap_frames=self._overlap_frames)
+
+    def _uses_external_python(self) -> bool:
+        if not self.ai_python_executable:
+            return False
+        try:
+            return Path(self.ai_python_executable).resolve() != Path(sys.executable).resolve()
+        except Exception:
+            return str(self.ai_python_executable).strip() != str(sys.executable).strip()
 
     def set_gains(self, vocals_gain: float, inst_gain: float) -> None:
         with self._lock:
@@ -229,6 +348,16 @@ class ExperimentalLiveSeparator:
         use_mock_backend: bool = False,
         simulate_delay_sec: float = 0.0,
     ) -> LiveBenchmarkResult:
+        if self._uses_external_python() or not use_mock_backend:
+            return benchmark_live_model_isolated(
+                model_id=model_id,
+                ai_python_executable=self.ai_python_executable,
+                use_gpu=use_gpu,
+                use_mock_backend=use_mock_backend,
+                simulate_delay_sec=simulate_delay_sec,
+                ai_config=self.ai_config,
+                audio_config=self.audio_config,
+            )
         return benchmark_live_model(
             model_id=model_id,
             use_gpu=use_gpu,
@@ -237,6 +366,198 @@ class ExperimentalLiveSeparator:
             ai_config=self.ai_config,
             audio_config=self.audio_config,
         )
+
+    def _is_worker_alive(self) -> bool:
+        if self._proc is not None:
+            return self._proc.is_alive()
+        if self._subproc is not None:
+            return self._subproc.poll() is None
+        return False
+
+    def _worker_exitcode(self) -> Optional[int]:
+        if self._proc is not None:
+            return self._proc.exitcode
+        if self._subproc is not None:
+            return self._subproc.poll()
+        return None
+
+    def _launch_external_worker_locked(
+        self,
+        *,
+        model_id: str,
+        use_gpu: bool,
+        use_mock_backend: bool,
+        simulate_delay_sec: float,
+    ) -> tuple[queue.Queue[Any], queue.Queue[dict[str, Any]], int]:
+        assert self.ai_python_executable is not None
+        bundle_root = get_bundle_root()
+        tmp_dir = tempfile.TemporaryDirectory(prefix="ls_live_ipc_")
+        cfg_path = Path(tmp_dir.name) / "live_config.json"
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "ai_config": asdict(self.ai_config),
+                    "model_id": model_id,
+                    "sample_rate": self.audio_config.sample_rate,
+                    "use_gpu": use_gpu,
+                    "use_mock_backend": use_mock_backend,
+                    "simulate_delay_sec": simulate_delay_sec,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        env = os.environ.copy()
+        existing_pp = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
+
+        self._subproc_stderr_tail.clear()
+        proc = subprocess.Popen(
+            [
+                self.ai_python_executable,
+                "-m",
+                "streaming.live_separator",
+                "--worker",
+                "--config-json",
+                str(cfg_path),
+            ],
+            cwd=str(bundle_root),
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            **subprocess_no_window_kwargs(),
+        )
+        req_q: queue.Queue[Any] = queue.Queue(maxsize=2)
+        res_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=4)
+
+        def _write_stdin() -> None:
+            pipe = proc.stdin
+            if pipe is None:
+                return
+            try:
+                while not self._stop_event.is_set() and proc.poll() is None:
+                    try:
+                        item = req_q.get(timeout=0.08)
+                    except queue.Empty:
+                        continue
+                    if item is None:
+                        pipe.write(json.dumps({"type": "stop"}) + "\n")
+                        pipe.flush()
+                        break
+                    seq, chunk_bytes, shape = item
+                    line = json.dumps(
+                        {
+                            "type": "chunk",
+                            "seq": int(seq),
+                            "shape": list(shape),
+                            "pcm_b64": base64.b64encode(chunk_bytes).decode("ascii"),
+                        }
+                    )
+                    pipe.write(line + "\n")
+                    pipe.flush()
+            except Exception:
+                pass
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        def _read_stdout() -> None:
+            pipe = proc.stdout
+            if pipe is None:
+                return
+            try:
+                for line in pipe:
+                    text = line.strip()
+                    if not text:
+                        continue
+                    try:
+                        msg = json.loads(text)
+                    except Exception:
+                        brace = text.find("{")
+                        if brace <= 0:
+                            continue
+                        try:
+                            msg = json.loads(text[brace:])
+                        except Exception:
+                            continue
+                    if not isinstance(msg, dict):
+                        continue
+                    mtype = msg.get("type")
+                    if mtype == "chunk":
+                        decoded = {
+                            "type": "chunk",
+                            "seq": msg["seq"],
+                            "vocals": base64.b64decode(msg["vocals_b64"]),
+                            "instrumental": base64.b64decode(msg["instrumental_b64"]),
+                            "shape": tuple(int(x) for x in msg["shape"]),
+                            "infer_sec": float(msg.get("infer_sec", 0.0)),
+                        }
+                        out_item = decoded
+                    else:
+                        out_item = msg
+                    try:
+                        res_q.put_nowait(out_item)
+                    except queue.Full:
+                        if out_item.get("type") in ("ready", "error"):
+                            try:
+                                res_q.get_nowait()
+                            except queue.Empty:
+                                pass
+                            try:
+                                res_q.put_nowait(out_item)
+                            except queue.Full:
+                                pass
+            except Exception:
+                pass
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        def _read_stderr() -> None:
+            pipe = proc.stderr
+            if pipe is None:
+                return
+            try:
+                for line in pipe:
+                    text = line.strip()
+                    if text:
+                        self._subproc_stderr_tail.append(text[-400:])
+            except Exception:
+                pass
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        self._subproc = proc
+        self._subproc_tmp = tmp_dir
+        self._req_q = req_q
+        self._res_q = res_q
+        self._worker_pid = proc.pid
+        self._subproc_writer_thread = threading.Thread(
+            target=_write_stdin, name="ListenScope-LiveStdinWriter", daemon=True
+        )
+        self._subproc_reader_thread = threading.Thread(
+            target=_read_stdout, name="ListenScope-LiveStdoutReader", daemon=True
+        )
+        self._subproc_stderr_thread = threading.Thread(
+            target=_read_stderr, name="ListenScope-LiveStderrDrain", daemon=True
+        )
+        self._subproc_writer_thread.start()
+        self._subproc_reader_thread.start()
+        self._subproc_stderr_thread.start()
+        return req_q, res_q, proc.pid
 
     def start(
         self,
@@ -261,6 +582,14 @@ class ExperimentalLiveSeparator:
             spec = MODEL_REGISTRY.get(model_id)
             if spec is None or spec.stem_mode != "2stem":
                 return False, "实验性实时分轨仅支持 2-stem 模型。"
+
+            if getattr(sys, "frozen", False) and not self._uses_external_python() and not use_mock_backend:
+                msg = (
+                    "独立 AI 环境 (.venv-ai) 未配置：Windows 打包版主程序不包含 PyTorch/ONNX Runtime，"
+                    "请在「设置 -> 资源安全阈值 & AI 配置」中指定 .venv-ai\\Scripts\\python.exe。"
+                )
+                self._status_message = msg
+                return False, msg
 
             allowed, reason = self.resource_manager.can_start_ai_job(
                 stem_mode="2stem",
@@ -322,32 +651,42 @@ class ExperimentalLiveSeparator:
                 self._overlap_add.reset()
                 self._last_read_abs_frame = self.ring_buffer.total_written_frames
 
-                ctx = multiprocessing.get_context("spawn")
-                req_q = ctx.Queue(maxsize=2)
-                res_q = ctx.Queue(maxsize=4)
-                stop_ev = ctx.Event()
-                proc = ctx.Process(
-                    target=_live_worker_entry,
-                    args=(
-                        asdict(self.ai_config),
-                        model_id,
-                        self.audio_config.sample_rate,
-                        use_gpu,
-                        use_mock_backend,
-                        simulate_delay_sec,
-                        req_q,
-                        res_q,
-                        stop_ev,
-                    ),
-                    name="ListenScope-LiveSepWorker",
-                    daemon=True,
-                )
-                proc.start()
+                if self._uses_external_python():
+                    req_q, res_q, worker_pid = self._launch_external_worker_locked(
+                        model_id=model_id,
+                        use_gpu=use_gpu,
+                        use_mock_backend=use_mock_backend,
+                        simulate_delay_sec=simulate_delay_sec,
+                    )
+                else:
+                    ctx = multiprocessing.get_context("spawn")
+                    req_q = ctx.Queue(maxsize=2)
+                    res_q = ctx.Queue(maxsize=4)
+                    stop_ev = ctx.Event()
+                    proc = ctx.Process(
+                        target=_live_worker_entry,
+                        args=(
+                            asdict(self.ai_config),
+                            model_id,
+                            self.audio_config.sample_rate,
+                            use_gpu,
+                            use_mock_backend,
+                            simulate_delay_sec,
+                            req_q,
+                            res_q,
+                            stop_ev,
+                        ),
+                        name="ListenScope-LiveSepWorker",
+                        daemon=True,
+                    )
+                    proc.start()
 
-                self._proc = proc
-                self._req_q = req_q
-                self._res_q = res_q
-                self._proc_stop_ev = stop_ev
+                    self._proc = proc
+                    self._req_q = req_q
+                    self._res_q = res_q
+                    self._proc_stop_ev = stop_ev
+                    worker_pid = proc.pid or 0
+                    self._worker_pid = proc.pid
 
             # Wait briefly for worker model ready signal (up to 15s) without holding self._lock
             ready_deadline = time.monotonic() + 15.0
@@ -367,8 +706,25 @@ class ExperimentalLiveSeparator:
                         err_msg = str(msg.get("error", err_msg))
                         break
                 except queue.Empty:
-                    if not proc.is_alive():
-                        err_msg = f"实时分轨 worker 意外退出 (exitcode={proc.exitcode})"
+                    if not self._is_worker_alive():
+                        if self._subproc_reader_thread is not None and self._subproc_reader_thread.is_alive():
+                            self._subproc_reader_thread.join(timeout=0.3)
+                        if self._subproc_stderr_thread is not None and self._subproc_stderr_thread.is_alive():
+                            self._subproc_stderr_thread.join(timeout=0.3)
+                        try:
+                            msg = res_q.get_nowait()
+                            if msg.get("type") == "ready":
+                                ready_ok = True
+                                break
+                            if msg.get("type") == "error":
+                                err_msg = str(msg.get("error", err_msg))
+                                break
+                        except queue.Empty:
+                            pass
+                        code = self._worker_exitcode()
+                        err_tail = list(self._subproc_stderr_tail)[-5:]
+                        detail = f" ({' | '.join(err_tail)})" if err_tail else ""
+                        err_msg = f"实时分轨 worker 意外退出 (exitcode={code}){detail}"
                         break
 
             if not ready_ok:
@@ -390,7 +746,7 @@ class ExperimentalLiveSeparator:
                         loaded_models=1,
                         current_model=model_id,
                         current_task="experimental_live_2stem",
-                        ai_worker_pid=proc.pid,
+                        ai_worker_pid=worker_pid or self._worker_pid,
                         ai_buffer_seconds=0.0,
                     )
                     self._feed_thread = threading.Thread(
@@ -411,6 +767,12 @@ class ExperimentalLiveSeparator:
                 self._ensure_output_stream()
 
             return True, self._status_message
+        except Exception as exc:
+            self._cleanup_worker_only()
+            with self._lock:
+                self._active = False
+                self._status_message = f"实时分轨启动失败: {exc}"
+            return False, self._status_message
         finally:
             with self._lock:
                 self._starting = False
@@ -623,6 +985,43 @@ class ExperimentalLiveSeparator:
                     pass
                 proc.join(timeout=0.3)
             self._proc = None
+
+        if self._subproc is not None:
+            sub = self._subproc
+            if sub.poll() is None:
+                try:
+                    sub.wait(timeout=0.5)
+                except Exception:
+                    try:
+                        sub.terminate()
+                        sub.wait(timeout=0.5)
+                    except Exception:
+                        try:
+                            sub.kill()
+                            sub.wait(timeout=0.3)
+                        except Exception:
+                            pass
+            for pipe in (sub.stdin, sub.stdout, sub.stderr):
+                if pipe is not None:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
+            self._subproc = None
+
+        for attr in ("_subproc_writer_thread", "_subproc_reader_thread", "_subproc_stderr_thread"):
+            th = getattr(self, attr, None)
+            if th is not None and th.is_alive() and th is not threading.current_thread():
+                th.join(timeout=0.4)
+            setattr(self, attr, None)
+
+        if self._subproc_tmp is not None:
+            try:
+                self._subproc_tmp.cleanup()
+            except Exception:
+                pass
+            self._subproc_tmp = None
+
         for q in (self._req_q, self._res_q):
             if q is not None:
                 try:
@@ -639,6 +1038,7 @@ class ExperimentalLiveSeparator:
         self._req_q = None
         self._res_q = None
         self._proc_stop_ev = None
+        self._worker_pid = None
 
     def stop(self, *, status_message: str = "实验功能已停止") -> None:
         with self._lock:
@@ -661,3 +1061,17 @@ class ExperimentalLiveSeparator:
             ai_worker_pid=None,
             ai_buffer_seconds=0.0,
         )
+
+
+def _cli_main() -> int:
+    parser = argparse.ArgumentParser(description="ListenScope Isolated Live 2-Stem Worker")
+    parser.add_argument("--worker", action="store_true", help="Run external live worker stdin/stdout loop")
+    parser.add_argument("--config-json", type=Path, required=True)
+    args = parser.parse_args()
+    if args.worker:
+        return _external_worker_cli(args.config_json)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())

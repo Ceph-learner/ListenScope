@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import asdict
 import json
 import logging
@@ -25,6 +26,7 @@ from core.models import (
     OOMRecoveryAction,
     ResourceSnapshot,
 )
+from core.paths import get_bundle_root, subprocess_no_window_kwargs
 from core.resource_manager import ResourceManager
 
 from .models import MODEL_REGISTRY
@@ -111,6 +113,8 @@ class AIJobManager:
         self._subproc_tmp: Optional[tempfile.TemporaryDirectory[str]] = None
         self._cancel_flag_path: Optional[Path] = None
         self._subproc_reader_thread: Optional[threading.Thread] = None
+        self._subproc_stderr_thread: Optional[threading.Thread] = None
+        self._subproc_stderr_tail: deque[str] = deque(maxlen=30)
 
         self._monitor_thread: Optional[threading.Thread] = None
         self._stop_monitor = threading.Event()
@@ -225,6 +229,12 @@ class AIJobManager:
             if ready is None and self._gpu_readiness_provider is not None and request.use_gpu and not request.use_mock_backend:
                 ready, block_reason = self._gpu_readiness_provider()
 
+            if getattr(sys, "frozen", False) and not self._uses_external_python() and not request.use_mock_backend:
+                return (
+                    False,
+                    "独立 AI 环境 (.venv-ai) 未配置：Windows 打包版不含 PyTorch/CUDA，请在「设置 -> 资源安全阈值 & AI 配置」中指定 .venv-ai\\Scripts\\python.exe。",
+                )
+
             allowed, reason = self.resource_manager.can_start_ai_job(
                 stem_mode=request.stem_mode,
                 require_gpu=(request.use_gpu and not request.use_mock_backend),
@@ -275,17 +285,23 @@ class AIJobManager:
                 logger.exception("Progress callback failed")
         return True, meta.resource_estimate_note
 
+    def _uses_external_python(self) -> bool:
+        if not self.ai_python_executable:
+            return False
+        try:
+            return Path(self.ai_python_executable).resolve() != Path(sys.executable).resolve()
+        except Exception:
+            return str(self.ai_python_executable).strip() != str(sys.executable).strip()
+
     def _launch_worker_locked(self, request: AIJobRequest) -> None:
         req_dict = asdict(request)
         cfg_dict = asdict(self.ai_config)
 
-        use_external = bool(
-            self.ai_python_executable and Path(self.ai_python_executable).resolve() != Path(sys.executable).resolve()
-        )
+        use_external = self._uses_external_python()
         if use_external and self.ai_python_executable is not None:
             import os
 
-            bundle_root = Path(__file__).resolve().parent.parent
+            bundle_root = get_bundle_root()
             tmp_dir = tempfile.TemporaryDirectory(prefix="ls_ai_ipc_")
             tmp_path = Path(tmp_dir.name)
             req_path = tmp_path / "request.json"
@@ -299,6 +315,7 @@ class AIJobManager:
             env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
 
             msg_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
+            self._subproc_stderr_tail.clear()
             proc = subprocess.Popen(
                 [
                     self.ai_python_executable,
@@ -316,7 +333,10 @@ class AIJobManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
+                **subprocess_no_window_kwargs(),
             )
             self._subproc = proc
             self._subproc_tmp = tmp_dir
@@ -325,34 +345,73 @@ class AIJobManager:
             self._worker_pid = proc.pid
 
             def _read_stdout() -> None:
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    text = line.strip()
-                    if not text:
-                        continue
+                pipe = proc.stdout
+                if pipe is None:
+                    return
+                try:
+                    for line in pipe:
+                        text = line.strip()
+                        if not text:
+                            continue
+                        try:
+                            item = json.loads(text)
+                        except Exception:
+                            brace = text.find("{")
+                            if brace <= 0:
+                                continue
+                            try:
+                                item = json.loads(text[brace:])
+                            except Exception:
+                                continue
+                        try:
+                            msg_q.put_nowait(item)
+                        except queue.Full:
+                            if isinstance(item, dict) and item.get("type") == "result":
+                                try:
+                                    msg_q.get_nowait()
+                                except queue.Empty:
+                                    pass
+                                try:
+                                    msg_q.put_nowait(item)
+                                except queue.Full:
+                                    pass
+                except Exception:
+                    pass
+                finally:
                     try:
-                        item = json.loads(text)
+                        pipe.close()
                     except Exception:
-                        continue
+                        pass
+
+            def _read_stderr() -> None:
+                pipe = proc.stderr
+                if pipe is None:
+                    return
+                try:
+                    for line in pipe:
+                        text = line.strip()
+                        if text:
+                            self._subproc_stderr_tail.append(text[-400:])
+                except Exception:
+                    pass
+                finally:
                     try:
-                        msg_q.put_nowait(item)
-                    except queue.Full:
-                        if isinstance(item, dict) and item.get("type") == "result":
-                            try:
-                                msg_q.get_nowait()
-                            except queue.Empty:
-                                pass
-                            try:
-                                msg_q.put_nowait(item)
-                            except queue.Full:
-                                pass
+                        pipe.close()
+                    except Exception:
+                        pass
 
             self._subproc_reader_thread = threading.Thread(
                 target=_read_stdout,
                 name="ListenScope-AIStdoutReader",
                 daemon=True,
             )
+            self._subproc_stderr_thread = threading.Thread(
+                target=_read_stderr,
+                name="ListenScope-AIStderrDrain",
+                daemon=True,
+            )
             self._subproc_reader_thread.start()
+            self._subproc_stderr_thread.start()
             return
 
         ctx = multiprocessing.get_context("spawn")
@@ -432,11 +491,20 @@ class AIJobManager:
                         sub.wait(timeout=0.5)
                     except Exception:
                         pass
+            for pipe in (sub.stdout, sub.stderr):
+                if pipe is not None:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
             self._subproc = None
 
         if self._subproc_reader_thread is not None and self._subproc_reader_thread.is_alive():
             self._subproc_reader_thread.join(timeout=0.4)
         self._subproc_reader_thread = None
+        if self._subproc_stderr_thread is not None and self._subproc_stderr_thread.is_alive():
+            self._subproc_stderr_thread.join(timeout=0.4)
+        self._subproc_stderr_thread = None
 
         if self._msg_queue is not None:
             try:
@@ -496,8 +564,12 @@ class AIJobManager:
                     return
 
                 if not self._is_worker_alive():
-                    # Flush remaining messages right after process exit
-                    time.sleep(0.05)
+                    # Wait briefly for stdout/stderr reader threads to drain EOF before inspecting queue/tail
+                    if self._subproc_reader_thread is not None and self._subproc_reader_thread.is_alive():
+                        self._subproc_reader_thread.join(timeout=0.4)
+                    if self._subproc_stderr_thread is not None and self._subproc_stderr_thread.is_alive():
+                        self._subproc_stderr_thread.join(timeout=0.4)
+                    time.sleep(0.03)
                     if self._msg_queue is not None:
                         while True:
                             try:
@@ -511,12 +583,14 @@ class AIJobManager:
                     if final_result is None:
                         code = self._worker_exitcode()
                         self._cleanup_task_staging(req)
+                        err_tail = list(self._subproc_stderr_tail)[-5:]
+                        detail = f" ({' | '.join(err_tail)})" if err_tail else ""
                         final_result = AIJobResult(
                             task_id=req.task_id,
                             state=AIJobState.FAILED,
                             model_id=req.model_id,
                             device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
-                            error=f"AI worker 子进程异常终止 (exitcode={code})，主程序捕获与频谱保持正常。",
+                            error=f"AI worker 子进程异常终止 (exitcode={code}){detail}，主程序捕获与频谱保持正常。",
                         )
                     break
 

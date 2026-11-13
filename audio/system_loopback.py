@@ -42,6 +42,7 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         self._allow_non_windows = allow_non_windows
 
         self._stop_event = threading.Event()
+        self._lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
         self._pa: Any = None
         self._stream: Any = None
@@ -126,34 +127,8 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 pass
             raise
 
-    def start(self) -> None:
-        if self.is_running:
-            return
-        if not self._allow_non_windows and platform.system() != "Windows":
-            raise RuntimeError(
-                f"系统 WASAPI Loopback 仅支持 Windows (当前系统为 {platform.system()})。"
-            )
-
-        self.queue.reset_open()
-        self._stop_event.clear()
-        self._pa, self._stream, dev_info, frames_per_buffer, src_dtype = self._open_default_loopback()
-        self._device_name = str(dev_info.get("name", self._device_name))
-        self._stats.set_error(None)
-        self._stats.set_running(True)
-
-        self._thread = threading.Thread(
-            target=self._capture_loop,
-            args=(dev_info, frames_per_buffer, src_dtype),
-            name="ListenScope-SystemLoopback",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def _close_stream(self) -> None:
-        stream = self._stream
-        pa = self._pa
-        self._stream = None
-        self._pa = None
+    @staticmethod
+    def _close_pa_pair(pa: Any, stream: Any) -> None:
         if stream is not None:
             try:
                 stream.stop_stream()
@@ -169,6 +144,40 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
             except Exception:
                 pass
 
+    def start(self) -> None:
+        if self.is_running:
+            return
+        if not self._allow_non_windows and platform.system() != "Windows":
+            raise RuntimeError(
+                f"系统 WASAPI Loopback 仅支持 Windows (当前系统为 {platform.system()})。"
+            )
+
+        self.queue.reset_open()
+        self._stop_event.clear()
+        pa, stream, dev_info, frames_per_buffer, src_dtype = self._open_default_loopback()
+        with self._lock:
+            self._pa = pa
+            self._stream = stream
+        self._device_name = str(dev_info.get("name", self._device_name))
+        self._stats.set_error(None)
+        self._stats.set_running(True)
+
+        self._thread = threading.Thread(
+            target=self._capture_loop,
+            args=(dev_info, frames_per_buffer, src_dtype),
+            name="ListenScope-SystemLoopback",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _close_stream(self) -> None:
+        with self._lock:
+            stream = self._stream
+            pa = self._pa
+            self._stream = None
+            self._pa = None
+        self._close_pa_pair(pa, stream)
+
     def _capture_loop(self, dev_info: dict[str, Any], frames_per_buffer: int, src_dtype: str = "float32") -> None:
         src_rate = int(dev_info["defaultSampleRate"])
         raw_ch = int(dev_info.get("maxInputChannels") or 0) or int(dev_info.get("maxOutputChannels") or 0)
@@ -176,7 +185,8 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         reconnects = 0
 
         while not self._stop_event.is_set():
-            stream = self._stream
+            with self._lock:
+                stream = self._stream
             if stream is None:
                 break
             try:
@@ -207,9 +217,21 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 if reconnects > self._max_device_reconnects:
                     self._stats.set_error(f"播放设备中断且重连超过 {self._max_device_reconnects} 次: {exc}")
                     break
-                time.sleep(0.35)
+                if self._stop_event.wait(timeout=0.35):
+                    break
+                if self._stop_event.is_set():
+                    break
                 try:
-                    self._pa, self._stream, new_dev, frames_per_buffer, src_dtype = self._open_default_loopback()
+                    new_pa, new_stream, new_dev, frames_per_buffer, src_dtype = self._open_default_loopback()
+                    if self._stop_event.is_set():
+                        self._close_pa_pair(new_pa, new_stream)
+                        break
+                    with self._lock:
+                        if self._stop_event.is_set():
+                            self._close_pa_pair(new_pa, new_stream)
+                            break
+                        self._pa = new_pa
+                        self._stream = new_stream
                     src_rate = int(new_dev["defaultSampleRate"])
                     new_ch = int(new_dev.get("maxInputChannels") or 0) or int(new_dev.get("maxOutputChannels") or 0)
                     src_channels = max(1, new_ch)
