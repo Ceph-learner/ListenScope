@@ -173,3 +173,113 @@ class FixedRingBuffer:
                 cursor = stop
 
         return path, total_written / float(self.sample_rate)
+
+    def import_audio_file_streaming(
+        self,
+        audio_path: Path | str,
+        *,
+        max_seconds: Optional[float] = None,
+        chunk_seconds: float = 1.0,
+    ) -> tuple[float, bool]:
+        """Stream an audio file into the 120s ring buffer in small chunks, capped to capacity.
+
+        Never materializes an entire long audio file in RAM. Returns `(imported_sec, truncated)`.
+        """
+        from .pcm_utils import normalize_to_canonical_pcm
+
+        src = Path(audio_path)
+        if not src.exists():
+            raise FileNotFoundError(f"音频文件不存在: {src}")
+
+        cap_sec = float(self.audio_config.ring_buffer_seconds)
+        limit_sec = cap_sec if max_seconds is None else min(cap_sec, max(0.5, float(max_seconds)))
+
+        total_dst_frames = 0
+        max_dst_frames = int(round(limit_sec * self.sample_rate))
+        truncated = False
+
+        try:
+            import soundfile as sf  # type: ignore[import-untyped]
+
+            with sf.SoundFile(str(src), "r") as sf_file:
+                src_sr = int(sf_file.samplerate)
+                src_ch = max(1, int(sf_file.channels))
+                src_total = int(sf_file.frames)
+                max_src_frames = int(round(limit_sec * src_sr))
+                truncated = src_total > max_src_frames
+                step = max(256, int(round(chunk_seconds * src_sr)))
+
+                self.clear()
+                read_so_far = 0
+                while read_so_far < min(src_total, max_src_frames) and total_dst_frames < max_dst_frames:
+                    take = min(step, max_src_frames - read_so_far)
+                    arr = np.asarray(sf_file.read(take, dtype="float32", always_2d=True), dtype=np.float32)
+                    if arr.size == 0:
+                        break
+                    read_so_far += int(arr.shape[0])
+                    canon = normalize_to_canonical_pcm(
+                        arr,
+                        src_rate=src_sr,
+                        src_channels=src_ch,
+                        dst_rate=self.sample_rate,
+                        dst_channels=self.channels,
+                    )
+                    remain = max_dst_frames - total_dst_frames
+                    if canon.shape[0] > remain:
+                        canon = canon[:remain]
+                        truncated = True
+                    if canon.shape[0] > 0:
+                        self.write(canon)
+                        total_dst_frames += int(canon.shape[0])
+                return total_dst_frames / float(self.sample_rate), truncated
+        except Exception as sf_exc:
+            if src.suffix.lower() not in (".wav", ".wave"):
+                raise RuntimeError(f"无法读取音频文件 {src.name}: {sf_exc}") from sf_exc
+
+        with wave.open(str(src), "rb") as wf:
+            src_sr = int(wf.getframerate())
+            src_ch = max(1, int(wf.getnchannels()))
+            sw = int(wf.getsampwidth())
+            src_total = int(wf.getnframes())
+            max_src_frames = int(round(limit_sec * src_sr))
+            truncated = src_total > max_src_frames
+            dtype_map = {1: "int16", 2: "int16", 3: "int24", 4: "int32"}
+            if sw not in dtype_map:
+                raise ValueError(f"Unsupported WAV sample width: {sw}")
+            self.clear()
+            step = max(256, int(round(chunk_seconds * src_sr)))
+            read_so_far = 0
+            while read_so_far < min(src_total, max_src_frames) and total_dst_frames < max_dst_frames:
+                take = min(step, max_src_frames - read_so_far)
+                raw = wf.readframes(take)
+                if not raw:
+                    break
+                if sw == 1:
+                    u8 = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+                    arr = u8[: (u8.size // src_ch) * src_ch].reshape(-1, src_ch)
+                    canon = normalize_to_canonical_pcm(
+                        arr,
+                        src_rate=src_sr,
+                        src_channels=src_ch,
+                        dst_rate=self.sample_rate,
+                        dst_channels=self.channels,
+                    )
+                else:
+                    canon = normalize_to_canonical_pcm(
+                        raw,
+                        src_rate=src_sr,
+                        src_channels=src_ch,
+                        src_dtype=dtype_map[sw],
+                        dst_rate=self.sample_rate,
+                        dst_channels=self.channels,
+                    )
+                read_so_far += take
+                remain = max_dst_frames - total_dst_frames
+                if canon.shape[0] > remain:
+                    canon = canon[:remain]
+                    truncated = True
+                if canon.shape[0] > 0:
+                    self.write(canon)
+                    total_dst_frames += int(canon.shape[0])
+        return total_dst_frames / float(self.sample_rate), truncated
+

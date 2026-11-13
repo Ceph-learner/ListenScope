@@ -10,6 +10,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -27,6 +28,7 @@ if str(ROOT) not in sys.path:
 
 from ai.job_manager import AIJobManager
 from analysis.midi_transcription import transcribe_stem_to_midi
+from analysis.stem_analyzer import analyze_stems_offline, export_transcription_sheet
 from analysis.worker import AnalysisWorker
 from audio.capture_base import AudioCaptureBackend
 from audio.pcm_utils import normalize_to_canonical_pcm
@@ -45,11 +47,14 @@ from core.models import (
     AIJobProgress,
     AIJobRequest,
     AIJobResult,
+    AIJobState,
     MidiNoteCandidate,
     MidiTranscriptionResult,
     OOMRecoveryAction,
+    StemDeepAnalysisReport,
 )
 from core.resource_manager import ResourceManager
+from core.settings_store import PersistedSettings, default_settings_path, load_settings, save_settings
 from core.system_probe import probe_system
 from streaming.live_separator import ExperimentalLiveSeparator
 from ui.main_window import ListenScopeMainWindow
@@ -123,11 +128,24 @@ class ListenScopeController:
         use_mock_ai_for_demo: bool = False,
         ai_python_executable: Optional[str] = None,
         work_dir: Path | str = Path("workspace_outputs"),
+        settings_path: Optional[Path | str] = None,
     ) -> None:
         self.work_dir = Path(work_dir)
         self.use_mock_ai_for_demo = use_mock_ai_for_demo
+        if settings_path is not None:
+            self._settings_path = Path(settings_path)
+        elif self.work_dir != Path("workspace_outputs"):
+            self._settings_path = self.work_dir / "settings.json"
+        else:
+            self._settings_path = default_settings_path()
+
+        saved_settings = load_settings(self._settings_path)
         if ai_python_executable is None:
-            ai_python_executable = _discover_ai_python_executable()
+            cand_py = saved_settings.ai_python_executable
+            if cand_py and Path(cand_py).exists():
+                ai_python_executable = cand_py
+            else:
+                ai_python_executable = _discover_ai_python_executable()
 
         # Bounded diagnostic logging
         self.log_handler = BoundedMemoryLogHandler(maxlen=500)
@@ -137,8 +155,8 @@ class ListenScopeController:
 
         self.audio_config = AudioConfig()
         self.analysis_config = AnalysisConfig()
-        self.resource_limits = ResourceLimits()
-        self.ai_config = AIConfig()
+        self.resource_limits = saved_settings.resource_limits
+        self.ai_config = saved_settings.ai_config
         self.hardware_report = probe_system()
 
         self.resource_manager = ResourceManager(limits=self.resource_limits)
@@ -180,7 +198,10 @@ class ListenScopeController:
         self._ui_live_bench_q: queue.Queue[str] = queue.Queue(maxsize=8)
         self._ui_live_pending_q: queue.Queue[bool] = queue.Queue(maxsize=8)
         self._ui_midi_result_q: queue.Queue[tuple[Optional[MidiTranscriptionResult], Optional[str]]] = queue.Queue(maxsize=8)
+        self._ui_deep_analysis_q: queue.Queue[tuple[Optional[StemDeepAnalysisReport], Optional[str]]] = queue.Queue(maxsize=4)
         self._last_ai_request: Optional[AIJobRequest] = None
+        self._latest_deep_report: Optional[StemDeepAnalysisReport] = None
+        self._latest_midi_result: Optional[MidiTranscriptionResult] = None
 
         self.ai_job_manager.add_progress_callback(self._enqueue_progress)
         self.ai_job_manager.add_completion_callback(self._enqueue_result)
@@ -207,17 +228,23 @@ class ListenScopeController:
         self._tick_counter = 0
         self._shutdown_done = False
 
+    @staticmethod
+    def _put_latest(q: queue.Queue[Any], item: Any) -> None:
+        while True:
+            try:
+                q.put_nowait(item)
+                return
+            except queue.Full:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    pass
+
     def _enqueue_progress(self, prog: AIJobProgress) -> None:
-        try:
-            self._ui_ai_progress_q.put_nowait(prog)
-        except queue.Full:
-            pass
+        self._put_latest(self._ui_ai_progress_q, prog)
 
     def _enqueue_result(self, res: AIJobResult) -> None:
-        try:
-            self._ui_ai_result_q.put_nowait(res)
-        except queue.Full:
-            pass
+        self._put_latest(self._ui_ai_result_q, res)
 
     def _connect_signals(self) -> None:
         w = self.window
@@ -227,12 +254,16 @@ class ListenScopeController:
         w.ab_set_range_sec_requested.connect(self._on_ab_set_range)
         w.ab_play_requested.connect(self._on_ab_play)
         w.ab_stop_requested.connect(self.ab_player.stop)
+        w.import_audio_requested.connect(self._on_import_audio_file)
         w.ai_separate_requested.connect(self._on_start_ai_separation)
         w.emergency_stop_requested.connect(self._on_emergency_stop)
         w.mixer_widget.before_play_requested.connect(self._on_mixer_before_play)
         w.mixer_widget.cancel_ai_requested.connect(self._on_cancel_ai)
         w.mixer_widget.oom_action_requested.connect(self._on_oom_action)
         w.mixer_widget.export_mix_requested.connect(self._on_export_mix)
+        w.mixer_widget.deep_analyze_requested.connect(self._on_deep_analyze_stems)
+        w.mixer_widget.export_sheet_requested.connect(self._on_export_transcription_sheet)
+        w.mixer_widget.save_midi_requested.connect(self._on_save_midi_as)
         w.mixer_widget.send_stem_to_analysis.connect(self._on_send_stem_to_analysis)
         w.mixer_widget.transcribe_stem_midi.connect(self._on_transcribe_stem_midi)
         w.live_widget.benchmark_requested.connect(self._on_live_benchmark)
@@ -446,6 +477,36 @@ class ListenScopeController:
         except Exception as exc:
             self.window.show_banner_message(f"导出混音失败: {exc}")
 
+    def _on_import_audio_file(self, file_path: str) -> None:
+        """Stream up to 120s of a local WAV/FLAC/OGG file into the bounded ring buffer."""
+        if not file_path:
+            return
+        try:
+            self.stop_capture()
+            self.ab_player.stop()
+            self.mixer_engine.pause()
+            self.live_separator.close_output_stream()
+            imported_sec, truncated = self.ring_buffer.import_audio_file_streaming(
+                file_path,
+                max_seconds=float(self.audio_config.ring_buffer_seconds),
+            )
+            avail = self.ring_buffer.available_seconds
+            if avail >= 0.5:
+                self.ab_player.select_recent_seconds(min(30.0, avail))
+            self.window.history_coverage_lbl.setText(
+                f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s"
+            )
+            if truncated:
+                self.window.show_banner_message(
+                    f"⚠️ 本地音频已流式载入前 {imported_sec:.1f}s（超过 {self.audio_config.ring_buffer_seconds:.0f}s 上限已自动截断以保护内存），可直接 A/B 播放或 AI 分轨。"
+                )
+            else:
+                self.window.show_banner_message(
+                    f"✅ 已流式载入本地音频 {imported_sec:.1f}s 到环形缓冲，可直接 A/B 播放、实时分析或 AI 分轨。"
+                )
+        except Exception as exc:
+            self.window.show_banner_message(f"导入本地音频失败: {exc}")
+
     def _on_send_stem_to_analysis(self, stem_name: str, stem_path: str) -> None:
         """Load selected stem WAV excerpt cleanly into canonical 48kHz stereo ring buffer."""
         try:
@@ -465,6 +526,62 @@ class ListenScopeController:
             self.window.show_banner_message(f"已将单轨 `{stem_name}` 载入实时和弦/音高分析视图（仅截取前 <=30s）。")
         except Exception as exc:
             self.window.show_banner_message(f"送入分析失败: {exc}")
+
+    def _on_deep_analyze_stems(self, stem_paths: dict[str, str]) -> None:
+        """Run non-destructive CPU streaming analysis over separated stems without touching live capture."""
+        if not stem_paths:
+            self.window.show_banner_message("当前没有可供深度分析的分轨 WAV 文件。")
+            return
+        self.window.show_banner_message("⏳ 正在后台离线流式深度分析分轨 (和弦进行 / Bass / 鼓组 / 主旋律)...")
+        paths_copy = dict(stem_paths)
+        max_sec = float(self.audio_config.ring_buffer_seconds)
+
+        def _run() -> None:
+            try:
+                report = analyze_stems_offline(paths_copy, max_seconds=max_sec)
+                msg = (
+                    f"✅ 深度分轨分析完成 ({report.duration_sec:.1f}s)："
+                    f"识别 {len(report.chord_timeline)} 段和弦 | 调性={report.estimated_key.primary}"
+                )
+                self._put_latest(self._ui_deep_analysis_q, (report, msg))
+            except Exception as exc:
+                self._put_latest(self._ui_deep_analysis_q, (None, f"深度分轨分析失败: {exc}"))
+
+        threading.Thread(target=_run, name="ListenScope-StemDeepAnalyze", daemon=True).start()
+
+    def _on_export_transcription_sheet(self, out_path: str) -> None:
+        if not out_path:
+            return
+        if self._latest_deep_report is None:
+            self.window.show_banner_message("请先点击「深度分析分轨 (和弦/Bass/鼓/旋律)」后再导出扒谱报告。")
+            return
+        try:
+            saved = export_transcription_sheet(
+                self._latest_deep_report,
+                out_path,
+                midi_result=self._latest_midi_result,
+            )
+            self.window.show_banner_message(f"✅ 已导出扒谱与深度分析报告: {saved}")
+        except Exception as exc:
+            self.window.show_banner_message(f"导出扒谱报告失败: {exc}")
+
+    def _on_save_midi_as(self, out_path: str) -> None:
+        if not out_path:
+            return
+        if self._latest_midi_result is None or self._latest_midi_result.output_midi_path is None:
+            self.window.show_banner_message("暂无可另存的 MIDI 文件，请先对某个分轨执行「转 MIDI」。")
+            return
+        src = Path(self._latest_midi_result.output_midi_path)
+        if not src.exists():
+            self.window.show_banner_message(f"源 MIDI 文件不存在: {src}")
+            return
+        try:
+            dst = Path(out_path)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            self.window.show_banner_message(f"✅ 已另存 MIDI 文件: {dst}")
+        except Exception as exc:
+            self.window.show_banner_message(f"另存 MIDI 失败: {exc}")
 
     def _on_transcribe_stem_midi(self, stem_name: str, stem_path: str) -> None:
         out_mid = Path(stem_path).with_suffix(".mid")
@@ -524,12 +641,9 @@ class ListenScopeController:
                         allow_full_mix=False,
                         allow_cpu_pitch_fallback=True,
                     )
-                self._ui_midi_result_q.put_nowait((res, f"✅ MIDI 转录完成: {out_mid}"))
+                self._put_latest(self._ui_midi_result_q, (res, f"✅ MIDI 转录完成: {out_mid}"))
             except Exception as exc:
-                try:
-                    self._ui_midi_result_q.put_nowait((None, f"MIDI 转录失败: {exc}"))
-                except queue.Full:
-                    pass
+                self._put_latest(self._ui_midi_result_q, (None, f"MIDI 转录失败: {exc}"))
 
         threading.Thread(target=_run, name="ListenScope-MidiTranscribe", daemon=True).start()
 
@@ -545,10 +659,7 @@ class ListenScopeController:
             except Exception as exc:
                 msg = f"基准测试失败: {exc}"
             for q in (self._ui_banner_q, self._ui_live_bench_q):
-                try:
-                    q.put_nowait(msg)
-                except queue.Full:
-                    pass
+                self._put_latest(q, msg)
 
         threading.Thread(target=_run, name="ListenScope-LiveBench", daemon=True).start()
 
@@ -566,25 +677,16 @@ class ListenScopeController:
                     gpu_ai_ready=self.hardware_report.gpu_ai_ready,
                     gpu_block_reason=self.hardware_report.gpu_ai_block_reason,
                 )
-                try:
-                    self._ui_banner_q.put_nowait(msg if not ok else f"✅ {msg}")
-                except queue.Full:
-                    pass
+                self._put_latest(self._ui_banner_q, msg if not ok else f"✅ {msg}")
             finally:
-                try:
-                    self._ui_live_pending_q.put_nowait(False)
-                except queue.Full:
-                    pass
+                self._put_latest(self._ui_live_pending_q, False)
 
         threading.Thread(target=_run, name="ListenScope-LiveStart", daemon=True).start()
 
     def _on_live_stop(self) -> None:
         def _run() -> None:
             self.live_separator.stop()
-            try:
-                self._ui_live_pending_q.put_nowait(False)
-            except queue.Full:
-                pass
+            self._put_latest(self._ui_live_pending_q, False)
 
         threading.Thread(target=_run, name="ListenScope-LiveStop", daemon=True).start()
 
@@ -595,6 +697,18 @@ class ListenScopeController:
         self.ai_job_manager.ai_config = ai_cfg
         self.ai_job_manager.ai_python_executable = ai_python or None
         self.live_separator.ai_config = ai_cfg
+        try:
+            saved = save_settings(
+                PersistedSettings(
+                    resource_limits=limits,
+                    ai_config=ai_cfg,
+                    ai_python_executable=ai_python,
+                ),
+                self._settings_path,
+            )
+            self.window.show_banner_message(f"✅ 资源安全阈值与 AI 环境配置已保存至 {saved}")
+        except Exception as exc:
+            self.window.show_banner_message(f"⚠️ 配置已生效，但写入本地设置文件失败: {exc}")
 
     def _on_ui_tick(self) -> None:
         self._tick_counter += 1
@@ -607,7 +721,11 @@ class ListenScopeController:
                 break
         while True:
             try:
-                self.window.handle_ai_result(self._ui_ai_result_q.get_nowait())
+                ai_res = self._ui_ai_result_q.get_nowait()
+                if ai_res.state == AIJobState.COMPLETED:
+                    self._latest_deep_report = None
+                    self._latest_midi_result = None
+                self.window.handle_ai_result(ai_res)
             except queue.Empty:
                 break
         while True:
@@ -629,11 +747,25 @@ class ListenScopeController:
             try:
                 midi_res, midi_msg = self._ui_midi_result_q.get_nowait()
                 if midi_res is not None:
+                    self._latest_midi_result = midi_res
                     self.window.display_midi_result(midi_res)
                 if midi_msg:
                     self.window.show_banner_message(midi_msg)
             except queue.Empty:
                 break
+        while True:
+            try:
+                deep_res, deep_msg = self._ui_deep_analysis_q.get_nowait()
+                if deep_res is not None:
+                    self._latest_deep_report = deep_res
+                    self.window.display_deep_analysis(deep_res)
+                if deep_msg:
+                    self.window.show_banner_message(deep_msg)
+            except queue.Empty:
+                break
+
+        if self.mixer_engine.is_playing or self._tick_counter % 4 == 0:
+            self.window.sync_mixer_position()
 
         # Update real-time CPU DSP analysis snapshots
         asnap = self.analysis_worker.latest_snapshot()
@@ -692,6 +824,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="ListenScope Desktop Application")
     parser.add_argument("--simulate", action="store_true", help="启动合成信号 + Mock 测试模式（用于无真机调试）")
     parser.add_argument("--ai-python", type=str, default=None, help="独立 AI Worker 虚拟环境 python.exe 路径")
+    parser.add_argument("--settings", type=str, default=None, help="自定义持久化 settings.json 路径")
     parser.add_argument("--headless-smoke", action="store_true", help="短时运行后干净退出（测试用途）")
     args = parser.parse_args(argv)
 
@@ -699,6 +832,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ctrl = ListenScopeController(
         use_mock_ai_for_demo=args.simulate,
         ai_python_executable=args.ai_python,
+        settings_path=args.settings,
     )
     if args.simulate:
         ctrl.start_capture({"kind": "synthetic", "pattern": "switching"})

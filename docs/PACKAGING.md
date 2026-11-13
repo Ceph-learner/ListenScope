@@ -17,6 +17,20 @@ ListenScope 严格遵守“**Core 轻量常驻、AI 按需隔离、不炸内存*
 
 ## 2. Windows 真机安装与打包步骤
 
+### 一键自动化脚本（可选推荐，⚠️ 未在 Windows 真机实际验证）
+
+仓库在 [`scripts/setup_windows.ps1`](../scripts/setup_windows.ps1) 与 [`scripts/build_windows.ps1`](../scripts/build_windows.ps1) 提供了标准双环境部署与 Core `.exe` 打包脚手架（当前在 Linux 环境生成，**未在 Windows 真机实际验证**）：
+
+```powershell
+# 创建 .venv-core 与 .venv-ai (RTX 5060 Ti cu128)，并生成 SYSTEM_REPORT.md
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
+
+# (可选) 使用 PyInstaller 构建轻量 Core 目录 dist\ListenScopeCore\ListenScope.exe
+powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
+```
+
+若需手动逐步安装与校验，可按以下步骤执行：
+
 ### Step A: 建立 Core 环境并验证 Phase 0 & Phase 1
 
 ```powershell
@@ -49,13 +63,13 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 # 2. 安装其余 AI 分轨与 MIDI 依赖
 pip install -r requirements-ai.txt
 
-# 3. 验证 GPU AI 准入状态必须返回 gpu_ai_ready = READY
-python scripts\check_env.py --write-report
+# 3. 验证 GPU AI 准入状态必须返回 gpu_ai_ready = READY 且 AI 包均已安装
+python scripts\check_env.py --json --check-ai-packages --write-report
 ```
 
 ### Step C: 启动桌面端或使用 PyInstaller 打包 Core
 
-直接源码运行（Core 自动探测同目录 `.venv-ai\Scripts\python.exe`）：
+直接源码运行（Core 自动探测同目录 `.venv-ai\Scripts\python.exe` 并从 `~/.listenscope/settings.json` 读取已保存的设置）：
 
 ```powershell
 .\.venv-core\Scripts\activate
@@ -70,7 +84,7 @@ pip install pyinstaller
 pyinstaller packaging\listenscope_core.spec --noconfirm
 ```
 
-打包输出位于 `dist\ListenScopeCore\ListenScope.exe`。打包规范（[`listenscope_core.spec`](../packaging/listenscope_core.spec)）会自动打包 `proctap` / `soundfile` 原生库并附带 `ai/`、`separation/`、`core/`、`analysis/` 纯 Python 模块，以便外部 `.venv-ai\Scripts\python.exe` 同时执行音轨分离（`python -m ai.worker`）与 Basic Pitch MIDI 转录（`python -m analysis.midi_transcription`）。运行后可在 **设置 -> 资源安全阈值 & AI 配置 -> 独立 AI Worker Python 路径** 指向 `.venv-ai\Scripts\python.exe`。
+打包输出位于 `dist\ListenScopeCore\ListenScope.exe`。打包规范（[`listenscope_core.spec`](../packaging/listenscope_core.spec)）会自动打包 `proctap` / `soundfile` 原生库并附带 `ai/`、`separation/`、`core/`、`analysis/`、`scripts/` 纯 Python 模块，以便外部 `.venv-ai\Scripts\python.exe` 同时执行音轨分离（`python -m ai.worker`）、Basic Pitch MIDI 转录（`python -m analysis.midi_transcription`）与设置面板 **“验证 AI 环境”**（`python -m scripts.check_env --json --check-ai-packages --no-write`）。运行后可在 **设置 -> 资源安全阈值 & AI 配置 -> 独立 AI Worker Python 路径** 通过「浏览...」与「验证 AI 环境」检查后点击 OK 持久化保存至 `~/.listenscope/settings.json`。
 
 ### Windows 真机音频设备排障说明（捕获前必看）
 

@@ -309,6 +309,20 @@ class StemMixerEngine:
         with self._lock:
             return self._max_frames
 
+    @property
+    def position_sec(self) -> float:
+        with self._lock:
+            return self._position_frame / float(max(1, self.sample_rate))
+
+    @property
+    def total_duration_sec(self) -> float:
+        with self._lock:
+            return self._max_frames / float(max(1, self.sample_rate))
+
+    def set_loop(self, enabled: bool) -> None:
+        with self._lock:
+            self._loop_enabled = bool(enabled)
+
     def clear(self) -> None:
         self.stop()
         with self._lock:

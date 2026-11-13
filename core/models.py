@@ -313,3 +313,71 @@ class MidiTranscriptionResult:
     notes: list[MidiNoteCandidate] = field(default_factory=list)
     backend_used: str = "basic-pitch"
     warning: Optional[str] = None
+
+
+@dataclass
+class ChordTimelineSegment:
+    start_sec: float
+    end_sec: float
+    chord: str
+    secondary: str
+    correlation: float
+    stability: str
+
+
+@dataclass
+class StemNoteEvent:
+    start_sec: float
+    end_sec: float
+    pitch_midi: int
+    note_name: str
+    frequency_hz: float
+    confidence: float
+
+
+@dataclass
+class BassAnalysisResult:
+    stem_path: Path
+    duration_sec: float
+    lowest_note: Optional[str]
+    highest_note: Optional[str]
+    root_pitch_classes: list[str] = field(default_factory=list)
+    notes: list[StemNoteEvent] = field(default_factory=list)
+
+
+@dataclass
+class DrumsAnalysisResult:
+    stem_path: Path
+    duration_sec: float
+    estimated_bpm: Optional[float]
+    bpm_stability: str
+    kick_times_sec: list[float] = field(default_factory=list)
+    snare_times_sec: list[float] = field(default_factory=list)
+    hihat_times_sec: list[float] = field(default_factory=list)
+    groove_16_step: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MelodyAnalysisResult:
+    stem_path: Path
+    stem_name: str
+    duration_sec: float
+    lowest_note: Optional[str]
+    highest_note: Optional[str]
+    median_note: Optional[str]
+    voiced_ratio: float
+    notes: list[StemNoteEvent] = field(default_factory=list)
+
+
+@dataclass
+class StemDeepAnalysisReport:
+    duration_sec: float
+    harmonic_source_label: str
+    estimated_key: KeyEstimate
+    estimated_bpm: TempoEstimate
+    chord_timeline: list[ChordTimelineSegment] = field(default_factory=list)
+    bass: Optional[BassAnalysisResult] = None
+    drums: Optional[DrumsAnalysisResult] = None
+    melody: Optional[MelodyAnalysisResult] = None
+    notes: list[str] = field(default_factory=list)
+

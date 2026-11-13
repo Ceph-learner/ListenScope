@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from pathlib import Path
+import threading
+from typing import Any, Optional
 
 from PySide6 import QtCore, QtWidgets
 
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
 from core.models import SystemHardwareReport
+from core.system_probe import probe_external_ai_environment
 
 
 class SettingsDialog(QtWidgets.QDialog):
     """Shows real SystemHardwareReport (`设置 -> 系统状态`) and configurable guardrails."""
+
+    _probe_finished = QtCore.Signal(object)
 
     def __init__(
         self,
@@ -24,12 +29,14 @@ class SettingsDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope 设置 -> 系统状态 & 资源安全策略")
-        self.resize(760, 560)
+        self.resize(780, 600)
 
         self._report = hardware_report
         self._updated_limits: Optional[ResourceLimits] = None
         self._updated_ai_config: Optional[AIConfig] = None
         self._updated_ai_python: str = ai_python_executable
+        self._dialog_closed = False
+        self._probe_finished.connect(self._on_ai_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
 
         root = QtWidgets.QVBoxLayout(self)
         tabs = QtWidgets.QTabWidget()
@@ -108,8 +115,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self.chunk_sec_spin.setSuffix(" s")
         self.chunk_sec_spin.setValue(ai_config.long_audio_chunk_seconds)
 
+        py_row = QtWidgets.QHBoxLayout()
         self.ai_python_edit = QtWidgets.QLineEdit(ai_python_executable)
-        self.ai_python_edit.setPlaceholderText("留空使用当前 Python；建议 Windows 分环境打包时填写 AI Worker python.exe 路径")
+        self.ai_python_edit.setPlaceholderText("留空使用当前 Python；建议 Windows 分环境打包时填写 .venv-ai\\Scripts\\python.exe")
+        self.browse_ai_py_btn = QtWidgets.QPushButton("浏览...")
+        self.browse_ai_py_btn.clicked.connect(self._browse_ai_python)
+        self.verify_ai_env_btn = QtWidgets.QPushButton("验证 AI 环境")
+        self.verify_ai_env_btn.clicked.connect(self._verify_ai_environment)
+        py_row.addWidget(self.ai_python_edit, 1)
+        py_row.addWidget(self.browse_ai_py_btn)
+        py_row.addWidget(self.verify_ai_env_btn)
+
+        self.ai_probe_result_lbl = QtWidgets.QLabel("配置会持久化保存至 ~/.listenscope/settings.json；可点击“验证 AI 环境”检测 CUDA / ONNX / Demucs / Basic Pitch。")
+        self.ai_probe_result_lbl.setWordWrap(True)
+        self.ai_probe_result_lbl.setStyleSheet("padding: 6px; background: #1C2026; border: 1px solid #2C323C; border-radius: 5px; color: #D7DCE2;")
 
         self.roformer_chk = QtWidgets.QCheckBox("允许实验性 BS-RoFormer 模型 (仅在 RTX 5060 Ti 8GB 实测峰值通过后手动启用)")
         self.roformer_chk.setChecked(ai_config.allow_experimental_roformer)
@@ -121,7 +140,8 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("GPU 4-Stem 最低空闲显存 (min_vram_4stem):", self.vram_4s_spin)
         form.addRow("桌面/QQ音乐保留最低空闲显存 (critical_vram_free):", self.crit_vram_spin)
         form.addRow("长音频流式分块长度 (long_audio_chunk_seconds):", self.chunk_sec_spin)
-        form.addRow("独立 AI Worker Python 路径:", self.ai_python_edit)
+        form.addRow("独立 AI Worker Python 路径:", py_row)
+        form.addRow("AI 环境验证结果:", self.ai_probe_result_lbl)
         form.addRow("高显存模型解锁:", self.roformer_chk)
 
         tabs.addTab(cfg_tab, "资源安全阈值 & AI 配置")
@@ -136,6 +156,72 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._orig_limits = resource_limits
         self._orig_ai_cfg = ai_config
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._dialog_closed = True
+        super().closeEvent(event)
+
+    def _browse_ai_python(self) -> None:
+        start_dir = str(Path(self.ai_python_edit.text().strip()).parent) if self.ai_python_edit.text().strip() else str(Path.cwd())
+        selected, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "选择独立 AI Worker Python 解释器",
+            start_dir,
+            "Python Executable (python.exe python python3*);;All Files (*)",
+        )
+        if selected:
+            self.ai_python_edit.setText(selected)
+
+    def _verify_ai_environment(self) -> None:
+        target_py = self.ai_python_edit.text().strip()
+        self.verify_ai_env_btn.setEnabled(False)
+        self.ai_probe_result_lbl.setText("⏳ 正在启动子进程检测 AI Python 环境 (CUDA / sm_120 / ONNX / Demucs / Basic Pitch)...")
+
+        def _worker() -> None:
+            res = probe_external_ai_environment(target_py)
+            if not self._dialog_closed:
+                self._probe_finished.emit(res)
+
+        threading.Thread(target=_worker, name="ListenScope-VerifyAIEnv", daemon=True).start()
+
+    @QtCore.Slot(object)
+    def _on_ai_probe_finished(self, result: Any) -> None:
+        if self._dialog_closed:
+            return
+        self.verify_ai_env_btn.setEnabled(True)
+        if not isinstance(result, dict) or not result.get("ok"):
+            err = result.get("error", "未知错误") if isinstance(result, dict) else str(result)
+            self.ai_probe_result_lbl.setText(f"❌ 检测失败: {err}")
+            self.ai_probe_result_lbl.setStyleSheet(
+                "padding: 6px; background: #4D1D1D; color: #FF9B9B; border: 1px solid #E03E3E; border-radius: 5px;"
+            )
+            return
+
+        pt = result.get("pytorch") or {}
+        ort = result.get("onnxruntime") or {}
+        pkgs = result.get("ai_packages") or {}
+        gpu_ready = bool(result.get("gpu_ai_ready"))
+        block_reason = result.get("gpu_ai_block_reason") or ""
+        pkg_summary = ", ".join(
+            f"{k}={'OK' if (v or {}).get('installed') else 'MISS'}"
+            for k, v in pkgs.items()
+        )
+        summary = (
+            f"Python: {result.get('python_executable')}\n"
+            f"PyTorch: {pt.get('version') or 'N/A'} (CUDA={pt.get('cuda_available')}, sm_120={pt.get('supports_sm_120')}) | "
+            f"ONNX CUDA: {ort.get('cuda_provider_available')}\n"
+            f"AI 包: {pkg_summary}\n"
+            f"GPU AI 准入: {'READY' if gpu_ready else f'BLOCKED ({block_reason})'}"
+        )
+        self.ai_probe_result_lbl.setText(summary)
+        if gpu_ready:
+            self.ai_probe_result_lbl.setStyleSheet(
+                "padding: 6px; background: #1B4D3E; color: #7EE2B8; border: 1px solid #2EC27E; border-radius: 5px;"
+            )
+        else:
+            self.ai_probe_result_lbl.setStyleSheet(
+                "padding: 6px; background: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 5px;"
+            )
 
     def _populate_status_table(self, r: SystemHardwareReport) -> None:
         gpu0 = r.gpus[0] if r.gpus else None

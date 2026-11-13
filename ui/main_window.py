@@ -21,6 +21,7 @@ from core.models import (
     LiveSeparationMetrics,
     MidiTranscriptionResult,
     ResourceSnapshot,
+    StemDeepAnalysisReport,
     SystemHardwareReport,
 )
 
@@ -239,6 +240,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ai_separate_requested = QtCore.Signal(str, str, int, bool)  # (stem_mode, model_id, segment, use_gpu)
     emergency_stop_requested = QtCore.Signal()
     settings_applied = QtCore.Signal(object, object, str)
+    import_audio_requested = QtCore.Signal(str)
 
     def __init__(
         self,
@@ -368,8 +370,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         self.ab_play_btn = QtWidgets.QPushButton("A/B 循环播放")
         self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
+        self.import_audio_btn = QtWidgets.QPushButton("导入本地音频(<=120s)")
+        self.import_audio_btn.setToolTip("流式读取本地 WAV/FLAC/OGG 的前 <=120s 至历史环形缓冲（禁止全文件一次加载）")
         self.ab_play_btn.clicked.connect(self.ab_play_requested.emit)
         self.ab_stop_btn.clicked.connect(self.ab_stop_requested.emit)
+        self.import_audio_btn.clicked.connect(self._on_import_audio_clicked)
 
         row_a.addWidget(self.history_coverage_lbl)
         row_a.addWidget(self.recent_10_btn)
@@ -380,6 +385,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_a.addWidget(self.apply_ab_btn)
         row_a.addWidget(self.ab_play_btn)
         row_a.addWidget(self.ab_stop_btn)
+        row_a.addWidget(self.import_audio_btn)
         row_a.addStretch(1)
         bottom_l.addLayout(row_a)
 
@@ -442,6 +448,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _on_capture_clicked(self, checked: bool) -> None:
         desc = self.source_combo.currentData() or {"kind": "synthetic", "pattern": "switching"}
         self.capture_toggle_requested.emit(checked, desc)
+
+    def _on_import_audio_clicked(self) -> None:
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "流式载入本地音频片段 (最多截取前 120s)",
+            "",
+            "Audio Files (*.wav *.flac *.ogg *.aiff);;All Files (*)",
+        )
+        if file_path:
+            self.import_audio_requested.emit(file_path)
 
     def populate_audio_sources(self, processes: list[AudioProcessInfo], *, include_synthetic: bool = True) -> None:
         prev = self.source_combo.currentData()
@@ -544,6 +560,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
     def display_midi_result(self, result: MidiTranscriptionResult) -> None:
         self.mixer_widget.display_midi_result(result)
+
+    def display_deep_analysis(self, report: StemDeepAnalysisReport) -> None:
+        self.mixer_widget.display_deep_analysis(report)
+
+    def sync_mixer_position(self) -> None:
+        self.mixer_widget.sync_playback_position()
 
     def open_settings_dialog(self) -> None:
         dlg = SettingsDialog(

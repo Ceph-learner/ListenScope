@@ -39,6 +39,7 @@ a = Analysis(
         (str(project_root / "separation"), "separation"),
         (str(project_root / "core"), "core"),
         (str(project_root / "analysis"), "analysis"),
+        (str(project_root / "scripts"), "scripts"),
     ],
     hiddenimports=[
         "proctap",

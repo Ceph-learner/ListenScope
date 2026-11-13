@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import platform
 import shutil
 import subprocess
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 import psutil
 
@@ -498,3 +499,68 @@ def generate_system_report_markdown(
     if output_path is not None:
         output_path.write_text(content, encoding="utf-8")
     return content
+
+
+def probe_external_ai_environment(
+    python_executable: str,
+    *,
+    timeout_sec: float = 20.0,
+) -> dict[str, Any]:
+    """Safely inspect an isolated AI worker Python interpreter via subprocess JSON probe."""
+    exe = str(python_executable or "").strip()
+    if not exe:
+        exe = sys.executable
+    exe_path = Path(exe)
+    if not exe_path.exists():
+        return {
+            "ok": False,
+            "error": f"找不到 Python 可执行文件: {exe}",
+            "python_executable": exe,
+        }
+
+    bundle_root = Path(__file__).resolve().parent.parent
+    env = os.environ.copy()
+    existing_pp = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
+    cmd = [str(exe_path), "-m", "scripts.check_env", "--json", "--check-ai-packages", "--no-write"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(bundle_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"启动 AI 环境探针失败: {exc}",
+            "python_executable": str(exe_path),
+        }
+
+    if proc.returncode != 0:
+        err_tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-5:]
+        return {
+            "ok": False,
+            "error": f"AI 环境探针返回退出码 {proc.returncode}: {' | '.join(err_tail)}",
+            "python_executable": str(exe_path),
+        }
+
+    try:
+        raw_out = proc.stdout.strip()
+        brace_idx = raw_out.find("{")
+        if brace_idx > 0:
+            raw_out = raw_out[brace_idx:]
+        data = json.loads(raw_out)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"解析 AI 环境探针输出失败: {exc}",
+            "python_executable": str(exe_path),
+        }
+    data["ok"] = True
+    data["python_executable"] = str(exe_path)
+    return data
+
