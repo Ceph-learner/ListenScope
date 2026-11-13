@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import deque
+
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
@@ -11,10 +13,13 @@ from core.models import AnalysisSnapshot
 
 
 class ChromaAndHarmonyWidget(QtWidgets.QWidget):
-    """Displays 12-bin chroma, chord candidates, key candidates, BPM, and pitch readout."""
+    """Displays 12-bin chroma, chord candidates, bounded transition strip, key candidates, BPM, and pitch readout."""
+
+    reset_harmony_requested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self._chord_history: deque[str] = deque(maxlen=12)
         root = QtWidgets.QVBoxLayout(self)
         root.setSpacing(10)
 
@@ -67,6 +72,20 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         root.addLayout(cards)
 
+        # Recent bounded chord transition strip + Reset button for song switches
+        prog_bar = QtWidgets.QHBoxLayout()
+        self.chord_progression_lbl = QtWidgets.QLabel("最近和弦进行 (最多 12 步): -")
+        self.chord_progression_lbl.setStyleSheet(
+            "padding: 5px 10px; background: #1C2026; border: 1px solid #2C323C; border-radius: 5px; color: #E6EAF0;"
+        )
+        self.chord_progression_lbl.setWordWrap(True)
+        self.reset_harmony_btn = QtWidgets.QPushButton("换歌重置 (和弦/调性/BPM)")
+        self.reset_harmony_btn.setToolTip("切歌后一键清空和弦轨迹、调性滑动窗口与 BPM 累积，不中断当前捕获")
+        self.reset_harmony_btn.clicked.connect(self._on_reset_clicked)
+        prog_bar.addWidget(self.chord_progression_lbl, 1)
+        prog_bar.addWidget(self.reset_harmony_btn)
+        root.addLayout(prog_bar)
+
         # Plots splitter: 12-bin Chroma Bar + Bounded Chroma History Heatmap
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
 
@@ -102,6 +121,27 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         splitter.setSizes([210, 240])
         root.addWidget(splitter, 1)
 
+    @property
+    def recent_progression(self) -> list[str]:
+        return list(self._chord_history)
+
+    def _on_reset_clicked(self) -> None:
+        self.clear_progression()
+        self.reset_harmony_requested.emit()
+
+    def clear_progression(self) -> None:
+        self._chord_history.clear()
+        self.chord_progression_lbl.setText("最近和弦进行 (最多 12 步): -")
+        self.chord_primary_lbl.setText("N (静音)")
+        self.chord_secondary_lbl.setText("第二候选: -")
+        self.chord_stability_lbl.setText("稳定度: Silent | 相关度: 0.00")
+        self.key_primary_lbl.setText("Unknown")
+        self.key_secondary_lbl.setText("第二候选: -")
+        self.key_relation_lbl.setText("稳定度: Insufficient | 关系说明: 已重置，等待新音频")
+        self.bpm_lbl.setText("BPM: Unknown")
+        self.bpm_stab_lbl.setText("节拍稳定度: Unknown")
+        self.pitch_lbl.setText("主音高: -")
+
     def update_analysis(self, snap: AnalysisSnapshot, chroma_history: np.ndarray | None = None) -> None:
         ch = snap.chord
         self.chord_primary_lbl.setText(ch.primary)
@@ -109,6 +149,12 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chord_stability_lbl.setText(
             f"稳定度: {ch.stability} | 相关度: {ch.correlation:.2f} | 领先差值: {ch.margin:.2f}"
         )
+        if not ch.is_silent and ch.primary not in ("Unknown", "N (静音)", "-"):
+            if not self._chord_history or self._chord_history[-1] != ch.primary:
+                self._chord_history.append(ch.primary)
+                self.chord_progression_lbl.setText(
+                    f"最近和弦进行 (最多 12 步): {' -> '.join(self._chord_history)}"
+                )
 
         ky = snap.key
         self.key_primary_lbl.setText(ky.primary)

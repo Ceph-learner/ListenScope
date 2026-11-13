@@ -226,6 +226,11 @@ def stream_chunked_separation(
                     raw = in_wf.readframes(read_len)
                     pcm = _decode_pcm_bytes(raw, sw, ch)
 
+                pcm = np.asarray(pcm, dtype=np.float32)
+                if pcm.ndim == 1:
+                    pcm = pcm.reshape(-1, max(1, ch))
+                if pcm.shape[0] == 0:
+                    break
                 if not np.all(np.isfinite(pcm)):
                     pcm = np.nan_to_num(pcm, nan=0.0, posinf=1.0, neginf=-1.0)
                 if pcm.shape[1] == 1:
@@ -235,11 +240,22 @@ def stream_chunked_separation(
 
                 stems = separate_chunk_fn(pcm, sr)
                 core_len = core_end - core_start
+                out_ch = 2 if ch >= 2 else 1
                 for name in stem_names:
-                    stem_arr = stems[name]
+                    stem_arr = np.asarray(stems[name], dtype=np.float32)
+                    if stem_arr.ndim == 1:
+                        stem_arr = stem_arr.reshape(-1, 1)
                     trimmed = stem_arr[pad_left : pad_left + core_len]
-                    if ch == 1 and trimmed.shape[1] == 2:
+                    if trimmed.shape[0] == 0:
+                        continue
+                    if not np.all(np.isfinite(trimmed)):
+                        trimmed = np.nan_to_num(trimmed, nan=0.0, posinf=1.0, neginf=-1.0)
+                    if trimmed.shape[1] == 1 and out_ch == 2:
+                        trimmed = np.repeat(trimmed, 2, axis=1)
+                    elif trimmed.shape[1] == 2 and out_ch == 1:
                         trimmed = np.mean(trimmed, axis=1, keepdims=True)
+                    elif trimmed.shape[1] > out_ch:
+                        trimmed = trimmed[:, :out_ch] if out_ch == 2 else np.mean(trimmed[:, :2], axis=1, keepdims=True)
                     pcm_i16 = (np.clip(trimmed, -1.0, 1.0) * 32767.0).astype(np.int16)
                     out_wfs[name].writeframes(pcm_i16.tobytes())
 

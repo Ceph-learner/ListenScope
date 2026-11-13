@@ -893,6 +893,38 @@ class ExperimentalLiveSeparator:
                         if rtf >= 1.25:
                             logger.warning("Live separation RTF=%.2f >= 1.25, dropping stale backlog", rtf)
 
+            if not self._is_worker_alive():
+                if self._subproc_reader_thread is not None and self._subproc_reader_thread.is_alive():
+                    self._subproc_reader_thread.join(timeout=0.3)
+                if self._subproc_stderr_thread is not None and self._subproc_stderr_thread.is_alive():
+                    self._subproc_stderr_thread.join(timeout=0.3)
+                err = ""
+                if self._res_q is not None:
+                    while True:
+                        try:
+                            msg = self._res_q.get_nowait()
+                        except Exception:
+                            break
+                        if isinstance(msg, dict) and msg.get("type") == "error":
+                            err = str(msg.get("error", ""))
+                code = self._worker_exitcode()
+                tail = list(self._subproc_stderr_tail)[-5:]
+                detail = err or (f"worker 意外退出 (exitcode={code})" + (f" ({' | '.join(tail)})" if tail else ""))
+                self.close_output_stream()
+                self._cleanup_worker_only()
+                with self._lock:
+                    self._active = False
+                    self._status_message = f"实时分轨异常停止: {detail}"
+                self.resource_manager.update_runtime_state(
+                    active_ai_jobs=0,
+                    loaded_models=0,
+                    current_model=None,
+                    current_task=None,
+                    ai_worker_pid=None,
+                    ai_buffer_seconds=0.0,
+                )
+                return
+
             newest = self.ring_buffer.total_written_frames
             backlog_frames = newest - self._last_read_abs_frame
             max_buf_frames = int(round(self.ai_config.live_max_buffer_seconds * sr))
@@ -1001,7 +1033,8 @@ class ExperimentalLiveSeparator:
                             sub.wait(timeout=0.3)
                         except Exception:
                             pass
-            for pipe in (sub.stdin, sub.stdout, sub.stderr):
+            for pipe_name in ("stdin", "stdout", "stderr"):
+                pipe = getattr(sub, pipe_name, None)
                 if pipe is not None:
                     try:
                         pipe.close()

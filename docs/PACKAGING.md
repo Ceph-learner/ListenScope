@@ -6,7 +6,7 @@ ListenScope 严格遵守“**Core 轻量常驻、AI 按需隔离、不炸内存*
 
 - **Target PC 硬性基线**: Windows 10/11 (Build >= `19041`) · **NVIDIA GeForce RTX 5060 Ti (8GB VRAM，非 16GB)** · **16GB RAM**
 - **ListenScope Core (`.venv-core` / `ListenScopeCore.exe`)**:
-  - 仅包含 GUI (`PySide6>=6.8.0,<6.10` + `pyqtgraph`)、WASAPI 音频捕获 (`proc-tap` + `pycaw` + `PyAudioWPatch`)、120s PCM 环形缓冲与 CPU 实时频谱/chroma/和弦/调性/BPM 分析。
+  - 仅包含 GUI (`PySide6>=6.8.0,<6.10` + `pyqtgraph`)、WASAPI 音频捕获 (`proc-tap` + `pycaw` + `PyAudioWPatch`)、120s PCM 环形缓冲、纯 CPU WSOLA 不变调变速回放 (`audio/time_stretch.py`) 与 CPU 实时频谱/chroma/和弦/调性/BPM 分析。
   - **版本约束说明**: `PySide6` 明确锁定 `<6.10`（实测 `6.8.3 LTS` 连续刷新零引用计数异常；已验证上游 `6.12.0` 存在 `Signal.emit` 导致 `bool_dealloc`/`none_dealloc` 崩溃的风险）。
   - **禁止捆绑 CUDA / PyTorch DLL**，常态主进程 RAM 目标 `< 1GB`。
 - **ListenScope AI Worker (`.venv-ai`)**:

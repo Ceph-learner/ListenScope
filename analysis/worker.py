@@ -47,11 +47,13 @@ class AnalysisWorker:
         self.pitch = PitchEstimator(sample_rate=sr, fft_size=self.config.fft_size)
 
         self._lock = threading.Lock()
+        self._analysis_lock = threading.Lock()
         self._latest_snapshot: Optional[AnalysisSnapshot] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_analyzed_frame: int = -1
         self._frame_count: int = 0
+        self._harmony_generation: int = 0
         self._dropped_cycles: int = 0
 
     @property
@@ -80,6 +82,18 @@ class AnalysisWorker:
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=2.0)
 
+    def reset_harmony(self) -> None:
+        """Reset chord, chroma history, key window, and BPM accumulators cleanly (e.g. on song change)."""
+        with self._analysis_lock:
+            self._harmony_generation += 1
+            self.chords.reset()
+            self.chroma.clear()
+            self.tempo.reset()
+            self._frame_count = 0
+            self._last_analyzed_frame = -1
+            with self._lock:
+                self._latest_snapshot = None
+
     def latest_snapshot(self) -> Optional[AnalysisSnapshot]:
         with self._lock:
             return self._latest_snapshot
@@ -97,25 +111,31 @@ class AnalysisWorker:
         else:
             mono = np.mean(pcm, axis=1, dtype=np.float32)
             _, rms_db, _, peak_db = compute_rms_and_peak(pcm)
-            is_silent = (end_abs == self._last_analyzed_frame) or (rms_db < self.config.silence_threshold_dbfs)
-
-        self._last_analyzed_frame = end_abs
+            with self._analysis_lock:
+                prev_abs = self._last_analyzed_frame
+            is_silent = (end_abs == prev_abs) or (rms_db < self.config.silence_threshold_dbfs)
 
         wf_min, wf_max = self.spectrum.compute_waveform_envelope(mono)
         fft_mag, fft_db, log_db = self.spectrum.analyze_frame(mono)
-        chroma_12 = self.chroma.extract_from_magnitude(fft_mag, record_history=True, is_silent=is_silent)
-        chord_est = self.chords.update(chroma_12, is_silent=is_silent)
-
-        self._frame_count += 1
-        # Update key every ~8 cycles (~0.5s) to keep CPU overhead negligible
-        if self._frame_count % 8 == 1 or self._latest_snapshot is None:
-            chroma_win = self.chroma.recent_chroma_matrix(seconds=float(self.config.key_window_seconds))
-            key_est = self.key_detector.estimate(chroma_win)
-        else:
-            key_est = self._latest_snapshot.key
-
-        tempo_est = self.tempo.update(log_db, is_silent=is_silent)
         pitch_est = self.pitch.estimate_from_magnitude(fft_mag, is_silent=is_silent)
+
+        with self._analysis_lock:
+            gen = self._harmony_generation
+            self._last_analyzed_frame = end_abs
+            chroma_12 = self.chroma.extract_from_magnitude(fft_mag, record_history=True, is_silent=is_silent)
+            chord_est = self.chords.update(chroma_12, is_silent=is_silent)
+
+            self._frame_count += 1
+            # Update key every ~8 cycles (~0.5s) to keep CPU overhead negligible
+            with self._lock:
+                prev_snap = self._latest_snapshot
+            if self._frame_count % 8 == 1 or prev_snap is None:
+                chroma_win = self.chroma.recent_chroma_matrix(seconds=float(self.config.key_window_seconds))
+                key_est = self.key_detector.estimate(chroma_win)
+            else:
+                key_est = prev_snap.key
+
+            tempo_est = self.tempo.update(log_db, is_silent=is_silent)
 
         # Decimate display bins cleanly for UI transmission (avoid huge list allocations)
         fft_freqs = self.spectrum.fft_freqs
@@ -140,8 +160,10 @@ class AnalysisWorker:
             peak_dbfs=peak_db,
             window_seconds=self.ring_buffer.available_seconds,
         )
-        with self._lock:
-            self._latest_snapshot = snap
+        with self._analysis_lock:
+            if gen == self._harmony_generation:
+                with self._lock:
+                    self._latest_snapshot = snap
         return snap
 
     def _run_loop(self) -> None:

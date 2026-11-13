@@ -15,6 +15,7 @@ from core.config import AudioConfig
 
 from .pcm_utils import normalize_to_canonical_pcm
 from .ring_buffer import FixedRingBuffer
+from .time_stretch import StreamingTimeStretcher
 
 logger = logging.getLogger(__name__)
 
@@ -122,13 +123,28 @@ class HistoryABPlayer:
         self._b_frame: int = 0
         self._cursor_frame: int = 0
         self._loop_enabled: bool = True
+        self._speed: float = 1.0
         self._is_playing: bool = False
         self._stream: Any = None
+        self._stretcher = StreamingTimeStretcher(
+            sample_rate=self.audio_config.sample_rate,
+            channels=self.audio_config.channels,
+        )
 
     @property
     def is_playing(self) -> bool:
         with self._lock:
             return self._is_playing
+
+    @property
+    def loop_enabled(self) -> bool:
+        with self._lock:
+            return self._loop_enabled
+
+    @property
+    def speed(self) -> float:
+        with self._lock:
+            return self._speed
 
     @property
     def loop_range(self) -> tuple[int, int]:
@@ -139,6 +155,13 @@ class HistoryABPlayer:
     def position_frame(self) -> int:
         with self._lock:
             return self._cursor_frame
+
+    @property
+    def position_ago_sec(self) -> float:
+        with self._lock:
+            newest = self.ring_buffer.total_written_frames
+            sr = float(max(1, self.ring_buffer.sample_rate))
+            return max(0.0, (newest - self._cursor_frame) / sr)
 
     def select_recent_seconds(self, seconds: float) -> tuple[int, int]:
         """Select the latest N seconds currently retained in the 120s ring buffer."""
@@ -152,6 +175,7 @@ class HistoryABPlayer:
             self._a_frame = a
             self._b_frame = b
             self._cursor_frame = a
+            self._stretcher.reset(0.0)
         return a, b
 
     def set_ab_range(self, a_frame: int, b_frame: int) -> tuple[int, int]:
@@ -163,15 +187,26 @@ class HistoryABPlayer:
             self._a_frame = a
             self._b_frame = b
             self._cursor_frame = a
+            self._stretcher.reset(0.0)
         return a, b
 
     def set_loop(self, enabled: bool) -> None:
         with self._lock:
-            self._loop_enabled = enabled
+            self._loop_enabled = bool(enabled)
+
+    def set_speed(self, speed: float) -> float:
+        clamped = max(0.5, min(1.5, float(speed)))
+        with self._lock:
+            if abs(clamped - self._speed) > 1e-4:
+                self._speed = clamped
+                rel = max(0, self._cursor_frame - self._a_frame)
+                self._stretcher.reset(float(rel))
+            return self._speed
 
     def seek(self, abs_frame: int) -> None:
         with self._lock:
             self._cursor_frame = max(self._a_frame, min(int(abs_frame), self._b_frame))
+            self._stretcher.reset(float(max(0, self._cursor_frame - self._a_frame)))
 
     def start_playback(self, *, open_audio_device: bool = True) -> str:
         """Start A/B playback and return user-facing QQ Music pause reminder."""
@@ -180,6 +215,7 @@ class HistoryABPlayer:
                 raise ValueError("请先在 120s 历史时间轴选择有效的 A/B 片段。")
             if self._cursor_frame < self._a_frame or self._cursor_frame >= self._b_frame:
                 self._cursor_frame = self._a_frame
+                self._stretcher.reset(0.0)
             self._is_playing = True
 
         if open_audio_device:
@@ -189,16 +225,25 @@ class HistoryABPlayer:
     def pause(self) -> None:
         with self._lock:
             self._is_playing = False
+            self._stretcher.reset(float(max(0, self._cursor_frame - self._a_frame)))
         self._close_output_stream()
 
     def stop(self) -> None:
         with self._lock:
             self._is_playing = False
             self._cursor_frame = self._a_frame
+            self._stretcher.reset(0.0)
         self._close_output_stream()
 
+    def close_if_finished(self) -> None:
+        """Close idle sounddevice stream cleanly from a non-callback thread after one-shot ends."""
+        with self._lock:
+            should_close = (not self._is_playing) and (self._stream is not None)
+        if should_close:
+            self._close_output_stream()
+
     def render_block(self, num_frames: int) -> np.ndarray:
-        """Pull exact PCM block of shape (num_frames, 2) float32 with A/B wrap-around."""
+        """Pull exact PCM block of shape (num_frames, 2) float32 with optional pitch-preserved speed & A/B wrap."""
         out = np.zeros((num_frames, self.audio_config.channels), dtype=np.float32)
         with self._lock:
             if not self._is_playing or self._b_frame <= self._a_frame:
@@ -210,6 +255,39 @@ class HistoryABPlayer:
             if b <= a:
                 self._is_playing = False
                 return out
+
+            if abs(self._speed - 1.0) >= 1e-3:
+                span = b - a
+                if self._cursor_frame < a or self._cursor_frame >= b:
+                    if self._loop_enabled:
+                        self._cursor_frame = a
+                        self._stretcher.reset(0.0)
+                    else:
+                        self._is_playing = False
+                        return out
+
+                rel_cursor = max(0, min(span - 1, self._cursor_frame - a))
+
+                def _read_ab_rel(rel_start: int, count: int) -> np.ndarray:
+                    s_abs = a + max(0, int(rel_start))
+                    e_abs = min(b, s_abs + max(0, int(count)))
+                    if e_abs <= s_abs:
+                        return np.empty((0, self.audio_config.channels), dtype=np.float32)
+                    return self.ring_buffer.read_range(s_abs, e_abs)
+
+                stretched, new_rel, hit_eof = self._stretcher.render_block(
+                    num_frames,
+                    speed=self._speed,
+                    span_frames=span,
+                    rel_cursor=rel_cursor,
+                    loop_enabled=self._loop_enabled,
+                    read_rel_fn=_read_ab_rel,
+                )
+                self._cursor_frame = min(b, a + new_rel)
+                if hit_eof and not self._loop_enabled:
+                    self._is_playing = False
+                    self._cursor_frame = b
+                return stretched
 
             written = 0
             while written < num_frames:
@@ -239,8 +317,9 @@ class HistoryABPlayer:
         return out
 
     def _ensure_output_stream(self) -> None:
-        if self._stream is not None:
-            return
+        with self._lock:
+            if self._stream is not None:
+                return
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
         except ImportError:
@@ -252,20 +331,24 @@ class HistoryABPlayer:
             outdata[:] = block
 
         try:
-            self._stream = sd.OutputStream(
+            stream = sd.OutputStream(
                 samplerate=self.audio_config.sample_rate,
                 channels=self.audio_config.channels,
                 dtype="float32",
                 callback=_callback,
             )
-            self._stream.start()
+            stream.start()
+            with self._lock:
+                self._stream = stream
         except Exception as exc:
             logger.warning("Failed to open sounddevice output stream (pull-only mode active): %s", exc)
-            self._stream = None
+            with self._lock:
+                self._stream = None
 
     def _close_output_stream(self) -> None:
-        stream = self._stream
-        self._stream = None
+        with self._lock:
+            stream = self._stream
+            self._stream = None
         if stream is not None:
             try:
                 stream.stop()
@@ -275,7 +358,7 @@ class HistoryABPlayer:
 
 
 class StemMixerEngine:
-    """Time-synchronized multi-stem player and streaming WAV exporter."""
+    """Time-synchronized multi-stem player, sub-region practice looper, and streaming WAV exporter."""
 
     def __init__(self, sample_rate: int = 48000, channels: int = 2) -> None:
         self.sample_rate = sample_rate
@@ -287,7 +370,11 @@ class StemMixerEngine:
         self._max_frames: int = 0
         self._is_playing: bool = False
         self._loop_enabled: bool = True
+        self._speed: float = 1.0
+        self._loop_start_frame: Optional[int] = None
+        self._loop_end_frame: Optional[int] = None
         self._stream: Any = None
+        self._stretcher = StreamingTimeStretcher(sample_rate=sample_rate, channels=channels)
 
     @property
     def tracks(self) -> dict[str, StemTrackState]:
@@ -298,6 +385,24 @@ class StemMixerEngine:
     def is_playing(self) -> bool:
         with self._lock:
             return self._is_playing
+
+    @property
+    def loop_enabled(self) -> bool:
+        with self._lock:
+            return self._loop_enabled
+
+    @property
+    def speed(self) -> float:
+        with self._lock:
+            return self._speed
+
+    @property
+    def loop_region_sec(self) -> Optional[tuple[float, float]]:
+        with self._lock:
+            if self._loop_start_frame is None or self._loop_end_frame is None:
+                return None
+            sr = float(max(1, self.sample_rate))
+            return self._loop_start_frame / sr, self._loop_end_frame / sr
 
     @property
     def position_frame(self) -> int:
@@ -319,9 +424,56 @@ class StemMixerEngine:
         with self._lock:
             return self._max_frames / float(max(1, self.sample_rate))
 
+    def _active_window_locked(self) -> tuple[int, int]:
+        if (
+            self._loop_start_frame is not None
+            and self._loop_end_frame is not None
+            and self._max_frames > 0
+            and self._loop_end_frame > self._loop_start_frame
+        ):
+            ws = max(0, min(self._loop_start_frame, self._max_frames - 1))
+            we = max(ws + 1, min(self._max_frames, self._loop_end_frame))
+            return ws, we
+        return 0, self._max_frames
+
     def set_loop(self, enabled: bool) -> None:
         with self._lock:
             self._loop_enabled = bool(enabled)
+
+    def set_speed(self, speed: float) -> float:
+        clamped = max(0.5, min(1.5, float(speed)))
+        with self._lock:
+            if abs(clamped - self._speed) > 1e-4:
+                self._speed = clamped
+                ws, _ = self._active_window_locked()
+                self._stretcher.reset(float(max(0, self._position_frame - ws)))
+            return self._speed
+
+    def set_loop_region(self, start_sec: float, end_sec: float) -> tuple[float, float]:
+        """Enable loop playback confined to `[start_sec, end_sec)` in source timeline coordinates."""
+        with self._lock:
+            if self._max_frames <= 0:
+                raise ValueError("当前没有已加载的分轨。")
+            sr = self.sample_rate
+            min_frames = max(1, int(round(0.1 * sr)))
+            s_f = max(0, min(self._max_frames - 1, int(round(float(start_sec) * sr))))
+            e_f = max(s_f + min_frames, min(self._max_frames, int(round(float(end_sec) * sr))))
+            if e_f > self._max_frames:
+                e_f = self._max_frames
+                s_f = max(0, e_f - min_frames)
+            self._loop_start_frame = s_f
+            self._loop_end_frame = e_f
+            self._loop_enabled = True
+            if self._position_frame < s_f or self._position_frame >= e_f:
+                self._position_frame = s_f
+            self._stretcher.reset(float(max(0, self._position_frame - s_f)))
+            return s_f / float(sr), e_f / float(sr)
+
+    def clear_loop_region(self) -> None:
+        with self._lock:
+            self._loop_start_frame = None
+            self._loop_end_frame = None
+            self._stretcher.reset(float(self._position_frame))
 
     def clear(self) -> None:
         self.stop()
@@ -332,6 +484,9 @@ class StemMixerEngine:
             self._tracks.clear()
             self._max_frames = 0
             self._position_frame = 0
+            self._loop_start_frame = None
+            self._loop_end_frame = None
+            self._stretcher.reset(0.0)
 
     def load_stems(self, stem_paths: dict[str, str | Path]) -> dict[str, StemTrackState]:
         """Register stem WAV files using streaming handles (supports 16/24/32-bit/float32 & resampling)."""
@@ -403,12 +558,23 @@ class StemMixerEngine:
 
     def seek(self, frame: int) -> None:
         with self._lock:
-            self._position_frame = max(0, min(int(frame), self._max_frames))
+            pos = max(0, min(int(frame), self._max_frames))
+            self._position_frame = pos
+            if self._loop_start_frame is not None and self._loop_end_frame is not None:
+                if pos < self._loop_start_frame or pos >= self._loop_end_frame:
+                    self._loop_start_frame = None
+                    self._loop_end_frame = None
+            ws, _ = self._active_window_locked()
+            self._stretcher.reset(float(max(0, pos - ws)))
 
     def play(self, *, open_audio_device: bool = True) -> None:
         with self._lock:
             if self._max_frames <= 0:
                 return
+            ws, we = self._active_window_locked()
+            if self._position_frame < ws or self._position_frame >= we:
+                self._position_frame = ws
+                self._stretcher.reset(0.0)
             self._is_playing = True
         if open_audio_device:
             self._ensure_output_stream()
@@ -416,13 +582,24 @@ class StemMixerEngine:
     def pause(self) -> None:
         with self._lock:
             self._is_playing = False
+            ws, _ = self._active_window_locked()
+            self._stretcher.reset(float(max(0, self._position_frame - ws)))
         self._close_output_stream()
 
     def stop(self) -> None:
         with self._lock:
             self._is_playing = False
-            self._position_frame = 0
+            ws, _ = self._active_window_locked()
+            self._position_frame = ws
+            self._stretcher.reset(0.0)
         self._close_output_stream()
+
+    def close_if_finished(self) -> None:
+        """Close idle sounddevice stream cleanly from a non-callback thread after one-shot ends."""
+        with self._lock:
+            should_close = (not self._is_playing) and (self._stream is not None)
+        if should_close:
+            self._close_output_stream()
 
     def _effective_gain(self, track: StemTrackState, any_solo: bool) -> float:
         if any_solo:
@@ -477,36 +654,92 @@ class StemMixerEngine:
             return np.zeros((num_frames, self.channels), dtype=np.float32)
         return self._read_track_chunk_from_handle(handle, track, start_frame, num_frames)
 
+    def _mix_range_locked(self, start_frame: int, num_frames: int) -> np.ndarray:
+        mix = np.zeros((num_frames, self.channels), dtype=np.float32)
+        if num_frames <= 0:
+            return mix
+        any_solo = any(t.solo for t in self._tracks.values())
+        for name, track in self._tracks.items():
+            gain = self._effective_gain(track, any_solo)
+            if gain <= 1e-6:
+                continue
+            mix += self._read_track_chunk(name, start_frame, num_frames) * gain
+        return mix
+
     def render_block(self, num_frames: int, *, advance: bool = True) -> np.ndarray:
-        """Render synchronized mixed audio block across active stems."""
+        """Render synchronized mixed audio block across active stems with optional stretch and sub-region loop."""
         mix = np.zeros((num_frames, self.channels), dtype=np.float32)
         with self._lock:
             if self._max_frames <= 0 or (advance and not self._is_playing):
                 return mix
-            if self._position_frame >= self._max_frames:
-                if self._loop_enabled and advance:
-                    self._position_frame = 0
+
+            if not advance:
+                mix = self._mix_range_locked(self._position_frame, num_frames)
+                np.clip(mix, -1.0, 1.0, out=mix)
+                return mix
+
+            win_start, win_end = self._active_window_locked()
+            span = win_end - win_start
+            if span <= 0:
+                self._is_playing = False
+                return mix
+
+            if self._position_frame < win_start:
+                self._position_frame = win_start
+                self._stretcher.reset(0.0)
+            if self._position_frame >= win_end:
+                if self._loop_enabled:
+                    self._position_frame = win_start
+                    self._stretcher.reset(0.0)
                 else:
-                    if advance:
-                        self._is_playing = False
+                    self._is_playing = False
+                    self._position_frame = win_end
                     return mix
 
-            any_solo = any(t.solo for t in self._tracks.values())
-            for name, track in self._tracks.items():
-                gain = self._effective_gain(track, any_solo)
-                if gain <= 1e-6:
-                    continue
-                chunk = self._read_track_chunk(name, self._position_frame, num_frames)
-                mix += chunk * gain
+            if abs(self._speed - 1.0) >= 1e-3:
+                rel_cursor = max(0, min(span - 1, self._position_frame - win_start))
 
-            if advance:
-                self._position_frame += num_frames
-                if self._position_frame >= self._max_frames:
+                def _read_mixer_rel(rel_start: int, count: int) -> np.ndarray:
+                    s_abs = win_start + max(0, int(rel_start))
+                    take = max(0, min(int(count), win_end - s_abs))
+                    if take <= 0:
+                        return np.empty((0, self.channels), dtype=np.float32)
+                    return self._mix_range_locked(s_abs, take)
+
+                stretched, new_rel, hit_eof = self._stretcher.render_block(
+                    num_frames,
+                    speed=self._speed,
+                    span_frames=span,
+                    rel_cursor=rel_cursor,
+                    loop_enabled=self._loop_enabled,
+                    read_rel_fn=_read_mixer_rel,
+                )
+                self._position_frame = min(win_end, win_start + new_rel)
+                if hit_eof and not self._loop_enabled:
+                    self._is_playing = False
+                    self._position_frame = win_end
+                return stretched
+
+            written = 0
+            while written < num_frames:
+                if self._position_frame >= win_end:
                     if self._loop_enabled:
-                        self._position_frame = 0
+                        self._position_frame = win_start
                     else:
                         self._is_playing = False
-                        self._position_frame = self._max_frames
+                        self._position_frame = win_end
+                        break
+                take = min(num_frames - written, win_end - self._position_frame)
+                mix[written : written + take] = self._mix_range_locked(self._position_frame, take)
+                written += take
+                self._position_frame += take
+                if self._position_frame >= win_end:
+                    if self._loop_enabled:
+                        self._position_frame = win_start
+                    else:
+                        self._is_playing = False
+                        self._position_frame = win_end
+                        break
 
         np.clip(mix, -1.0, 1.0, out=mix)
         return mix
@@ -575,8 +808,9 @@ class StemMixerEngine:
             return mins, maxs
 
     def _ensure_output_stream(self) -> None:
-        if self._stream is not None:
-            return
+        with self._lock:
+            if self._stream is not None:
+                return
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
         except ImportError:
@@ -586,19 +820,23 @@ class StemMixerEngine:
             outdata[:] = self.render_block(frames, advance=True)
 
         try:
-            self._stream = sd.OutputStream(
+            stream = sd.OutputStream(
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype="float32",
                 callback=_callback,
             )
-            self._stream.start()
+            stream.start()
+            with self._lock:
+                self._stream = stream
         except Exception:
-            self._stream = None
+            with self._lock:
+                self._stream = None
 
     def _close_output_stream(self) -> None:
-        stream = self._stream
-        self._stream = None
+        with self._lock:
+            stream = self._stream
+            self._stream = None
         if stream is not None:
             try:
                 stream.stop()

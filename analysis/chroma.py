@@ -59,6 +59,10 @@ class ChromaExtractor:
     def history_maxlen(self) -> int:
         return self._history.maxlen or 0
 
+    def clear(self) -> None:
+        with self._lock:
+            self._history.clear()
+
     def extract_from_magnitude(self, fft_mag: np.ndarray, *, record_history: bool = True, is_silent: bool = False) -> np.ndarray:
         if is_silent or fft_mag.size == 0:
             chroma = np.zeros(12, dtype=np.float32)

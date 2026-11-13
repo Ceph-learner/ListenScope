@@ -288,16 +288,21 @@ class ListenScopeController:
 
     def _connect_signals(self) -> None:
         w = self.window
+        self._last_mixer_playing = False
         w.refresh_sources_requested.connect(self.refresh_sources)
         w.capture_toggle_requested.connect(self._on_capture_toggle)
         w.ab_select_recent_requested.connect(self._on_ab_select_recent)
         w.ab_set_range_sec_requested.connect(self._on_ab_set_range)
         w.ab_play_requested.connect(self._on_ab_play)
         w.ab_stop_requested.connect(self.ab_player.stop)
+        w.ab_loop_toggled.connect(self.ab_player.set_loop)
+        w.ab_speed_changed.connect(self.ab_player.set_speed)
         w.ab_export_wav_requested.connect(self._on_export_ab_wav)
         w.import_audio_requested.connect(self._on_import_audio_file)
         w.ai_separate_requested.connect(self._on_start_ai_separation)
         w.emergency_stop_requested.connect(self._on_emergency_stop)
+        w.chroma_widget.reset_harmony_requested.connect(self._on_reset_harmony)
+        w.toggle_playback_requested.connect(self._on_toggle_active_playback)
         w.mixer_widget.before_play_requested.connect(self._on_mixer_before_play)
         w.mixer_widget.cancel_ai_requested.connect(self._on_cancel_ai)
         w.mixer_widget.oom_action_requested.connect(self._on_oom_action)
@@ -424,6 +429,23 @@ class ListenScopeController:
         self.ab_player.pause()
         self.live_separator.close_output_stream()
 
+    def _on_reset_harmony(self) -> None:
+        self.analysis_worker.reset_harmony()
+        self.window.show_banner_message("✅ 已重置和弦/调性/BPM 分析历史，实时捕获继续运行。")
+
+    def _on_toggle_active_playback(self) -> None:
+        if self.window.tabs.currentWidget() is self.window.mixer_widget:
+            if self.mixer_engine.is_playing:
+                self.mixer_engine.pause()
+            elif self.mixer_engine.max_frames > 0:
+                self._on_mixer_before_play()
+                self.mixer_engine.play(open_audio_device=True)
+        else:
+            if self.ab_player.is_playing:
+                self.ab_player.pause()
+            elif self.ring_buffer.available_seconds >= 0.2:
+                self._on_ab_play()
+
     def _on_start_ai_separation(self, stem_mode: str, model_id: str, segment: int, use_gpu: bool) -> None:
         if self.live_separator.is_active or self.live_separator.is_starting:
             self.window.show_banner_message("请先停止实验性近实时分轨，系统禁止并行运行多个人工智能分轨任务。")
@@ -546,6 +568,8 @@ class ListenScopeController:
                 file_path,
                 max_seconds=float(self.audio_config.ring_buffer_seconds),
             )
+            self.analysis_worker.reset_harmony()
+            self.window.chroma_widget.clear_progression()
             avail = self.ring_buffer.available_seconds
             if avail >= 0.5:
                 sel = min(30.0, avail)
@@ -575,6 +599,8 @@ class ListenScopeController:
             self.stop_capture()
             self.ab_player.stop()
             self.ring_buffer.clear()
+            self.analysis_worker.reset_harmony()
+            self.window.chroma_widget.clear_progression()
             arr, sr, ch = _read_wav_excerpt_f32(Path(stem_path), max_seconds=30.0)
             canon = normalize_to_canonical_pcm(
                 arr,
@@ -873,8 +899,17 @@ class ListenScopeController:
             except queue.Empty:
                 break
 
-        if self.mixer_engine.is_playing or self._tick_counter % 4 == 0:
+        self.ab_player.close_if_finished()
+        self.mixer_engine.close_if_finished()
+        self.window.update_ab_playhead(
+            active=self.ab_player.is_playing,
+            ago_sec=self.ab_player.position_ago_sec,
+        )
+
+        mixer_playing = self.mixer_engine.is_playing
+        if mixer_playing or getattr(self, "_last_mixer_playing", False) or self._tick_counter % 4 == 0:
             self.window.sync_mixer_position()
+        self._last_mixer_playing = mixer_playing
 
         # Update real-time CPU DSP analysis snapshots
         asnap = self.analysis_worker.latest_snapshot()

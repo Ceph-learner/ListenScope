@@ -200,6 +200,16 @@ def execute_worker_job(
             error=error,
         )
 
+    def _cleanup_backend() -> None:
+        nonlocal backend
+        if backend is not None:
+            try:
+                backend.unload_model()
+            except Exception:
+                pass
+            backend = None
+        release_torch_and_memory()
+
     try:
         if model_spec is None:
             raise ValueError(f"未知 AI 模型 ID: {request.model_id}")
@@ -225,6 +235,8 @@ def execute_worker_job(
 
         if is_cancelled():
             cleanup_temp_outputs(staging_dir)
+            _cleanup_backend()
+            _emit(AIJobState.CANCELLED, 0.0, "任务在准备阶段被取消")
             return _build_abort_result(AIJobState.CANCELLED, error="任务在准备阶段被取消")
 
         _emit(AIJobState.LOADING_MODEL, 0.08, f"按需加载单模型: {model_spec.display_name}...")
@@ -244,6 +256,8 @@ def execute_worker_job(
         if request.simulate_delay_sec > 0.0:
             if _sleep_cancellable(min(0.4, request.simulate_delay_sec), is_cancelled):
                 cleanup_temp_outputs(staging_dir)
+                _cleanup_backend()
+                _emit(AIJobState.CANCELLED, 0.0, "任务在加载模型阶段被取消")
                 return _build_abort_result(AIJobState.CANCELLED, error="任务在加载模型阶段被取消")
 
         backend.load_model()
@@ -251,6 +265,8 @@ def execute_worker_job(
 
         if is_cancelled():
             cleanup_temp_outputs(staging_dir)
+            _cleanup_backend()
+            _emit(AIJobState.CANCELLED, 0.0, "任务在模型加载完成后被取消")
             return _build_abort_result(AIJobState.CANCELLED, error="任务在模型加载完成后被取消")
 
         total_chunks_ref = [max(1, int((meta.duration_sec + max(0.5, request.chunk_seconds) - 0.01) // max(0.5, request.chunk_seconds)))]
@@ -294,19 +310,18 @@ def execute_worker_job(
         if request.simulate_delay_sec > 0.0:
             if _sleep_cancellable(min(0.35, request.simulate_delay_sec), is_cancelled):
                 cleanup_temp_outputs(staging_dir)
+                _cleanup_backend()
                 _emit(AIJobState.CANCELLED, 0.0, "任务在写入输出阶段被取消")
                 return _build_abort_result(AIJobState.CANCELLED, error="任务在写入输出阶段被取消")
 
         if is_cancelled():
             cleanup_temp_outputs(staging_dir)
+            _cleanup_backend()
             _emit(AIJobState.CANCELLED, 0.0, "任务在写入输出阶段被取消")
             return _build_abort_result(AIJobState.CANCELLED, error="任务在写入输出阶段被取消")
 
         # Release model cleanly before finalizing & sampling end memory
-        backend.unload_model()
-        del backend
-        backend = None
-        release_torch_and_memory()
+        _cleanup_backend()
 
         out_dir.mkdir(parents=True, exist_ok=True)
         for stem_name, staged_path_str in staged_stems.items():
@@ -351,12 +366,14 @@ def execute_worker_job(
         )
     except InterruptedError:
         cleanup_temp_outputs(staging_dir)
+        _cleanup_backend()
         _emit(AIJobState.CANCELLED, 0.0, "AI 分轨任务已取消")
         return _build_abort_result(AIJobState.CANCELLED, error="AI 分轨任务已取消")
     except Exception as exc:
         cleanup_temp_outputs(staging_dir)
         for p in final_paths.values():
             cleanup_temp_outputs(p)
+        _cleanup_backend()
         if is_oom_exception(exc):
             opts = getattr(
                 exc,
@@ -377,13 +394,7 @@ def execute_worker_job(
         _emit(AIJobState.FAILED, 0.0, f"AI 分轨失败: {exc}")
         return _build_abort_result(AIJobState.FAILED, error=str(exc))
     finally:
-        if backend is not None:
-            try:
-                backend.unload_model()
-            except Exception:
-                pass
-            del backend
-        release_torch_and_memory()
+        _cleanup_backend()
 
 
 def spawn_worker_entry(

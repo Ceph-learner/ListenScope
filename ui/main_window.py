@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from ai.models import list_models
 from audio.playback import StemMixerEngine
@@ -238,11 +239,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ab_set_range_sec_requested = QtCore.Signal(float, float)
     ab_play_requested = QtCore.Signal()
     ab_stop_requested = QtCore.Signal()
+    ab_loop_toggled = QtCore.Signal(bool)
+    ab_speed_changed = QtCore.Signal(float)
     ab_export_wav_requested = QtCore.Signal(str)
     ai_separate_requested = QtCore.Signal(str, str, int, bool)  # (stem_mode, model_id, segment, use_gpu)
     emergency_stop_requested = QtCore.Signal()
     settings_applied = QtCore.Signal(object, object, str)
     import_audio_requested = QtCore.Signal(str)
+    toggle_playback_requested = QtCore.Signal()
 
     def __init__(
         self,
@@ -256,7 +260,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope — 本地音乐分析 · A/B 循环 · 安全资源防护 AI 分轨")
-        self.resize(1340, 860)
+        self.resize(1360, 870)
         self.setStyleSheet(DARK_STYLESHEET)
 
         self._hardware_report = hardware_report
@@ -267,6 +271,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._closing_handler = None
         self._last_capture_banner: Optional[str] = None
         self._syncing_ab_region = False
+
+        self._play_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Space"), self)
+        self._play_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
+        self._play_shortcut.activated.connect(self.toggle_playback_requested.emit)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -370,8 +378,20 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.apply_ab_btn = QtWidgets.QPushButton("设定 A/B 区间")
         self.apply_ab_btn.clicked.connect(self._on_apply_ab_clicked)
 
-        self.ab_play_btn = QtWidgets.QPushButton("A/B 循环播放")
+        self.ab_play_btn = QtWidgets.QPushButton("A/B 播放")
         self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
+        self.ab_loop_chk = QtWidgets.QCheckBox("A/B 循环")
+        self.ab_loop_chk.setChecked(True)
+        self.ab_loop_chk.setToolTip("关闭后 A/B 片段播完一次自动停在 B 点")
+        self.ab_loop_chk.toggled.connect(self.ab_loop_toggled.emit)
+
+        self.ab_speed_combo = QtWidgets.QComboBox()
+        self.ab_speed_combo.setToolTip("A/B 历史片段不变调倍速回放 (纯 CPU WSOLA)")
+        for lbl, spd in [("0.5x", 0.5), ("0.65x", 0.65), ("0.75x", 0.75), ("0.85x", 0.85), ("1.0x", 1.0), ("1.25x", 1.25)]:
+            self.ab_speed_combo.addItem(lbl, spd)
+        self.ab_speed_combo.setCurrentIndex(4)
+        self.ab_speed_combo.currentIndexChanged.connect(self._on_ab_speed_changed)
+
         self.ab_export_wav_btn = QtWidgets.QPushButton("导出 A/B 片段 WAV")
         self.import_audio_btn = QtWidgets.QPushButton("导入本地音频(<=120s)")
         self.import_audio_btn.setToolTip("流式读取本地 WAV/FLAC/OGG 的前 <=120s 至历史环形缓冲（禁止全文件一次加载）")
@@ -389,12 +409,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_a.addWidget(self.apply_ab_btn)
         row_a.addWidget(self.ab_play_btn)
         row_a.addWidget(self.ab_stop_btn)
+        row_a.addWidget(self.ab_loop_chk)
+        row_a.addWidget(self.ab_speed_combo)
         row_a.addWidget(self.ab_export_wav_btn)
         row_a.addWidget(self.import_audio_btn)
         row_a.addStretch(1)
         bottom_l.addLayout(row_a)
 
-        # Interactive 120s Waveform Overview + Draggable A/B Selector
+        # Interactive 120s Waveform Overview + Draggable A/B Selector + Live Playhead
         self.history_overview_plot = pg.PlotWidget()
         self.history_overview_plot.setMinimumHeight(58)
         self.history_overview_plot.setMaximumHeight(72)
@@ -414,6 +436,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         )
         self.ab_region.setZValue(10)
         self.history_overview_plot.addItem(self.ab_region)
+        self._ab_playhead_line = pg.InfiniteLine(
+            pos=0.0,
+            angle=90,
+            movable=False,
+            pen=pg.mkPen("#FFD166", width=1.8),
+        )
+        self._ab_playhead_line.setVisible(False)
+        self._ab_playhead_line.setZValue(15)
+        self.history_overview_plot.addItem(self._ab_playhead_line)
         self.ab_region.sigRegionChanged.connect(self._on_ab_region_dragged)
         self.ab_region.sigRegionChangeFinished.connect(self._on_ab_region_finished)
         bottom_l.addWidget(self.history_overview_plot)
@@ -550,6 +581,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         x = np.linspace(-float(avail_sec), 0.0, int(mins.shape[0]), dtype=np.float32)
         self._hist_max_curve.setData(x, np.asarray(maxs, dtype=np.float32))
         self._hist_min_curve.setData(x, np.asarray(mins, dtype=np.float32))
+
+    def _on_ab_speed_changed(self) -> None:
+        self.ab_speed_changed.emit(float(self.ab_speed_combo.currentData() or 1.0))
+
+    def update_ab_playhead(self, *, active: bool, ago_sec: float = 0.0) -> None:
+        if not active:
+            if self._ab_playhead_line.isVisible():
+                self._ab_playhead_line.setVisible(False)
+            return
+        x = max(-120.0, min(0.0, -float(ago_sec)))
+        self._ab_playhead_line.setValue(x)
+        if not self._ab_playhead_line.isVisible():
+            self._ab_playhead_line.setVisible(True)
 
     def _on_sep_2stem(self) -> None:
         model_id = str(self.ai_2stem_combo.currentData() or "mdx_low_vram_2stem")
