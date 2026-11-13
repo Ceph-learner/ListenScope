@@ -251,15 +251,15 @@ class AIJobManager:
                 ai_worker_pid=self._worker_pid,
                 ai_buffer_seconds=min(meta.duration_sec, request.chunk_seconds),
             )
-            self._dispatch_progress(
-                AIJobProgress(
-                    task_id=request.task_id,
-                    state=AIJobState.PREPARING,
-                    progress=0.01,
-                    message=meta.resource_estimate_note,
-                    worker_pid=self._worker_pid,
-                )
+            init_prog = AIJobProgress(
+                task_id=request.task_id,
+                state=AIJobState.PREPARING,
+                progress=0.01,
+                message=meta.resource_estimate_note,
+                worker_pid=self._worker_pid,
             )
+            self._latest_progress = init_prog
+            init_cbs = list(self._progress_callbacks)
             self._monitor_thread = threading.Thread(
                 target=self._monitor_loop,
                 args=(request,),
@@ -267,7 +267,13 @@ class AIJobManager:
                 daemon=True,
             )
             self._monitor_thread.start()
-            return True, meta.resource_estimate_note
+
+        for cb in init_cbs:
+            try:
+                cb(init_prog)
+            except Exception:
+                logger.exception("Progress callback failed")
+        return True, meta.resource_estimate_note
 
     def _launch_worker_locked(self, request: AIJobRequest) -> None:
         req_dict = asdict(request)
@@ -277,6 +283,9 @@ class AIJobManager:
             self.ai_python_executable and Path(self.ai_python_executable).resolve() != Path(sys.executable).resolve()
         )
         if use_external and self.ai_python_executable is not None:
+            import os
+
+            bundle_root = Path(__file__).resolve().parent.parent
             tmp_dir = tempfile.TemporaryDirectory(prefix="ls_ai_ipc_")
             tmp_path = Path(tmp_dir.name)
             req_path = tmp_path / "request.json"
@@ -284,6 +293,10 @@ class AIJobManager:
             cancel_path = tmp_path / "cancel.flag"
             req_path.write_text(json.dumps(req_dict, ensure_ascii=False), encoding="utf-8")
             cfg_path.write_text(json.dumps(cfg_dict, ensure_ascii=False), encoding="utf-8")
+
+            env = os.environ.copy()
+            existing_pp = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
 
             msg_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
             proc = subprocess.Popen(
@@ -298,7 +311,8 @@ class AIJobManager:
                     "--cancel-flag",
                     str(cancel_path),
                 ],
-                cwd=str(Path(__file__).resolve().parent.parent),
+                cwd=str(bundle_root),
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -317,9 +331,21 @@ class AIJobManager:
                     if not text:
                         continue
                     try:
-                        msg_q.put_nowait(json.loads(text))
+                        item = json.loads(text)
                     except Exception:
-                        pass
+                        continue
+                    try:
+                        msg_q.put_nowait(item)
+                    except queue.Full:
+                        if isinstance(item, dict) and item.get("type") == "result":
+                            try:
+                                msg_q.get_nowait()
+                            except queue.Empty:
+                                pass
+                            try:
+                                msg_q.put_nowait(item)
+                            except queue.Full:
+                                pass
 
             self._subproc_reader_thread = threading.Thread(
                 target=_read_stdout,

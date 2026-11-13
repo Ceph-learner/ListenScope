@@ -70,7 +70,13 @@ pip install pyinstaller
 pyinstaller packaging\listenscope_core.spec --noconfirm
 ```
 
-打包输出位于 `dist\ListenScopeCore\ListenScope.exe`。运行后可在 **设置 -> 资源安全阈值 & AI 配置 -> 独立 AI Worker Python 路径** 指向 `.venv-ai\Scripts\python.exe`。
+打包输出位于 `dist\ListenScopeCore\ListenScope.exe`。打包规范（[`listenscope_core.spec`](../packaging/listenscope_core.spec)）会自动打包 `proctap` / `soundfile` 原生库并附带 `ai/`、`separation/`、`core/`、`analysis/` 纯 Python 模块，以便外部 `.venv-ai\Scripts\python.exe` 同时执行音轨分离（`python -m ai.worker`）与 Basic Pitch MIDI 转录（`python -m analysis.midi_transcription`）。运行后可在 **设置 -> 资源安全阈值 & AI 配置 -> 独立 AI Worker Python 路径** 指向 `.venv-ai\Scripts\python.exe`。
+
+### Windows 真机音频设备排障说明（捕获前必看）
+
+- **44.1kHz / 96kHz 声卡或蓝牙耳机静音启动变音问题（上游 `proctap 1.1.1` 已知特性）**：
+  - 上游 `proc-tap` 在非 48kHz 采样率设备上会进入自检分支；若启动捕获瞬间目标播放器恰好处于纯静音，格式自检可能暂落回 INT16。
+  - **推荐做法**：在 Windows「声音设置 -> 扬声器/耳机属性 -> 高级 -> 默认格式」保持 **24位/16位 48000 Hz（推荐）**；若使用 44.1kHz / 96kHz 外置声卡，先让 QQ 音乐开始出声再点击 ListenScope「开始捕获」。如仍受设备限制，可切换至 `[兜底] 系统 WASAPI Loopback`。
 
 ---
 

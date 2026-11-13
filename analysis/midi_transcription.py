@@ -6,6 +6,9 @@ producing standard `.mid` files for import into Cubase or other DAWs.
 
 from __future__ import annotations
 
+import argparse
+from dataclasses import asdict
+import json
 from pathlib import Path
 from typing import Optional
 import wave
@@ -21,6 +24,45 @@ from .pitch import PitchEstimator
 
 def _midi_to_name(midi_num: int) -> str:
     return f"{PITCH_CLASSES[midi_num % 12]}{(midi_num // 12) - 1}"
+
+
+def _read_audio_mono_f32(audio_path: Path, *, max_seconds: float = 120.0) -> tuple[np.ndarray, int]:
+    """Read up to `max_seconds` of WAV audio (16/24/32-bit int or IEEE float32) as mono float32."""
+    try:
+        import soundfile as sf  # type: ignore[import-untyped]
+
+        with sf.SoundFile(str(audio_path), "r") as sf_file:
+            sr = int(sf_file.samplerate)
+            nframes = min(int(sf_file.frames), max(1, int(sr * max_seconds)))
+            data = sf_file.read(nframes, dtype="float32", always_2d=True)
+        if data.size == 0:
+            return np.empty(0, dtype=np.float32), sr
+        return np.mean(np.asarray(data, dtype=np.float32), axis=1), sr
+    except Exception:
+        with wave.open(str(audio_path), "rb") as wf:
+            sr = int(wf.getframerate())
+            ch = max(1, int(wf.getnchannels()))
+            sw = int(wf.getsampwidth())
+            nframes = min(int(wf.getnframes()), max(1, int(sr * max_seconds)))
+            raw = wf.readframes(nframes)
+
+        if sw == 2:
+            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sw == 3:
+            raw_u8 = np.frombuffer(raw, dtype=np.uint8)
+            usable_b = (raw_u8.size // 3) * 3
+            triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
+            signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
+            signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
+            arr = signed.astype(np.float32) / 8388608.0
+        elif sw == 4:
+            arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+        else:
+            arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        if arr.size == 0:
+            return np.empty(0, dtype=np.float32), sr
+        arr = arr[: (arr.size // ch) * ch].reshape(-1, ch)
+        return np.mean(arr, axis=1), sr
 
 
 def _write_notes_to_midi(
@@ -62,21 +104,9 @@ def _write_notes_to_midi(
 
 def _fallback_monophonic_stem_to_notes(audio_path: Path, *, max_seconds: float = 120.0) -> list[MidiNoteCandidate]:
     """Lightweight CPU monophonic note tracker for testing or Basic Pitch-free Core env."""
-    with wave.open(str(audio_path), "rb") as wf:
-        sr = int(wf.getframerate())
-        ch = int(wf.getnchannels())
-        sw = int(wf.getsampwidth())
-        nframes = min(int(wf.getnframes()), int(sr * max_seconds))
-        raw = wf.readframes(nframes)
-
-    if sw == 2:
-        arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    else:
-        arr = np.frombuffer(raw, dtype=np.float32)
-    if arr.size == 0:
+    mono, sr = _read_audio_mono_f32(audio_path, max_seconds=max_seconds)
+    if mono.size == 0:
         return []
-    arr = arr[: (arr.size // ch) * ch].reshape(-1, ch)
-    mono = np.mean(arr, axis=1)
 
     fft_size = 4096
     hop = 2048
@@ -180,6 +210,7 @@ def transcribe_stem_to_midi(
         warning = "警告：正在对完整混音进行 MIDI 转录，多乐器叠加可能导致大量误检音符。"
 
     try:
+        from basic_pitch import ICASSP_2022_MODEL_PATH  # type: ignore[import-not-found]
         from basic_pitch.inference import predict  # type: ignore[import-not-found]
     except ImportError as exc:
         if not allow_cpu_pitch_fallback:
@@ -196,7 +227,8 @@ def transcribe_stem_to_midi(
             warning=(warning or "") + "（当前使用测试/Core 轻量单音追踪 fallback，非 Spotify Basic Pitch 模型）",
         )
 
-    _model_output, midi_data, note_events = predict(str(src))
+    # Always pass model_or_model_path explicitly so basic-pitch 0.3.x and 0.4.x+ both work
+    _model_output, midi_data, note_events = predict(str(src), model_or_model_path=ICASSP_2022_MODEL_PATH)
     out.parent.mkdir(parents=True, exist_ok=True)
     midi_data.write(str(out))
 
@@ -220,3 +252,33 @@ def transcribe_stem_to_midi(
         backend_used="basic-pitch",
         warning=warning,
     )
+
+
+def _cli_main() -> int:
+    parser = argparse.ArgumentParser(description="ListenScope Basic Pitch MIDI Transcription CLI")
+    parser.add_argument("--audio", type=Path, required=True)
+    parser.add_argument("--output-midi", type=Path, required=True)
+    parser.add_argument("--stem-name", type=str, default="bass")
+    parser.add_argument("--allow-full-mix", action="store_true")
+    parser.add_argument("--allow-cpu-fallback", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    res = transcribe_stem_to_midi(
+        args.audio,
+        args.output_midi,
+        stem_name=args.stem_name,
+        allow_full_mix=args.allow_full_mix,
+        allow_cpu_pitch_fallback=args.allow_cpu_fallback,
+    )
+    if args.json:
+        payload = asdict(res)
+        payload["output_midi_path"] = str(res.output_midi_path) if res.output_midi_path is not None else None
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(f"MIDI written: {res.output_midi_path} ({len(res.notes)} notes, backend={res.backend_used})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())

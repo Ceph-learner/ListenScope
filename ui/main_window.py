@@ -104,6 +104,7 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
     def __init__(self, ai_config: AIConfig, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.ai_config = ai_config
+        self._pending_start = False
         root = QtWidgets.QVBoxLayout(self)
         root.setSpacing(10)
 
@@ -174,10 +175,23 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
     def selected_model_id(self) -> str:
         return str(self.model_combo.currentData() or "mdx_low_vram_2stem")
 
+    def set_pending_start(self, pending: bool) -> None:
+        self._pending_start = bool(pending)
+        self.toggle_btn.blockSignals(True)
+        if pending:
+            self.toggle_btn.setEnabled(False)
+            self.toggle_btn.setChecked(True)
+            self.toggle_btn.setText("基准测试 / 启动中...")
+        else:
+            self.toggle_btn.setEnabled(True)
+        self.toggle_btn.blockSignals(False)
+
     def _on_toggle(self, checked: bool) -> None:
         if checked:
+            self.set_pending_start(True)
             self.start_requested.emit(self.selected_model_id())
         else:
+            self.set_pending_start(False)
             self.stop_requested.emit()
 
     def _emit_balance(self) -> None:
@@ -188,9 +202,17 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         self.bench_lbl.setText(text)
 
     def update_metrics(self, m: LiveSeparationMetrics) -> None:
+        if m.active:
+            self._pending_start = False
         self.toggle_btn.blockSignals(True)
-        self.toggle_btn.setChecked(m.active)
-        self.toggle_btn.setText("停止实验性近实时分轨" if m.active else "开启实验性近实时分轨")
+        if self._pending_start and not m.active:
+            self.toggle_btn.setEnabled(False)
+            self.toggle_btn.setChecked(True)
+            self.toggle_btn.setText("基准测试 / 启动中...")
+        else:
+            self.toggle_btn.setEnabled(True)
+            self.toggle_btn.setChecked(m.active)
+            self.toggle_btn.setText("停止实验性近实时分轨" if m.active else "开启实验性近实时分轨")
         self.toggle_btn.blockSignals(False)
 
         self.lbl_state.setText(f"状态: {m.status_message}")
@@ -238,6 +260,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._ai_config = ai_config
         self._ai_python_executable = ai_python_executable
         self._closing_handler = None
+        self._last_capture_banner: Optional[str] = None
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -448,6 +471,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.setChecked(active)
         self.capture_btn.setText("停止捕获" if active else "开始捕获")
         self.capture_btn.blockSignals(False)
+        if not active:
+            self._last_capture_banner = None
+            self.capture_status_lbl.setStyleSheet("padding: 3px 8px; background: #1C2026; border-radius: 4px;")
 
     def show_banner_message(self, text: str) -> None:
         if not text:
@@ -460,15 +486,30 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def update_capture_stats(self, stats: CaptureStats, ring_available_sec: float) -> None:
         self.set_capture_active_ui(stats.is_running)
         silence = "静音" if stats.is_silent else "有信号"
+        if stats.mode == CaptureMode.SYSTEM_LOOPBACK:
+            self.capture_status_lbl.setStyleSheet(
+                "padding: 3px 8px; background: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 4px;"
+            )
+            prefix = "[混入警告] "
+        else:
+            self.capture_status_lbl.setStyleSheet("padding: 3px 8px; background: #1C2026; border-radius: 4px;")
+            prefix = ""
         self.capture_status_lbl.setText(
-            f"{stats.mode.value} | {stats.process_name} | RMS {stats.rms_dbfs:.1f} dBFS [{silence}] | "
+            f"{prefix}{stats.mode.value} | {stats.process_name} | RMS {stats.rms_dbfs:.1f} dBFS [{silence}] | "
             f"Drop(Over)={stats.buffer_overruns} Under={stats.buffer_underruns}"
         )
         self.history_coverage_lbl.setText(f"已缓冲: {ring_available_sec:.1f} / 120.0 s")
-        if stats.mode == CaptureMode.SYSTEM_LOOPBACK and stats.warning_message:
-            self.show_banner_message(stats.warning_message)
-        elif stats.last_error:
-            self.show_banner_message(stats.last_error)
+
+        banner_msg: Optional[str] = None
+        if stats.last_error:
+            banner_msg = stats.last_error
+        elif stats.mode == CaptureMode.SYSTEM_LOOPBACK and stats.warning_message:
+            banner_msg = stats.warning_message
+
+        if banner_msg != self._last_capture_banner:
+            self._last_capture_banner = banner_msg
+            if banner_msg:
+                self.show_banner_message(banner_msg)
 
     def update_resource_snapshot(
         self,

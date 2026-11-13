@@ -91,6 +91,9 @@ class SpectrumAnalyzer:
         else:
             frame = mono[-self.fft_size :]
 
+        if not np.all(np.isfinite(frame)):
+            frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+
         windowed = frame * self._window
         spec = np.fft.rfft(windowed)
         mag = (np.abs(spec) * 2.0 / self._window_norm).astype(np.float32)

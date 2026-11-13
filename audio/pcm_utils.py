@@ -41,6 +41,13 @@ def normalize_to_canonical_pcm(
         elif dtype_key in ("int16", "s16"):
             raw = np.frombuffer(data, dtype=np.int16)
             arr = raw.astype(np.float32) / 32768.0
+        elif dtype_key in ("int24", "s24"):
+            raw_u8 = np.frombuffer(data, dtype=np.uint8)
+            usable_b = (raw_u8.size // 3) * 3
+            triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
+            signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
+            signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
+            arr = signed.astype(np.float32) / 8388608.0
         elif dtype_key in ("int32", "s32"):
             raw = np.frombuffer(data, dtype=np.int32)
             arr = raw.astype(np.float32) / 2147483648.0
@@ -88,9 +95,11 @@ def normalize_to_canonical_pcm(
         down = src_rate // g
         stereo = resample_poly(stereo, up, down, axis=0).astype(np.float32, copy=False)
 
-    # Ensure finite float32 contiguous chunk
+    # Ensure finite float32 contiguous chunk (guards against Windows driver glitch NaNs)
     if stereo.dtype != np.float32:
         stereo = stereo.astype(np.float32)
+    if stereo.size > 0 and not np.all(np.isfinite(stereo)):
+        stereo = np.nan_to_num(stereo, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
     if not stereo.flags["C_CONTIGUOUS"]:
         stereo = np.ascontiguousarray(stereo)
     return stereo

@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import argparse
 import gc
+import json
 import logging
+import multiprocessing
+import os
 from pathlib import Path
 import queue
+import subprocess
 import sys
 import threading
 import time
 from typing import Any, Optional
 import uuid
+import wave
 
+import numpy as np
 from PySide6 import QtCore, QtWidgets
 
 ROOT = Path(__file__).resolve().parent
@@ -23,6 +29,7 @@ from ai.job_manager import AIJobManager
 from analysis.midi_transcription import transcribe_stem_to_midi
 from analysis.worker import AnalysisWorker
 from audio.capture_base import AudioCaptureBackend
+from audio.pcm_utils import normalize_to_canonical_pcm
 from audio.playback import AB_PAUSE_PLAYER_HINT, HistoryABPlayer, StemMixerEngine
 from audio.process_enum import enumerate_audio_processes
 from audio.process_loopback import WasapiProcessLoopbackBackend
@@ -34,11 +41,77 @@ from audio.system_loopback import (
 )
 from core.config import AIConfig, AnalysisConfig, AudioConfig, ResourceLimits
 from core.logging import BoundedMemoryLogHandler, PerformanceLogger
-from core.models import AIJobProgress, AIJobRequest, AIJobResult, OOMRecoveryAction
+from core.models import (
+    AIJobProgress,
+    AIJobRequest,
+    AIJobResult,
+    MidiNoteCandidate,
+    MidiTranscriptionResult,
+    OOMRecoveryAction,
+)
 from core.resource_manager import ResourceManager
 from core.system_probe import probe_system
 from streaming.live_separator import ExperimentalLiveSeparator
 from ui.main_window import ListenScopeMainWindow
+
+
+def _discover_ai_python_executable() -> Optional[str]:
+    """Locate isolated `.venv-ai` Python executable across source & frozen PyInstaller layouts."""
+    exe_dir = Path(sys.executable).resolve().parent
+    roots = [ROOT, exe_dir, exe_dir.parent]
+    candidates: list[Path] = []
+    for base in roots:
+        candidates.append(base / ".venv-ai" / "Scripts" / "python.exe")
+        candidates.append(base / ".venv-ai" / "bin" / "python")
+    try:
+        cur_resolved = Path(sys.executable).resolve()
+    except Exception:
+        cur_resolved = None
+    for cand in candidates:
+        if cand.exists():
+            try:
+                if cur_resolved is not None and cand.resolve() == cur_resolved:
+                    continue
+            except Exception:
+                pass
+            return str(cand)
+    return None
+
+
+def _read_wav_excerpt_f32(wav_path: Path, *, max_seconds: float = 30.0) -> tuple[np.ndarray, int, int]:
+    """Read up to `max_seconds` of a WAV file (16/24/32-bit int or IEEE float32) cleanly."""
+    try:
+        import soundfile as sf  # type: ignore[import-untyped]
+
+        with sf.SoundFile(str(wav_path), "r") as sf_file:
+            sr = int(sf_file.samplerate)
+            ch = int(sf_file.channels)
+            take = min(int(sf_file.frames), max(1, int(sr * max_seconds)))
+            arr = np.asarray(sf_file.read(take, dtype="float32", always_2d=True), dtype=np.float32)
+            return arr, sr, ch
+    except Exception:
+        with wave.open(str(wav_path), "rb") as wf:
+            sr = int(wf.getframerate())
+            ch = max(1, int(wf.getnchannels()))
+            sw = int(wf.getsampwidth())
+            take = min(int(wf.getnframes()), max(1, int(sr * max_seconds)))
+            raw = wf.readframes(take)
+
+        if sw == 2:
+            flat = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sw == 3:
+            raw_u8 = np.frombuffer(raw, dtype=np.uint8)
+            usable_b = (raw_u8.size // 3) * 3
+            triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
+            signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
+            signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
+            flat = signed.astype(np.float32) / 8388608.0
+        elif sw == 4:
+            flat = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+        else:
+            flat = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        usable = (flat.size // ch) * ch
+        return flat[:usable].reshape(-1, ch), sr, ch
 
 
 class ListenScopeController:
@@ -54,9 +127,7 @@ class ListenScopeController:
         self.work_dir = Path(work_dir)
         self.use_mock_ai_for_demo = use_mock_ai_for_demo
         if ai_python_executable is None:
-            win_ai_py = ROOT / ".venv-ai" / "Scripts" / "python.exe"
-            if win_ai_py.exists():
-                ai_python_executable = str(win_ai_py)
+            ai_python_executable = _discover_ai_python_executable()
 
         # Bounded diagnostic logging
         self.log_handler = BoundedMemoryLogHandler(maxlen=500)
@@ -107,6 +178,8 @@ class ListenScopeController:
         self._ui_ai_result_q: queue.Queue[AIJobResult] = queue.Queue(maxsize=16)
         self._ui_banner_q: queue.Queue[str] = queue.Queue(maxsize=16)
         self._ui_live_bench_q: queue.Queue[str] = queue.Queue(maxsize=8)
+        self._ui_live_pending_q: queue.Queue[bool] = queue.Queue(maxsize=8)
+        self._ui_midi_result_q: queue.Queue[tuple[Optional[MidiTranscriptionResult], Optional[str]]] = queue.Queue(maxsize=8)
         self._last_ai_request: Optional[AIJobRequest] = None
 
         self.ai_job_manager.add_progress_callback(self._enqueue_progress)
@@ -156,6 +229,7 @@ class ListenScopeController:
         w.ab_stop_requested.connect(self.ab_player.stop)
         w.ai_separate_requested.connect(self._on_start_ai_separation)
         w.emergency_stop_requested.connect(self._on_emergency_stop)
+        w.mixer_widget.before_play_requested.connect(self._on_mixer_before_play)
         w.mixer_widget.cancel_ai_requested.connect(self._on_cancel_ai)
         w.mixer_widget.oom_action_requested.connect(self._on_oom_action)
         w.mixer_widget.export_mix_requested.connect(self._on_export_mix)
@@ -251,14 +325,20 @@ class ListenScopeController:
     def _on_ab_play(self) -> None:
         if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
             self.ab_player.select_recent_seconds(min(30.0, max(1.0, self.ring_buffer.available_seconds)))
+        self.mixer_engine.pause()
+        self.live_separator.close_output_stream()
         try:
             hint = self.ab_player.start_playback(open_audio_device=True)
             self.window.show_banner_message(hint)
         except Exception as exc:
             self.window.show_banner_message(f"A/B 回放失败: {exc}")
 
+    def _on_mixer_before_play(self) -> None:
+        self.ab_player.pause()
+        self.live_separator.close_output_stream()
+
     def _on_start_ai_separation(self, stem_mode: str, model_id: str, segment: int, use_gpu: bool) -> None:
-        if self.live_separator.is_active:
+        if self.live_separator.is_active or self.live_separator.is_starting:
             self.window.show_banner_message("请先停止实验性近实时分轨，系统禁止并行运行多个人工智能分轨任务。")
             return
         if self.ring_buffer.available_seconds < 0.5:
@@ -309,8 +389,12 @@ class ListenScopeController:
 
     def _on_emergency_stop(self) -> None:
         def _run() -> None:
-            if self.live_separator.is_active:
+            if self.live_separator.is_active or self.live_separator.is_starting:
                 self.live_separator.stop(status_message="用户触发紧急停止 AI")
+                try:
+                    self._ui_live_pending_q.put_nowait(False)
+                except queue.Full:
+                    pass
             snap = self.ai_job_manager.emergency_stop("用户点击 紧急停止 AI")
             try:
                 self._ui_banner_q.put_nowait(
@@ -363,22 +447,20 @@ class ListenScopeController:
             self.window.show_banner_message(f"导出混音失败: {exc}")
 
     def _on_send_stem_to_analysis(self, stem_name: str, stem_path: str) -> None:
-        """Load selected stem WAV excerpt cleanly into ring buffer for CPU spectrum/chroma/chord analysis."""
+        """Load selected stem WAV excerpt cleanly into canonical 48kHz stereo ring buffer."""
         try:
-            import wave
-            import numpy as np
-
             self.stop_capture()
+            self.ab_player.stop()
             self.ring_buffer.clear()
-            with wave.open(stem_path, "rb") as wf:
-                sr = int(wf.getframerate())
-                ch = int(wf.getnchannels())
-                raw = wf.readframes(min(int(wf.getnframes()), sr * 30))
-            flat = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-            arr = flat[: (flat.size // ch) * ch].reshape(-1, ch)
-            if ch == 1:
-                arr = np.repeat(arr, 2, axis=1)
-            self.ring_buffer.write(arr)
+            arr, sr, ch = _read_wav_excerpt_f32(Path(stem_path), max_seconds=30.0)
+            canon = normalize_to_canonical_pcm(
+                arr,
+                src_rate=sr,
+                src_channels=ch,
+                dst_rate=self.audio_config.sample_rate,
+                dst_channels=self.audio_config.channels,
+            )
+            self.ring_buffer.write(canon)
             self.window.tabs.setCurrentWidget(self.window.chroma_widget)
             self.window.show_banner_message(f"已将单轨 `{stem_name}` 载入实时和弦/音高分析视图（仅截取前 <=30s）。")
         except Exception as exc:
@@ -386,17 +468,70 @@ class ListenScopeController:
 
     def _on_transcribe_stem_midi(self, stem_name: str, stem_path: str) -> None:
         out_mid = Path(stem_path).with_suffix(".mid")
-        try:
-            res = transcribe_stem_to_midi(
-                stem_path,
-                out_mid,
-                stem_name=stem_name,
-                allow_full_mix=False,
-                allow_cpu_pitch_fallback=True,
-            )
-            self.window.display_midi_result(res)
-        except Exception as exc:
-            self.window.show_banner_message(f"MIDI 转录失败: {exc}")
+        self.window.show_banner_message(f"⏳ 正在后台执行 `{stem_name}` MIDI 转录...")
+        ai_py = self.ai_job_manager.ai_python_executable
+        mock_mode = self.use_mock_ai_for_demo
+
+        def _run() -> None:
+            try:
+                use_ext = False
+                if ai_py and not mock_mode:
+                    try:
+                        use_ext = Path(ai_py).resolve() != Path(sys.executable).resolve()
+                    except Exception:
+                        use_ext = False
+
+                if use_ext and ai_py is not None:
+                    env = os.environ.copy()
+                    existing_pp = env.get("PYTHONPATH", "")
+                    env["PYTHONPATH"] = f"{ROOT}{os.pathsep}{existing_pp}" if existing_pp else str(ROOT)
+                    cmd = [
+                        ai_py,
+                        "-m",
+                        "analysis.midi_transcription",
+                        "--audio",
+                        str(stem_path),
+                        "--output-midi",
+                        str(out_mid),
+                        "--stem-name",
+                        stem_name,
+                        "--allow-cpu-fallback",
+                        "--json",
+                    ]
+                    proc = subprocess.run(
+                        cmd,
+                        cwd=str(ROOT),
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=180.0,
+                        check=True,
+                    )
+                    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+                    data = json.loads(lines[-1])
+                    res = MidiTranscriptionResult(
+                        source_stem_name=str(data["source_stem_name"]),
+                        output_midi_path=Path(data["output_midi_path"]) if data.get("output_midi_path") else None,
+                        notes=[MidiNoteCandidate(**n) for n in (data.get("notes") or [])],
+                        backend_used=str(data.get("backend_used", "basic-pitch")),
+                        warning=data.get("warning"),
+                    )
+                else:
+                    res = transcribe_stem_to_midi(
+                        stem_path,
+                        out_mid,
+                        stem_name=stem_name,
+                        allow_full_mix=False,
+                        allow_cpu_pitch_fallback=True,
+                    )
+                self._ui_midi_result_q.put_nowait((res, f"✅ MIDI 转录完成: {out_mid}"))
+            except Exception as exc:
+                try:
+                    self._ui_midi_result_q.put_nowait((None, f"MIDI 转录失败: {exc}"))
+                except queue.Full:
+                    pass
+
+        threading.Thread(target=_run, name="ListenScope-MidiTranscribe", daemon=True).start()
 
     def _on_live_benchmark(self, model_id: str) -> None:
         def _run() -> None:
@@ -418,23 +553,40 @@ class ListenScopeController:
         threading.Thread(target=_run, name="ListenScope-LiveBench", daemon=True).start()
 
     def _on_live_start(self, model_id: str) -> None:
+        self.ab_player.pause()
+        self.mixer_engine.pause()
+
         def _run() -> None:
-            ok, msg = self.live_separator.start(
-                model_id=model_id,
-                use_gpu=not self.use_mock_ai_for_demo,
-                use_mock_backend=self.use_mock_ai_for_demo,
-                gpu_ai_ready=self.hardware_report.gpu_ai_ready,
-                gpu_block_reason=self.hardware_report.gpu_ai_block_reason,
-            )
             try:
-                self._ui_banner_q.put_nowait(msg if not ok else f"✅ {msg}")
-            except queue.Full:
-                pass
+                ok, msg = self.live_separator.start(
+                    model_id=model_id,
+                    use_gpu=not self.use_mock_ai_for_demo,
+                    use_mock_backend=self.use_mock_ai_for_demo,
+                    open_audio_device=True,
+                    gpu_ai_ready=self.hardware_report.gpu_ai_ready,
+                    gpu_block_reason=self.hardware_report.gpu_ai_block_reason,
+                )
+                try:
+                    self._ui_banner_q.put_nowait(msg if not ok else f"✅ {msg}")
+                except queue.Full:
+                    pass
+            finally:
+                try:
+                    self._ui_live_pending_q.put_nowait(False)
+                except queue.Full:
+                    pass
 
         threading.Thread(target=_run, name="ListenScope-LiveStart", daemon=True).start()
 
     def _on_live_stop(self) -> None:
-        threading.Thread(target=self.live_separator.stop, name="ListenScope-LiveStop", daemon=True).start()
+        def _run() -> None:
+            self.live_separator.stop()
+            try:
+                self._ui_live_pending_q.put_nowait(False)
+            except queue.Full:
+                pass
+
+        threading.Thread(target=_run, name="ListenScope-LiveStop", daemon=True).start()
 
     def _on_settings_applied(self, limits: ResourceLimits, ai_cfg: AIConfig, ai_python: str) -> None:
         self.resource_limits = limits
@@ -468,6 +620,20 @@ class ListenScopeController:
                 self.window.live_widget.set_benchmark_text(self._ui_live_bench_q.get_nowait())
             except queue.Empty:
                 break
+        while True:
+            try:
+                self.window.live_widget.set_pending_start(self._ui_live_pending_q.get_nowait())
+            except queue.Empty:
+                break
+        while True:
+            try:
+                midi_res, midi_msg = self._ui_midi_result_q.get_nowait()
+                if midi_res is not None:
+                    self.window.display_midi_result(midi_res)
+                if midi_msg:
+                    self.window.show_banner_message(midi_msg)
+            except queue.Empty:
+                break
 
         # Update real-time CPU DSP analysis snapshots
         asnap = self.analysis_worker.latest_snapshot()
@@ -498,7 +664,7 @@ class ListenScopeController:
                 self.perf_logger.recent_records(),
                 self.log_handler.recent(),
             )
-            if self.live_separator.is_active or self._tick_counter % 12 == 0:
+            if self.live_separator.is_active or self.live_separator.is_starting or self._tick_counter % 12 == 0:
                 self.window.update_live_metrics(self.live_separator.latest_metrics())
 
     def shutdown(self) -> None:
@@ -511,7 +677,7 @@ class ListenScopeController:
         self.ab_player.stop()
         self.mixer_engine.clear()
         self.analysis_worker.stop()
-        if self.live_separator.is_active:
+        if self.live_separator.is_active or self.live_separator.is_starting:
             self.live_separator.stop()
         self.ai_job_manager.shutdown()
         self.resource_manager.close()
@@ -522,6 +688,7 @@ class ListenScopeController:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    multiprocessing.freeze_support()
     parser = argparse.ArgumentParser(description="ListenScope Desktop Application")
     parser.add_argument("--simulate", action="store_true", help="启动合成信号 + Mock 测试模式（用于无真机调试）")
     parser.add_argument("--ai-python", type=str, default=None, help="独立 AI Worker 虚拟环境 python.exe 路径")
@@ -549,4 +716,5 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     raise SystemExit(main())

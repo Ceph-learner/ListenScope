@@ -73,31 +73,52 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
             ) from exc
         return pyaudio.PyAudio()
 
-    def _open_default_loopback(self) -> tuple[Any, Any, dict[str, Any], int]:
+    def _open_default_loopback(self) -> tuple[Any, Any, dict[str, Any], int, str]:
         pa = self._create_pa()
         try:
             default_loopback = pa.get_default_wasapi_loopback()
             if not default_loopback:
                 raise RuntimeError("未找到默认 WASAPI Loopback 输出设备。")
             src_rate = int(default_loopback["defaultSampleRate"])
-            src_channels = max(1, int(default_loopback["maxInputChannels"]))
+            raw_ch = int(default_loopback.get("maxInputChannels") or 0) or int(
+                default_loopback.get("maxOutputChannels") or 0
+            )
+            src_channels = max(1, raw_ch)
             frames_per_buffer = max(256, int(src_rate * 0.02))  # ~20ms chunks
-            pa_format = getattr(pa, "paFloat32", None)
-            if pa_format is None:
+
+            pa_f32 = getattr(pa, "paFloat32", None)
+            pa_i16 = getattr(pa, "paInt16", None)
+            if pa_f32 is None or pa_i16 is None:
                 try:
                     import pyaudiowpatch as pyaudio  # type: ignore[import-not-found]
-                    pa_format = pyaudio.paFloat32
+
+                    pa_f32 = pa_f32 if pa_f32 is not None else pyaudio.paFloat32
+                    pa_i16 = pa_i16 if pa_i16 is not None else pyaudio.paInt16
                 except Exception:
-                    pa_format = 1  # paFloat32 constant in PortAudio
-            stream = pa.open(
-                format=pa_format,
-                channels=src_channels,
-                rate=src_rate,
-                frames_per_buffer=frames_per_buffer,
-                input=True,
-                input_device_index=int(default_loopback["index"]),
-            )
-            return pa, stream, default_loopback, frames_per_buffer
+                    pa_f32 = 1 if pa_f32 is None else pa_f32
+                    pa_i16 = 8 if pa_i16 is None else pa_i16
+
+            try:
+                stream = pa.open(
+                    format=pa_f32,
+                    channels=src_channels,
+                    rate=src_rate,
+                    frames_per_buffer=frames_per_buffer,
+                    input=True,
+                    input_device_index=int(default_loopback["index"]),
+                )
+                return pa, stream, default_loopback, frames_per_buffer, "float32"
+            except Exception as f32_exc:
+                logger.info("WASAPI system loopback float32 open failed (%s); falling back to int16", f32_exc)
+                stream = pa.open(
+                    format=pa_i16,
+                    channels=src_channels,
+                    rate=src_rate,
+                    frames_per_buffer=frames_per_buffer,
+                    input=True,
+                    input_device_index=int(default_loopback["index"]),
+                )
+                return pa, stream, default_loopback, frames_per_buffer, "int16"
         except Exception:
             try:
                 pa.terminate()
@@ -115,14 +136,14 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
 
         self.queue.reset_open()
         self._stop_event.clear()
-        self._pa, self._stream, dev_info, frames_per_buffer = self._open_default_loopback()
+        self._pa, self._stream, dev_info, frames_per_buffer, src_dtype = self._open_default_loopback()
         self._device_name = str(dev_info.get("name", self._device_name))
         self._stats.set_error(None)
         self._stats.set_running(True)
 
         self._thread = threading.Thread(
             target=self._capture_loop,
-            args=(dev_info, frames_per_buffer),
+            args=(dev_info, frames_per_buffer, src_dtype),
             name="ListenScope-SystemLoopback",
             daemon=True,
         )
@@ -148,9 +169,10 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
             except Exception:
                 pass
 
-    def _capture_loop(self, dev_info: dict[str, Any], frames_per_buffer: int) -> None:
+    def _capture_loop(self, dev_info: dict[str, Any], frames_per_buffer: int, src_dtype: str = "float32") -> None:
         src_rate = int(dev_info["defaultSampleRate"])
-        src_channels = max(1, int(dev_info["maxInputChannels"]))
+        raw_ch = int(dev_info.get("maxInputChannels") or 0) or int(dev_info.get("maxOutputChannels") or 0)
+        src_channels = max(1, raw_ch)
         reconnects = 0
 
         while not self._stop_event.is_set():
@@ -164,7 +186,7 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                     raw_bytes,
                     src_rate=src_rate,
                     src_channels=src_channels,
-                    src_dtype="float32",
+                    src_dtype=src_dtype,
                     dst_rate=self.audio_config.sample_rate,
                     dst_channels=self.audio_config.channels,
                 )
@@ -187,9 +209,10 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                     break
                 time.sleep(0.35)
                 try:
-                    self._pa, self._stream, new_dev, frames_per_buffer = self._open_default_loopback()
+                    self._pa, self._stream, new_dev, frames_per_buffer, src_dtype = self._open_default_loopback()
                     src_rate = int(new_dev["defaultSampleRate"])
-                    src_channels = max(1, int(new_dev["maxInputChannels"]))
+                    new_ch = int(new_dev.get("maxInputChannels") or 0) or int(new_dev.get("maxOutputChannels") or 0)
+                    src_channels = max(1, new_ch)
                     self._stats.set_error(f"检测到播放设备切换，已重连至: {new_dev.get('name', 'default')}")
                 except Exception as rec_exc:
                     self._stats.set_error(f"播放设备重连失败 ({reconnects}/{self._max_device_reconnects}): {rec_exc}")

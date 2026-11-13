@@ -216,6 +216,11 @@ def _probe_onnxruntime() -> OnnxRuntimeProbeInfo:
         return OnnxRuntimeProbeInfo(installed=False, error=f"onnxruntime import error: {exc}")
 
     try:
+        if hasattr(ort, "preload_dlls"):
+            try:
+                ort.preload_dlls()
+            except Exception:
+                pass
         providers = list(ort.get_available_providers())
     except Exception as exc:
         return OnnxRuntimeProbeInfo(

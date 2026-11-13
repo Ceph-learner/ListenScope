@@ -62,6 +62,13 @@ def _read_wav_f32(path: Path, target_frames: Optional[int] = None) -> tuple[np.n
             raw = wf.readframes(wf.getnframes())
         if sw == 2:
             flat = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sw == 3:
+            raw_u8 = np.frombuffer(raw, dtype=np.uint8)
+            usable_b = (raw_u8.size // 3) * 3
+            triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
+            signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
+            signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
+            flat = signed.astype(np.float32) / 8388608.0
         elif sw == 4:
             flat = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
         else:
@@ -232,9 +239,12 @@ class MDXSeparatorBackend(SeparationBackend):
             resolved: list[Path] = []
             for f in out_files:
                 fp = Path(f)
-                if not fp.is_absolute():
-                    fp = out_dir / fp
-                resolved.append(fp)
+                if fp.exists():
+                    resolved.append(fp)
+                elif (out_dir / fp).exists():
+                    resolved.append(out_dir / fp)
+                else:
+                    resolved.append(out_dir / fp.name)
 
             mapped = _match_2stem_output(resolved, self.model_spec.stems)
             stems: dict[str, np.ndarray] = {}

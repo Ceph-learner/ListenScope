@@ -12,18 +12,33 @@ Architecture (Section 21):
 
 from pathlib import Path
 
+try:
+    from PyInstaller.utils.hooks import collect_dynamic_libs
+except Exception:
+    collect_dynamic_libs = None
+
 block_cipher = None
 project_root = Path(SPECPATH).resolve().parent
+
+extra_binaries = []
+if collect_dynamic_libs is not None:
+    for pkg_name in ("proctap", "soundfile", "_soundfile_data"):
+        try:
+            extra_binaries.extend(collect_dynamic_libs(pkg_name))
+        except Exception:
+            pass
 
 a = Analysis(
     [str(project_root / "main.py")],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=extra_binaries,
     datas=[
         (str(project_root / "README.md"), "."),
         (str(project_root / "requirements-ai.txt"), "."),
         (str(project_root / "ai"), "ai"),
         (str(project_root / "separation"), "separation"),
+        (str(project_root / "core"), "core"),
+        (str(project_root / "analysis"), "analysis"),
     ],
     hiddenimports=[
         "proctap",

@@ -52,6 +52,7 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
         self._allow_non_windows = allow_non_windows
 
         self._tap: Any = None
+        self._cached_fmt: dict[str, Any] = {}
         self._stop_event = threading.Event()
         self._watchdog_thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
@@ -122,8 +123,14 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 except Exception as exc:
                     raise RuntimeError(f"初始化 WASAPI Process Loopback 失败 (PID={self._pid}): {exc}") from exc
 
-            # Inspect native process-specific flag when available
+            # Inspect native process-specific flag & cache format before audio callback begins firing
             is_proc_specific = self._check_is_process_specific(tap)
+            try:
+                fmt = tap.get_format()
+                self._cached_fmt = dict(fmt) if isinstance(fmt, dict) else {}
+            except Exception:
+                self._cached_fmt = {}
+
             if is_proc_specific is False:
                 self._stats.set_mode_and_warning(
                     CaptureMode.SYSTEM_LOOPBACK,
@@ -149,9 +156,12 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
             )
             self._watchdog_thread.start()
 
-    def _check_is_process_specific(self, tap: Any) -> Optional[bool]:
+    def _get_native_handle(self, tap: Any) -> Any:
         backend = getattr(tap, "_backend", None)
-        native = getattr(backend, "_native", None) if backend is not None else None
+        return getattr(backend, "_native", None) if backend is not None else None
+
+    def _check_is_process_specific(self, tap: Any) -> Optional[bool]:
+        native = self._get_native_handle(tap)
         fn = getattr(native, "is_process_specific", None) if native is not None else None
         if callable(fn):
             try:
@@ -173,8 +183,8 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 if gap_ms > self.audio_config.underrun_gap_threshold_ms:
                     self._stats.record_underrun(1)
 
-            # Query format defensively; ProcTap guarantees 48kHz/2ch/float32
-            fmt = self._tap.get_format() if self._tap is not None else {}
+            # Use cached format captured safely in start() (avoids lock-free _tap deref during teardown)
+            fmt = self._cached_fmt
             src_rate = int(fmt.get("sample_rate", self.audio_config.sample_rate))
             src_channels = int(fmt.get("channels", self.audio_config.channels))
             src_dtype = str(fmt.get("sample_format", self.audio_config.dtype))
@@ -190,6 +200,8 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 if usable == 0:
                     return
                 chunk = np.array(arr[:usable].reshape(-1, 2), dtype=np.float32, copy=True)
+                if not np.all(np.isfinite(chunk)):
+                    chunk = np.nan_to_num(chunk, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
             else:
                 chunk = normalize_to_canonical_pcm(
                     pcm_bytes,
@@ -204,20 +216,20 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 return
 
             self.queue.put_drop_oldest(chunk)
-            self._stats.record_chunk(
+            is_silent = self._stats.record_chunk(
                 chunk,
                 queue_size=len(self.queue),
                 overruns=self.queue.overruns,
             )
-            snap = self._stats.snapshot()
-            self._was_active_audio = not snap.is_silent
+            self._was_active_audio = not is_silent
             self._last_chunk_time = now
         except Exception as exc:
             logger.exception("Error processing WASAPI process loopback chunk")
             self._stats.set_error(f"音频块处理异常: {exc}")
 
     def _watchdog_loop(self) -> None:
-        """Monitors target process exit and decays live meter during pause/silence."""
+        """Monitors target process exit, native WASAPI errors, and decays live meter during pause/silence."""
+        last_native_err: str = ""
         while not self._stop_event.wait(timeout=0.25):
             try:
                 if not self._pid_exists_fn(self._pid):
@@ -226,6 +238,18 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                     self._stats.set_error(msg)
                     self._stop_internal(clear_error=False)
                     break
+
+                with self._lock:
+                    native = self._get_native_handle(self._tap) if self._tap is not None else None
+                err_fn = getattr(native, "get_last_error", None) if native is not None else None
+                if callable(err_fn):
+                    try:
+                        err = str(err_fn() or "").strip()
+                        if err and err != last_native_err:
+                            last_native_err = err
+                            self._stats.set_error(f"底层 WASAPI 提示: {err}")
+                    except Exception:
+                        pass
 
                 # If paused and WASAPI stops pushing packets for >350ms, decay meter to silence
                 now = time.monotonic()

@@ -163,8 +163,11 @@ class ExperimentalLiveSeparator:
 
         self._lock = threading.RLock()
         self._active = False
+        self._starting = False
+        self._cancel_start_requested = False
         self._stop_event = threading.Event()
         self._feed_thread: Optional[threading.Thread] = None
+        self._stream: Any = None
 
         self._proc: Optional[multiprocessing.Process] = None
         self._req_q: Any = None
@@ -191,10 +194,18 @@ class ExperimentalLiveSeparator:
         with self._lock:
             return self._active
 
+    @property
+    def is_starting(self) -> bool:
+        with self._lock:
+            return self._starting
+
     def latest_metrics(self) -> LiveSeparationMetrics:
         snap = self.resource_manager.sample()
         with self._lock:
             buf_sec = self._out_available / float(self.audio_config.sample_rate)
+            status = self._status_message
+            if self._starting and not self._active and not status:
+                status = "正在运行基准测试 / 初始化..."
             return LiveSeparationMetrics(
                 active=self._active,
                 model_id=self._model_id,
@@ -207,7 +218,7 @@ class ExperimentalLiveSeparator:
                 buffer_seconds=round(buf_sec, 2),
                 max_buffer_seconds=self.ai_config.live_max_buffer_seconds,
                 dropped_chunks=self._dropped_chunks,
-                status_message=self._status_message,
+                status_message=status,
             )
 
     def run_benchmark(
@@ -235,12 +246,15 @@ class ExperimentalLiveSeparator:
         use_mock_backend: bool = False,
         simulate_delay_sec: float = 0.0,
         skip_benchmark: bool = False,
+        open_audio_device: bool = False,
         gpu_ai_ready: Optional[bool] = None,
         gpu_block_reason: Optional[str] = None,
     ) -> tuple[bool, str]:
         with self._lock:
             if self._active:
                 return True, "实验性实时分轨已在运行中。"
+            if self._starting:
+                return False, "实验性实时分轨正在启动或运行基准测试中，请稍候。"
             if self._is_offline_job_busy_fn is not None and self._is_offline_job_busy_fn():
                 return False, "已有离线 AI 分轨任务运行中（硬限制=1），请先停止或等待其完成。"
 
@@ -265,6 +279,12 @@ class ExperimentalLiveSeparator:
                 self._status_message = msg
                 return False, msg
 
+            self._starting = True
+            self._cancel_start_requested = False
+            self._stop_event.clear()
+            self._status_message = "正在运行基准测试与启动实时分轨..."
+
+        try:
             if not skip_benchmark:
                 bench = self.run_benchmark(
                     model_id=model_id,
@@ -272,89 +292,128 @@ class ExperimentalLiveSeparator:
                     use_mock_backend=use_mock_backend,
                     simulate_delay_sec=simulate_delay_sec,
                 )
-                self._latest_rtf = bench.rtf
-                if not bench.can_run_realtime:
-                    self._status_message = bench.message
-                    return False, bench.message
+                with self._lock:
+                    self._latest_rtf = bench.rtf
+                    if self._cancel_start_requested:
+                        msg = "实时分轨启动已被用户取消"
+                        self._status_message = msg
+                        return False, msg
+                    if not bench.can_run_realtime:
+                        self._status_message = bench.message
+                        return False, bench.message
 
-            self._model_id = model_id
-            self._dropped_chunks = 0
-            self._latest_latency_ms = 0.0
-            self._out_vocals.fill(0.0)
-            self._out_inst.fill(0.0)
-            self._out_write_pos = 0
-            self._out_available = 0
-            self._overlap_add.reset()
-            self._last_read_abs_frame = self.ring_buffer.total_written_frames
+            with self._lock:
+                if self._cancel_start_requested or self._stop_event.is_set():
+                    msg = "实时分轨启动已被用户取消"
+                    self._status_message = msg
+                    return False, msg
+                if self._is_offline_job_busy_fn is not None and self._is_offline_job_busy_fn():
+                    msg = "已有离线 AI 分轨任务运行中（硬限制=1），请先停止或等待其完成。"
+                    self._status_message = msg
+                    return False, msg
 
-            ctx = multiprocessing.get_context("spawn")
-            req_q = ctx.Queue(maxsize=2)
-            res_q = ctx.Queue(maxsize=4)
-            stop_ev = ctx.Event()
-            proc = ctx.Process(
-                target=_live_worker_entry,
-                args=(
-                    asdict(self.ai_config),
-                    model_id,
-                    self.audio_config.sample_rate,
-                    use_gpu,
-                    use_mock_backend,
-                    simulate_delay_sec,
-                    req_q,
-                    res_q,
-                    stop_ev,
-                ),
-                name="ListenScope-LiveSepWorker",
-                daemon=True,
-            )
-            proc.start()
+                self._model_id = model_id
+                self._dropped_chunks = 0
+                self._latest_latency_ms = 0.0
+                self._out_vocals.fill(0.0)
+                self._out_inst.fill(0.0)
+                self._out_write_pos = 0
+                self._out_available = 0
+                self._overlap_add.reset()
+                self._last_read_abs_frame = self.ring_buffer.total_written_frames
 
-            self._proc = proc
-            self._req_q = req_q
-            self._res_q = res_q
-            self._proc_stop_ev = stop_ev
-            self._stop_event.clear()
+                ctx = multiprocessing.get_context("spawn")
+                req_q = ctx.Queue(maxsize=2)
+                res_q = ctx.Queue(maxsize=4)
+                stop_ev = ctx.Event()
+                proc = ctx.Process(
+                    target=_live_worker_entry,
+                    args=(
+                        asdict(self.ai_config),
+                        model_id,
+                        self.audio_config.sample_rate,
+                        use_gpu,
+                        use_mock_backend,
+                        simulate_delay_sec,
+                        req_q,
+                        res_q,
+                        stop_ev,
+                    ),
+                    name="ListenScope-LiveSepWorker",
+                    daemon=True,
+                )
+                proc.start()
 
-        # Wait briefly for worker model ready signal (up to 15s)
-        ready_deadline = time.monotonic() + 15.0
-        ready_ok = False
-        err_msg = "实时分轨 worker 启动超时"
-        while time.monotonic() < ready_deadline:
-            try:
-                msg = res_q.get(timeout=0.1)
-                if msg.get("type") == "ready":
-                    ready_ok = True
-                    break
-                if msg.get("type") == "error":
-                    err_msg = str(msg.get("error", err_msg))
-                    break
-            except queue.Empty:
-                if not proc.is_alive():
-                    err_msg = f"实时分轨 worker 意外退出 (exitcode={proc.exitcode})"
-                    break
+                self._proc = proc
+                self._req_q = req_q
+                self._res_q = res_q
+                self._proc_stop_ev = stop_ev
 
-        if not ready_ok:
-            self.stop(status_message=err_msg)
-            return False, err_msg
+            # Wait briefly for worker model ready signal (up to 15s) without holding self._lock
+            ready_deadline = time.monotonic() + 15.0
+            ready_ok = False
+            err_msg = "实时分轨 worker 启动超时"
+            while time.monotonic() < ready_deadline:
+                with self._lock:
+                    if self._cancel_start_requested or self._stop_event.is_set():
+                        err_msg = "实时分轨启动已被用户取消"
+                        break
+                try:
+                    msg = res_q.get(timeout=0.1)
+                    if msg.get("type") == "ready":
+                        ready_ok = True
+                        break
+                    if msg.get("type") == "error":
+                        err_msg = str(msg.get("error", err_msg))
+                        break
+                except queue.Empty:
+                    if not proc.is_alive():
+                        err_msg = f"实时分轨 worker 意外退出 (exitcode={proc.exitcode})"
+                        break
 
-        with self._lock:
-            self._active = True
-            self._status_message = f"实验性 2-stem 近实时分轨运行中 ({model_id})"
-            self.resource_manager.update_runtime_state(
-                active_ai_jobs=1,
-                loaded_models=1,
-                current_model=model_id,
-                current_task="experimental_live_2stem",
-                ai_worker_pid=proc.pid,
-                ai_buffer_seconds=0.0,
-            )
-            self._feed_thread = threading.Thread(
-                target=self._run_loop,
-                name="ListenScope-LiveSepCoordinator",
-                daemon=True,
-            )
-            self._feed_thread.start()
-        return True, self._status_message
+            if not ready_ok:
+                self._cleanup_worker_only()
+                with self._lock:
+                    self._active = False
+                    self._status_message = err_msg
+                return False, err_msg
+
+            with self._lock:
+                if self._cancel_start_requested or self._stop_event.is_set():
+                    ready_ok = False
+                    err_msg = "实时分轨启动已被用户取消"
+                else:
+                    self._active = True
+                    self._status_message = f"实验性 2-stem 近实时分轨运行中 ({model_id})"
+                    self.resource_manager.update_runtime_state(
+                        active_ai_jobs=1,
+                        loaded_models=1,
+                        current_model=model_id,
+                        current_task="experimental_live_2stem",
+                        ai_worker_pid=proc.pid,
+                        ai_buffer_seconds=0.0,
+                    )
+                    self._feed_thread = threading.Thread(
+                        target=self._run_loop,
+                        name="ListenScope-LiveSepCoordinator",
+                        daemon=True,
+                    )
+                    self._feed_thread.start()
+
+            if not ready_ok:
+                self._cleanup_worker_only()
+                with self._lock:
+                    self._active = False
+                    self._status_message = err_msg
+                return False, err_msg
+
+            if open_audio_device:
+                self._ensure_output_stream()
+
+            return True, self._status_message
+        finally:
+            with self._lock:
+                self._starting = False
 
     def _append_output(self, vocals: np.ndarray, inst: np.ndarray) -> None:
         n = int(min(vocals.shape[0], inst.shape[0]))
@@ -417,6 +476,7 @@ class ExperimentalLiveSeparator:
             if snap.status in (ResourceStatus.WARNING, ResourceStatus.CRITICAL):
                 reason = "；".join(snap.status_reasons) or f"资源状态进入 {snap.status.value}"
                 logger.warning("ExperimentalLiveSeparator auto-stopping: %s", reason)
+                self.close_output_stream()
                 self._cleanup_worker_only()
                 with self._lock:
                     self._active = False
@@ -443,6 +503,7 @@ class ExperimentalLiveSeparator:
                     mtype = msg.get("type")
                     if mtype == "error":
                         err = str(msg.get("error", "Worker 异常"))
+                        self.close_output_stream()
                         self._cleanup_worker_only()
                         with self._lock:
                             self._active = False
@@ -475,9 +536,10 @@ class ExperimentalLiveSeparator:
             max_buf_frames = int(round(self.ai_config.live_max_buffer_seconds * sr))
 
             if backlog_frames > max_buf_frames:
-                # Drop older buffered audio so memory/latency never exceed cap
+                # Drop older buffered audio so memory/latency never exceed cap; reset OLA on jump
                 with self._lock:
                     self._dropped_chunks += 1
+                self._overlap_add.reset()
                 self._last_read_abs_frame = max(0, newest - self._chunk_frames)
                 backlog_frames = newest - self._last_read_abs_frame
 
@@ -493,13 +555,46 @@ class ExperimentalLiveSeparator:
                     except queue.Full:
                         with self._lock:
                             self._dropped_chunks += 1
-                        self._last_read_abs_frame = newest - self._overlap_frames
+                        self._overlap_add.reset()
+                        self._last_read_abs_frame = max(0, newest - self._overlap_frames)
 
             backlog_sec = max(0.0, (newest - self._last_read_abs_frame) / float(sr))
             self.resource_manager.update_runtime_state(
                 ai_buffer_seconds=min(self.ai_config.live_max_buffer_seconds, backlog_sec)
             )
             self._stop_event.wait(timeout=0.05)
+
+    def _ensure_output_stream(self) -> None:
+        if self._stream is not None:
+            return
+        try:
+            import sounddevice as sd  # type: ignore[import-not-found]
+        except ImportError:
+            return
+
+        def _callback(outdata, frames, _time_info, _status) -> None:
+            outdata[:] = self.pull_mixed_block(frames)
+
+        try:
+            self._stream = sd.OutputStream(
+                samplerate=self.audio_config.sample_rate,
+                channels=self.audio_config.channels,
+                dtype="float32",
+                callback=_callback,
+            )
+            self._stream.start()
+        except Exception:
+            self._stream = None
+
+    def close_output_stream(self) -> None:
+        stream = self._stream
+        self._stream = None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
 
     def _cleanup_worker_only(self) -> None:
         if self._proc_stop_ev is not None:
@@ -546,9 +641,12 @@ class ExperimentalLiveSeparator:
         self._proc_stop_ev = None
 
     def stop(self, *, status_message: str = "实验功能已停止") -> None:
-        self._stop_event.set()
-        thread = self._feed_thread
-        self._feed_thread = None
+        with self._lock:
+            self._cancel_start_requested = True
+            self._stop_event.set()
+            thread = self._feed_thread
+            self._feed_thread = None
+        self.close_output_stream()
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=2.0)
         self._cleanup_worker_only()

@@ -13,6 +13,7 @@ import numpy as np
 
 from core.config import AudioConfig
 
+from .pcm_utils import normalize_to_canonical_pcm
 from .ring_buffer import FixedRingBuffer
 
 logger = logging.getLogger(__name__)
@@ -25,12 +26,83 @@ class StemTrackState:
     name: str
     path: Path
     duration_sec: float
-    total_frames: int
-    sample_rate: int
+    total_frames: int       # Total frames aligned to StemMixerEngine.sample_rate
+    sample_rate: int        # Native source WAV sample rate
     channels: int
     muted: bool = False
     solo: bool = False
     volume: float = 1.0
+    native_total_frames: int = 0
+
+
+class _StemHandle:
+    """Streaming reader over `soundfile.SoundFile` (with stdlib `wave` fallback)."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.sf_handle: Any = None
+        self.wf_handle: Any = None
+        try:
+            import soundfile as sf  # type: ignore[import-untyped]
+
+            handle = sf.SoundFile(str(path), "r")
+            self.sf_handle = handle
+            self.sample_rate = int(handle.samplerate)
+            self.channels = int(handle.channels)
+            self.total_frames = int(handle.frames)
+        except Exception:
+            wf = wave.open(str(path), "rb")
+            self.wf_handle = wf
+            self.sample_rate = int(wf.getframerate())
+            self.channels = int(wf.getnchannels())
+            self.total_frames = int(wf.getnframes())
+
+    def read_frames_f32(self, start_frame: int, num_frames: int) -> np.ndarray:
+        if start_frame < 0:
+            start_frame = 0
+        if start_frame >= self.total_frames or num_frames <= 0:
+            return np.empty((0, max(1, self.channels)), dtype=np.float32)
+
+        take = min(num_frames, self.total_frames - start_frame)
+        if self.sf_handle is not None:
+            self.sf_handle.seek(start_frame)
+            data = self.sf_handle.read(take, dtype="float32", always_2d=True)
+            return np.asarray(data, dtype=np.float32)
+
+        assert self.wf_handle is not None
+        self.wf_handle.setpos(start_frame)
+        raw = self.wf_handle.readframes(take)
+        sw = int(self.wf_handle.getsampwidth())
+        ch = max(1, self.channels)
+        if sw == 2:
+            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sw == 3:
+            raw_u8 = np.frombuffer(raw, dtype=np.uint8)
+            usable_b = (raw_u8.size // 3) * 3
+            triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
+            signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
+            signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
+            arr = signed.astype(np.float32) / 8388608.0
+        elif sw == 4:
+            arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+        elif sw == 1:
+            arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        else:
+            arr = np.zeros(0, dtype=np.float32)
+        usable = (arr.size // ch) * ch
+        if usable == 0:
+            return np.empty((0, ch), dtype=np.float32)
+        return arr[:usable].reshape(-1, ch)
+
+    def close(self) -> None:
+        for h in (self.sf_handle, self.wf_handle):
+            if h is not None:
+                try:
+                    h.close()
+                except Exception:
+                    pass
+        self.sf_handle = None
+        self.wf_handle = None
 
 
 class HistoryABPlayer:
@@ -210,7 +282,7 @@ class StemMixerEngine:
         self.channels = channels
         self._lock = threading.RLock()
         self._tracks: dict[str, StemTrackState] = {}
-        self._wave_handles: dict[str, Any] = {}
+        self._wave_handles: dict[str, _StemHandle] = {}
         self._position_frame: int = 0
         self._max_frames: int = 0
         self._is_playing: bool = False
@@ -241,37 +313,40 @@ class StemMixerEngine:
         self.stop()
         with self._lock:
             for h in self._wave_handles.values():
-                try:
-                    h.close()
-                except Exception:
-                    pass
+                h.close()
             self._wave_handles.clear()
             self._tracks.clear()
             self._max_frames = 0
             self._position_frame = 0
 
     def load_stems(self, stem_paths: dict[str, str | Path]) -> dict[str, StemTrackState]:
-        """Register stem WAV files using streaming handles (no full-song RAM duplication)."""
+        """Register stem WAV files using streaming handles (supports 16/24/32-bit/float32 & resampling)."""
         self.clear()
         with self._lock:
             for stem_name, raw_path in stem_paths.items():
                 path = Path(raw_path)
                 if not path.exists():
                     continue
-                wf = wave.open(str(path), "rb")
-                nframes = int(wf.getnframes())
-                sr = int(wf.getframerate())
-                ch = int(wf.getnchannels())
-                self._wave_handles[stem_name] = wf
+                handle = _StemHandle(path)
+                native_frames = handle.total_frames
+                sr = handle.sample_rate
+                ch = handle.channels
+                engine_frames = (
+                    native_frames
+                    if sr == self.sample_rate
+                    else int(round(native_frames * (self.sample_rate / float(max(1, sr)))))
+                )
+                self._wave_handles[stem_name] = handle
                 self._tracks[stem_name] = StemTrackState(
                     name=stem_name,
                     path=path,
-                    duration_sec=nframes / float(max(1, sr)),
-                    total_frames=nframes,
+                    duration_sec=native_frames / float(max(1, sr)),
+                    total_frames=engine_frames,
                     sample_rate=sr,
                     channels=ch,
+                    native_total_frames=native_frames,
                 )
-                self._max_frames = max(self._max_frames, nframes)
+                self._max_frames = max(self._max_frames, engine_frames)
             return dict(self._tracks)
 
     def set_mute(self, stem_name: str, muted: bool) -> None:
@@ -337,36 +412,41 @@ class StemMixerEngine:
         return 0.0 if track.muted else track.volume
 
     def _read_track_chunk(self, name: str, start_frame: int, num_frames: int) -> np.ndarray:
-        wf = self._wave_handles.get(name)
+        handle = self._wave_handles.get(name)
         track = self._tracks.get(name)
-        if wf is None or track is None or start_frame >= track.total_frames:
+        if handle is None or track is None or start_frame >= track.total_frames or num_frames <= 0:
             return np.zeros((num_frames, self.channels), dtype=np.float32)
 
-        wf.setpos(start_frame)
-        raw = wf.readframes(num_frames)
-        sampwidth = wf.getsampwidth()
-        if sampwidth == 2:
-            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sampwidth == 4:
-            arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+        if track.sample_rate == self.sample_rate:
+            raw_arr = handle.read_frames_f32(start_frame, num_frames)
+            if raw_arr.shape[0] == 0:
+                return np.zeros((num_frames, self.channels), dtype=np.float32)
+            ch = raw_arr.shape[1]
+            if ch == 1 and self.channels == 2:
+                raw_arr = np.repeat(raw_arr, 2, axis=1)
+            elif ch > 2 and self.channels == 2:
+                raw_arr = raw_arr[:, :2]
         else:
-            arr = np.zeros(0, dtype=np.float32)
+            src_start = int(round(start_frame * (track.sample_rate / float(self.sample_rate))))
+            src_count = max(1, int(round(num_frames * (track.sample_rate / float(self.sample_rate)))) + 4)
+            raw_arr = handle.read_frames_f32(src_start, src_count)
+            if raw_arr.shape[0] == 0:
+                return np.zeros((num_frames, self.channels), dtype=np.float32)
+            raw_arr = normalize_to_canonical_pcm(
+                raw_arr,
+                src_rate=track.sample_rate,
+                src_channels=max(1, track.channels),
+                dst_rate=self.sample_rate,
+                dst_channels=self.channels,
+            )
 
-        ch = max(1, track.channels)
-        usable = (arr.size // ch) * ch
-        if usable == 0:
-            return np.zeros((num_frames, self.channels), dtype=np.float32)
-        arr = arr[:usable].reshape(-1, ch)
-        if ch == 1 and self.channels == 2:
-            arr = np.repeat(arr, 2, axis=1)
-        elif ch > 2 and self.channels == 2:
-            arr = arr[:, :2]
-
-        if arr.shape[0] < num_frames:
+        if raw_arr.shape[0] > num_frames:
+            return raw_arr[:num_frames]
+        if raw_arr.shape[0] < num_frames:
             padded = np.zeros((num_frames, self.channels), dtype=np.float32)
-            padded[: arr.shape[0]] = arr
+            padded[: raw_arr.shape[0]] = raw_arr
             return padded
-        return arr
+        return raw_arr
 
     def render_block(self, num_frames: int, *, advance: bool = True) -> np.ndarray:
         """Render synchronized mixed audio block across active stems."""
@@ -436,20 +516,24 @@ class StemMixerEngine:
         return path
 
     def get_stem_waveform_envelope(self, stem_name: str, num_points: int = 240) -> tuple[np.ndarray, np.ndarray]:
-        """Compute downsampled waveform min/max envelope via streaming chunk reads."""
+        """Compute bounded-cost downsampled waveform min/max envelope via streaming reads."""
         with self._lock:
             track = self._tracks.get(stem_name)
-            if track is None or track.total_frames <= 0:
+            handle = self._wave_handles.get(stem_name)
+            if track is None or handle is None or track.native_total_frames <= 0:
                 z = np.zeros(num_points, dtype=np.float32)
                 return z, z
-            step = max(1, track.total_frames // num_points)
+            step = max(1, track.native_total_frames // num_points)
+            read_per_bin = min(step, 2048)  # Keep UI preview O(1) fast even for 30-min WAVs
             mins = np.zeros(num_points, dtype=np.float32)
             maxs = np.zeros(num_points, dtype=np.float32)
             for i in range(num_points):
                 start = i * step
-                if start >= track.total_frames:
+                if start >= track.native_total_frames:
                     break
-                chunk = self._read_track_chunk(stem_name, start, min(step, track.total_frames - start))
+                chunk = handle.read_frames_f32(start, min(read_per_bin, track.native_total_frames - start))
+                if chunk.size == 0:
+                    continue
                 mono = np.mean(chunk, axis=1)
                 mins[i] = float(np.min(mono))
                 maxs[i] = float(np.max(mono))

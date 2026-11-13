@@ -150,7 +150,7 @@ class CaptureStatsTracker:
         with self._lock:
             self._last_error = error_message
 
-    def record_chunk(self, pcm_f32: np.ndarray, *, queue_size: int, overruns: int) -> None:
+    def record_chunk(self, pcm_f32: np.ndarray, *, queue_size: int, overruns: int) -> bool:
         num_frames = int(pcm_f32.shape[0]) if pcm_f32.ndim >= 1 else 0
         rms_lin, rms_db, peak_lin, peak_db = compute_rms_and_peak(pcm_f32)
         now = time.monotonic()
@@ -166,6 +166,7 @@ class CaptureStatsTracker:
             self._buffer_overruns = overruns
             self._is_silent = rms_db < self._silence_threshold_dbfs
             self._fps_events.append((now, num_frames))
+            return self._is_silent
 
     def record_underrun(self, count: int = 1) -> None:
         with self._lock:

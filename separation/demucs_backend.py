@@ -62,13 +62,27 @@ class DemucsSeparatorBackend(SeparationBackend):
         self._separator: Any = None
         self._tmp_root: Optional[tempfile.TemporaryDirectory[str]] = None
 
-    def _segment_ladder(self) -> list[int]:
-        ladder = [s for s in self.ai_config.demucs_segment_ladder if s <= self.segment_seconds]
+    def _segment_ladder(self) -> list[float]:
+        ladder = [float(s) for s in self.ai_config.demucs_segment_ladder if s <= self.segment_seconds]
         if not ladder:
-            ladder = [min(self.ai_config.demucs_segment_ladder)]
-        elif self.segment_seconds not in ladder:
-            ladder.insert(0, self.segment_seconds)
-        return sorted(set(ladder), reverse=True)
+            ladder = [float(min(self.ai_config.demucs_segment_ladder))]
+        elif float(self.segment_seconds) not in ladder:
+            ladder.insert(0, float(self.segment_seconds))
+
+        # Respect HTDemucs checkpoint max_allowed_segment / model.segment to prevent ValueError
+        max_seg: Optional[float] = None
+        if self._mode == "demucs" and self._model is not None:
+            for attr in ("max_allowed_segment", "segment"):
+                val = getattr(self._model, attr, None)
+                if isinstance(val, (int, float)) and val > 0:
+                    max_seg = float(val) if max_seg is None else min(max_seg, float(val))
+
+        eff: list[float] = []
+        for s in sorted(set(ladder), reverse=True):
+            clamped = min(s, max_seg) if max_seg is not None else s
+            if not any(abs(clamped - prev) < 1e-4 for prev in eff):
+                eff.append(clamped)
+        return eff
 
     def load_model(self) -> None:
         if self._loaded:
@@ -148,11 +162,11 @@ class DemucsSeparatorBackend(SeparationBackend):
 
         for attempt_idx in range(min(max_attempts, len(ladder))):
             seg = ladder[attempt_idx]
-            tried_segments.append(seg)
+            tried_segments.append(int(round(seg)))
             try:
                 if self._mode == "demucs":
                     return self._separate_with_demucs(chunk_f32, sample_rate, segment_sec=seg)
-                return self._separate_with_audio_separator(chunk_f32, sample_rate, segment_sec=seg)
+                return self._separate_with_audio_separator(chunk_f32, sample_rate, segment_sec=int(round(seg)))
             except Exception as exc:
                 release_torch_and_memory()
                 if is_oom_exception(exc):
@@ -176,7 +190,7 @@ class DemucsSeparatorBackend(SeparationBackend):
         chunk_f32: np.ndarray,
         sample_rate: int,
         *,
-        segment_sec: int,
+        segment_sec: float,
     ) -> dict[str, np.ndarray]:
         torch = self._torch
         model = self._model
@@ -189,6 +203,7 @@ class DemucsSeparatorBackend(SeparationBackend):
         try:
             tensor = torch.from_numpy(work.T).unsqueeze(0).to(self._device, dtype=torch.float32)
             with torch.inference_mode():
+                # Upstream demucs.apply.apply_model does NOT accept `jobs=`; use shifts=1 and num_workers=0.
                 sources = self._apply_model_fn(
                     model,
                     tensor,
@@ -196,7 +211,6 @@ class DemucsSeparatorBackend(SeparationBackend):
                     split=True,
                     overlap=float(self.overlap),
                     segment=float(segment_sec),
-                    jobs=int(self.ai_config.demucs_jobs),       # Strict jobs=1
                     num_workers=0,
                     progress=False,
                     device=self._device,
@@ -250,7 +264,15 @@ class DemucsSeparatorBackend(SeparationBackend):
                 "Other": "stem_other",
             }
             out_files = self._separator.separate(str(in_wav), output_names)
-            resolved = [Path(f) if Path(f).is_absolute() else out_dir / Path(f) for f in out_files]
+            resolved: list[Path] = []
+            for f in out_files:
+                fp = Path(f)
+                if fp.exists():
+                    resolved.append(fp)
+                elif (out_dir / fp).exists():
+                    resolved.append(out_dir / fp)
+                else:
+                    resolved.append(out_dir / fp.name)
             stems: dict[str, np.ndarray] = {}
             for stem in self.model_spec.stems:
                 matched = next((p for p in resolved if stem.lower() in p.name.lower()), None)

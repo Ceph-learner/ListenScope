@@ -116,6 +116,7 @@ class StemMixerWidget(QtWidgets.QWidget):
     export_mix_requested = QtCore.Signal(str)
     send_stem_to_analysis = QtCore.Signal(str, str)
     transcribe_stem_midi = QtCore.Signal(str, str)
+    before_play_requested = QtCore.Signal()
 
     def __init__(self, mixer_engine: StemMixerEngine, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -169,7 +170,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.pause_btn = QtWidgets.QPushButton("暂停")
         self.stop_btn = QtWidgets.QPushButton("停止")
         self.export_btn = QtWidgets.QPushButton("导出混合 WAV")
-        self.play_btn.clicked.connect(lambda: self.mixer_engine.play(open_audio_device=True))
+        self.play_btn.clicked.connect(self._on_play_clicked)
         self.pause_btn.clicked.connect(self.mixer_engine.pause)
         self.stop_btn.clicked.connect(self.mixer_engine.stop)
         self.export_btn.clicked.connect(self._on_export_clicked)
@@ -220,6 +221,10 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         splitter.setSizes([280, 160])
         root.addWidget(splitter, 1)
+
+    def _on_play_clicked(self) -> None:
+        self.before_play_requested.emit()
+        self.mixer_engine.play(open_audio_device=True)
 
     def _on_export_clicked(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(

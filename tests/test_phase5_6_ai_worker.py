@@ -130,8 +130,12 @@ def test_demucs_backend_enforces_jobs1_shifts1_and_bounded_oom_ladder(monkeypatc
     out = backend.separate_chunk(np.zeros((48000, 2), dtype=np.float32), 48000)
     assert set(out.keys()) == {"drums", "bass", "other", "vocals"}
     assert len(calls) == 2
-    assert calls[0]["jobs"] == 1 and calls[0]["shifts"] == 1 and calls[0]["segment"] == 10.0
-    assert calls[1]["jobs"] == 1 and calls[1]["shifts"] == 1 and calls[1]["segment"] == 8.0
+    assert "jobs" not in calls[0] and calls[0]["num_workers"] == 0 and calls[0]["shifts"] == 1 and calls[0]["segment"] == 10.0
+    assert "jobs" not in calls[1] and calls[1]["num_workers"] == 0 and calls[1]["shifts"] == 1 and calls[1]["segment"] == 8.0
+
+    # HTDemucs model.max_allowed_segment (e.g. 7.8s) must clamp & deduplicate the ladder safely
+    backend._model.max_allowed_segment = 7.8
+    assert backend._segment_ladder() == [7.8, 6.0, 4.0]
 
     # If even smaller segments still OOM after max_oom_retries=1, raises SeparationOOMError cleanly without looping forever
     def always_oom(*_a, **kwargs):

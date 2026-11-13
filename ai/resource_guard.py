@@ -29,15 +29,39 @@ class WavMetadata:
     resource_estimate_note: str
 
 
+_SF_SUBTYPE_BYTES = {
+    "PCM_U8": 1,
+    "PCM_S8": 1,
+    "PCM_16": 2,
+    "PCM_24": 3,
+    "PCM_32": 4,
+    "FLOAT": 4,
+    "DOUBLE": 8,
+}
+
+
 def inspect_wav_header(wav_path: Path | str, ai_config: Optional[AIConfig] = None) -> WavMetadata:
     """Read WAV header in O(1) without loading PCM into RAM."""
     cfg = ai_config or AIConfig()
     path = Path(wav_path)
-    with wave.open(str(path), "rb") as wf:
-        sr = int(wf.getframerate())
-        ch = int(wf.getnchannels())
-        sw = int(wf.getsampwidth())
-        nframes = int(wf.getnframes())
+    sr = 0
+    ch = 0
+    sw = 2
+    nframes = 0
+    try:
+        import soundfile as sf  # type: ignore[import-untyped]
+
+        info = sf.info(str(path))
+        sr = int(info.samplerate)
+        ch = int(info.channels)
+        sw = _SF_SUBTYPE_BYTES.get(str(info.subtype).upper(), 2)
+        nframes = int(info.frames)
+    except Exception:
+        with wave.open(str(path), "rb") as wf:
+            sr = int(wf.getframerate())
+            ch = int(wf.getnchannels())
+            sw = int(wf.getsampwidth())
+            nframes = int(wf.getnframes())
 
     duration = nframes / float(max(1, sr))
     exceeds = duration > cfg.default_max_history_ai_seconds
@@ -108,6 +132,13 @@ def _decode_pcm_bytes(raw: bytes, sample_width: int, channels: int) -> np.ndarra
         return np.empty((0, channels), dtype=np.float32)
     if sample_width == 2:
         arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    elif sample_width == 3:
+        raw_u8 = np.frombuffer(raw, dtype=np.uint8)
+        usable_b = (raw_u8.size // 3) * 3
+        triplets = raw_u8[:usable_b].reshape(-1, 3).astype(np.int32)
+        signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
+        signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
+        arr = signed.astype(np.float32) / 8388608.0
     elif sample_width == 4:
         arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
     elif sample_width == 1:
@@ -137,11 +168,29 @@ def stream_chunked_separation(
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    with wave.open(str(src_path), "rb") as in_wf:
-        sr = int(in_wf.getframerate())
-        ch = int(in_wf.getnchannels())
-        sw = int(in_wf.getsampwidth())
-        total_frames = int(in_wf.getnframes())
+    sf_file = None
+    in_wf = None
+    try:
+        try:
+            import soundfile as sf  # type: ignore[import-untyped]
+
+            sf_file = sf.SoundFile(str(src_path), "r")
+            sr = int(sf_file.samplerate)
+            ch = int(sf_file.channels)
+            sw = 4
+            total_frames = int(sf_file.frames)
+        except Exception:
+            if sf_file is not None:
+                try:
+                    sf_file.close()
+                except Exception:
+                    pass
+                sf_file = None
+            in_wf = wave.open(str(src_path), "rb")
+            sr = int(in_wf.getframerate())
+            ch = int(in_wf.getnchannels())
+            sw = int(in_wf.getsampwidth())
+            total_frames = int(in_wf.getnframes())
 
         chunk_frames = max(sr, int(round(chunk_seconds * sr)))
         overlap_frames = max(0, min(chunk_frames // 4, int(round(overlap_seconds * sr))))
@@ -168,9 +217,17 @@ def stream_chunked_separation(
 
                 read_start = core_start - pad_left
                 read_len = (core_end - core_start) + pad_left + pad_right
-                in_wf.setpos(read_start)
-                raw = in_wf.readframes(read_len)
-                pcm = _decode_pcm_bytes(raw, sw, ch)
+                if sf_file is not None:
+                    sf_file.seek(read_start)
+                    pcm = np.asarray(sf_file.read(read_len, dtype="float32", always_2d=True), dtype=np.float32)
+                else:
+                    assert in_wf is not None
+                    in_wf.setpos(read_start)
+                    raw = in_wf.readframes(read_len)
+                    pcm = _decode_pcm_bytes(raw, sw, ch)
+
+                if not np.all(np.isfinite(pcm)):
+                    pcm = np.nan_to_num(pcm, nan=0.0, posinf=1.0, neginf=-1.0)
                 if pcm.shape[1] == 1:
                     pcm = np.repeat(pcm, 2, axis=1)
                 elif pcm.shape[1] > 2:
@@ -195,6 +252,13 @@ def stream_chunked_separation(
             for wf in out_wfs.values():
                 try:
                     wf.close()
+                except Exception:
+                    pass
+    finally:
+        for h in (sf_file, in_wf):
+            if h is not None:
+                try:
+                    h.close()
                 except Exception:
                     pass
 
