@@ -211,10 +211,14 @@ class HistoryABPlayer:
     def start_playback(self, *, open_audio_device: bool = True) -> str:
         """Start A/B playback and return user-facing QQ Music pause reminder."""
         with self._lock:
+            oldest = self.ring_buffer.oldest_abs_frame
             if self._b_frame <= self._a_frame:
                 raise ValueError("请先在 120s 历史时间轴选择有效的 A/B 片段。")
-            if self._cursor_frame < self._a_frame or self._cursor_frame >= self._b_frame:
-                self._cursor_frame = self._a_frame
+            if self._b_frame <= oldest:
+                raise ValueError("所选 A/B 片段已滚出最近 120s 环形缓冲，请重新选择区间。")
+            effective_a = max(oldest, self._a_frame)
+            if self._cursor_frame < effective_a or self._cursor_frame >= self._b_frame:
+                self._cursor_frame = effective_a
                 self._stretcher.reset(0.0)
             self._is_playing = True
 

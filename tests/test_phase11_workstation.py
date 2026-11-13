@@ -263,7 +263,7 @@ def test_deep_stem_analyzer_bass_drums_melody_chords_and_export(tmp_path: Path) 
     assert "`C`" in md_text
 
     csv_out = export_transcription_sheet(report, tmp_path / "sheet.csv", midi_result=midi_dummy)
-    with csv_out.open("r", encoding="utf-8") as fh:
+    with csv_out.open("r", encoding="utf-8-sig") as fh:
         rows = list(csv.reader(fh))
     assert rows[0][0] == "section"
     sections = {r[0] for r in rows[1:]}

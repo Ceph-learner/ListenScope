@@ -724,7 +724,7 @@ def export_transcription_sheet(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if out.suffix.lower() == ".csv":
-        with out.open("w", newline="", encoding="utf-8") as fh:
+        with out.open("w", newline="", encoding="utf-8-sig") as fh:
             writer = csv.writer(fh)
             writer.writerow(["section", "start_sec", "end_sec", "label", "detail_1", "detail_2", "confidence_or_corr"])
             for seg in report.chord_timeline:

@@ -246,8 +246,9 @@ def stream_chunked_separation(
                     if stem_arr.ndim == 1:
                         stem_arr = stem_arr.reshape(-1, 1)
                     trimmed = stem_arr[pad_left : pad_left + core_len]
-                    if trimmed.shape[0] == 0:
-                        continue
+                    if trimmed.shape[0] < core_len:
+                        pad = np.zeros((core_len - trimmed.shape[0], trimmed.shape[1]), dtype=np.float32)
+                        trimmed = np.vstack([trimmed, pad]) if trimmed.shape[0] > 0 else pad
                     if not np.all(np.isfinite(trimmed)):
                         trimmed = np.nan_to_num(trimmed, nan=0.0, posinf=1.0, neginf=-1.0)
                     if trimmed.shape[1] == 1 and out_ch == 2:

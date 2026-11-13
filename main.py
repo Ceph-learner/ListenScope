@@ -256,7 +256,17 @@ class ListenScopeController:
             return True
 
     def _schedule_external_ai_probe(self, ai_python: str) -> None:
-        if not ai_python or not self._is_external_python(ai_python) or not Path(ai_python).exists():
+        if not ai_python:
+            return
+        if not Path(ai_python).exists():
+            self._probe_seq += 1
+            self.hardware_report = apply_external_ai_probe_to_report(
+                self.hardware_report,
+                {"ok": False, "error": f"找不到 AI Worker Python 解释器: {ai_python}"},
+            )
+            self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)
+            return
+        if not self._is_external_python(ai_python):
             return
         self._probe_seq += 1
         seq = self._probe_seq
@@ -394,10 +404,31 @@ class ListenScopeController:
         sr = self.ring_buffer.sample_rate
         newest = self.ring_buffer.total_written_frames
         oldest = self.ring_buffer.oldest_abs_frame
-        a = max(oldest, newest - int(round(max(start_ago_sec, end_ago_sec + 0.5) * sr)))
-        b = max(a + 1, newest - int(round(min(start_ago_sec, end_ago_sec) * sr)))
+        if newest - oldest < int(0.2 * sr):
+            self.window.show_banner_message("当前 120s 环形缓冲可用音频不足 0.2s，请先捕获或导入音频。")
+            return
+
+        req_start_ago = max(float(start_ago_sec), float(end_ago_sec) + 0.5)
+        req_end_ago = min(float(start_ago_sec), float(end_ago_sec))
+        raw_a = newest - int(round(req_start_ago * sr))
+        raw_b = newest - int(round(req_end_ago * sr))
+        if raw_b <= oldest + int(0.2 * sr):
+            avail = self.ring_buffer.available_seconds
+            self.window.show_banner_message(
+                f"⚠️ 所选倒退区间 ({req_start_ago:.1f}s ~ {req_end_ago:.1f}s) 已超出当前已缓冲范围 (仅最近 {avail:.1f}s)，请重新调整 A/B 区间。"
+            )
+            return
+
+        a = max(oldest, raw_a)
+        b = min(newest, raw_b)
+        if b - a < int(0.2 * sr):
+            a = max(oldest, b - int(round(0.5 * sr)))
+        actual_start_ago = (newest - a) / float(sr)
+        actual_end_ago = (newest - b) / float(sr)
         self.ab_player.set_ab_range(a, b)
-        self.window.show_banner_message(f"已设定 A/B 区间（倒退 {start_ago_sec:.1f}s ~ {end_ago_sec:.1f}s）。")
+        self.window.show_banner_message(
+            f"已设定 A/B 区间（倒退 {actual_start_ago:.1f}s ~ {actual_end_ago:.1f}s，共 {(b - a) / float(sr):.1f}s）。"
+        )
 
     def _on_ab_play(self) -> None:
         if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
@@ -465,6 +496,7 @@ class ListenScopeController:
         try:
             _, dur = self.ring_buffer.export_wav_streaming(in_wav, a_frame, b_frame)
         except Exception as exc:
+            shutil.rmtree(task_dir, ignore_errors=True)
             self.window.show_banner_message(f"导出待分轨片段失败: {exc}")
             return
 
@@ -487,6 +519,7 @@ class ListenScopeController:
         )
         ok, msg = self.ai_job_manager.submit_job(req)
         if not ok:
+            shutil.rmtree(task_dir, ignore_errors=True)
             self.window.show_banner_message(f"拒绝启动 AI 分轨: {msg}")
         else:
             self._last_ai_request = req
@@ -599,6 +632,7 @@ class ListenScopeController:
             self.stop_capture()
             self.ab_player.stop()
             self.ring_buffer.clear()
+            self.ab_player.set_ab_range(0, 0)
             self.analysis_worker.reset_harmony()
             self.window.chroma_widget.clear_progression()
             arr, sr, ch = _read_wav_excerpt_f32(Path(stem_path), max_seconds=30.0)
@@ -610,6 +644,16 @@ class ListenScopeController:
                 dst_channels=self.audio_config.channels,
             )
             self.ring_buffer.write(canon)
+            avail = self.ring_buffer.available_seconds
+            if avail >= 0.5:
+                sel = min(30.0, avail)
+                self.ab_player.select_recent_seconds(sel)
+                self.window.start_ago_spin.setValue(round(sel, 2))
+                self.window.end_ago_spin.setValue(0.0)
+                self.window._set_ab_region_from_ago(sel, 0.0)
+            self.window.history_coverage_lbl.setText(
+                f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s"
+            )
             mins, maxs, avail_sec = self.ring_buffer.snapshot_envelope(300)
             self.window.update_history_overview(mins, maxs, avail_sec)
             self.window.tabs.setCurrentWidget(self.window.chroma_widget)
@@ -809,13 +853,17 @@ class ListenScopeController:
         self.live_separator.ai_python_executable = ai_python or None
 
         verified_probe = self.window.last_verified_ai_probe
-        if verified_probe is not None and str(verified_probe.get("python_executable", "")) == ai_python:
+        if (
+            verified_probe is not None
+            and str(verified_probe.get("python_executable", "")) == ai_python
+            and (not ai_python or Path(ai_python).exists())
+        ):
             self._probe_seq += 1
             self.hardware_report = apply_external_ai_probe_to_report(self.hardware_report, verified_probe)
             self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)
-        elif ai_python and self._is_external_python(ai_python):
+        elif ai_python and (not Path(ai_python).exists() or self._is_external_python(ai_python)):
             self._schedule_external_ai_probe(ai_python)
-        elif not ai_python:
+        else:
             self._probe_seq += 1
             self.hardware_report = probe_system()
             self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)

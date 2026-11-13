@@ -11,6 +11,7 @@ for the target user PC:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,19 @@ class ResourceLimits:
     monitor_history_maxlen: int = 300
 
     def __post_init__(self) -> None:
+        for name in (
+            "max_main_process_ram_mb",
+            "warn_main_process_ram_mb",
+            "min_ram_before_ai_mb",
+            "pause_ram_before_ai_mb",
+            "critical_ram_mb",
+            "min_vram_2stem_mb",
+            "min_vram_4stem_mb",
+            "critical_vram_free_mb",
+        ):
+            val = float(getattr(self, name))
+            if not math.isfinite(val) or val <= 0.0:
+                raise ValueError(f"{name} must be finite and positive")
         if self.critical_ram_mb >= self.pause_ram_before_ai_mb:
             raise ValueError("critical_ram_mb must be smaller than pause_ram_before_ai_mb")
         if self.pause_ram_before_ai_mb > self.min_ram_before_ai_mb:
@@ -62,8 +76,6 @@ class ResourceLimits:
             raise ValueError("max_main_process_ram_mb must be smaller than warn_main_process_ram_mb")
         if self.min_vram_2stem_mb > self.min_vram_4stem_mb:
             raise ValueError("min_vram_2stem_mb must not exceed min_vram_4stem_mb")
-        if self.critical_vram_free_mb <= 0:
-            raise ValueError("critical_vram_free_mb must be positive")
         if self.max_concurrent_ai_jobs != 1:
             raise ValueError("max_concurrent_ai_jobs must be 1 for 8GB VRAM / 16GB RAM safety")
         if self.max_loaded_models != 1:
@@ -163,11 +175,27 @@ class AIConfig:
     live_max_buffer_seconds: float = 6.0
 
     def __post_init__(self) -> None:
+        for name in (
+            "default_max_history_ai_seconds",
+            "long_audio_chunk_seconds",
+            "worker_graceful_cancel_timeout_sec",
+            "live_chunk_seconds",
+            "live_max_buffer_seconds",
+        ):
+            val = float(getattr(self, name))
+            if not math.isfinite(val) or val <= 0.0:
+                raise ValueError(f"{name} must be finite and positive")
+        if not math.isfinite(float(self.long_audio_overlap_seconds)) or self.long_audio_overlap_seconds < 0.0:
+            raise ValueError("long_audio_overlap_seconds must be finite and >= 0")
+        if self.long_audio_overlap_seconds >= self.long_audio_chunk_seconds:
+            raise ValueError("long_audio_overlap_seconds must be smaller than long_audio_chunk_seconds")
+        if not self.demucs_segment_ladder or any(int(s) <= 0 for s in self.demucs_segment_ladder):
+            raise ValueError("demucs_segment_ladder must contain positive integers")
         if self.demucs_jobs != 1:
             raise ValueError("demucs_jobs must be 1 on 16GB RAM / 8GB VRAM")
         if self.demucs_shifts != 1:
             raise ValueError("demucs_shifts must default to 1")
-        if self.max_oom_retries > 2:
-            raise ValueError("max_oom_retries must be bounded (<=2)")
+        if self.max_oom_retries < 0 or self.max_oom_retries > 2:
+            raise ValueError("max_oom_retries must be bounded in [0, 2]")
         if self.live_max_buffer_seconds <= self.live_chunk_seconds:
             raise ValueError("live_max_buffer_seconds must exceed live_chunk_seconds")

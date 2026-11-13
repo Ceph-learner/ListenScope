@@ -357,6 +357,7 @@ class ExperimentalLiveSeparator:
                 simulate_delay_sec=simulate_delay_sec,
                 ai_config=self.ai_config,
                 audio_config=self.audio_config,
+                cancel_event=self._stop_event,
             )
         return benchmark_live_model(
             model_id=model_id,
@@ -959,8 +960,9 @@ class ExperimentalLiveSeparator:
             self._stop_event.wait(timeout=0.05)
 
     def _ensure_output_stream(self) -> None:
-        if self._stream is not None:
-            return
+        with self._lock:
+            if self._stream is not None or self._stop_event.is_set() or not self._active:
+                return
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
         except ImportError:
@@ -969,20 +971,38 @@ class ExperimentalLiveSeparator:
         def _callback(outdata, frames, _time_info, _status) -> None:
             outdata[:] = self.pull_mixed_block(frames)
 
+        stream = None
         try:
-            self._stream = sd.OutputStream(
+            stream = sd.OutputStream(
                 samplerate=self.audio_config.sample_rate,
                 channels=self.audio_config.channels,
                 dtype="float32",
                 callback=_callback,
             )
-            self._stream.start()
+            stream.start()
+            discard = False
+            with self._lock:
+                if self._stream is not None or self._stop_event.is_set() or not self._active:
+                    discard = True
+                else:
+                    self._stream = stream
+            if discard:
+                stream.stop()
+                stream.close()
         except Exception:
-            self._stream = None
+            if stream is not None:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
+            with self._lock:
+                self._stream = None
 
     def close_output_stream(self) -> None:
-        stream = self._stream
-        self._stream = None
+        with self._lock:
+            stream = self._stream
+            self._stream = None
         if stream is not None:
             try:
                 stream.stop()

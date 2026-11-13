@@ -12,7 +12,7 @@ import numpy as np
 
 from ai.backend import SeparationBackend
 from ai.models import AIModelSpec
-from ai.resource_guard import is_oom_exception, release_torch_and_memory
+from ai.resource_guard import cleanup_temp_outputs, is_oom_exception, release_torch_and_memory
 from core.config import AIConfig
 from core.models import OOMRecoveryAction
 
@@ -224,7 +224,7 @@ class MDXSeparatorBackend(SeparationBackend):
         in_wav = tmp_base / "chunk_in.wav"
         out_dir = tmp_base / "out"
         for leftover in out_dir.glob("*"):
-            leftover.unlink(missing_ok=True)
+            cleanup_temp_outputs(leftover)
 
         _write_pcm16_wav(in_wav, chunk_f32, sample_rate)
         target_frames = int(chunk_f32.shape[0])
@@ -269,7 +269,7 @@ class MDXSeparatorBackend(SeparationBackend):
         finally:
             in_wav.unlink(missing_ok=True)
             for leftover in out_dir.glob("*"):
-                leftover.unlink(missing_ok=True)
+                cleanup_temp_outputs(leftover)
 
     def unload_model(self) -> None:
         self._separator = None

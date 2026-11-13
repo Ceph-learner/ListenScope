@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 from typing import Optional
 
@@ -139,8 +140,12 @@ def benchmark_live_model_isolated(
     ai_config: Optional[AIConfig] = None,
     audio_config: Optional[AudioConfig] = None,
     timeout_sec: float = 60.0,
+    cancel_event: Optional[threading.Event] = None,
 ) -> LiveBenchmarkResult:
     """Execute `benchmark_live_model` cleanly in an isolated subprocess (never inside GUI main process)."""
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError("实时分轨基准测试已被取消")
+
     exe = str(ai_python_executable).strip() if ai_python_executable else ""
     if not exe:
         if getattr(sys, "frozen", False) and not use_mock_backend:
@@ -182,25 +187,78 @@ def benchmark_live_model_isolated(
     if use_mock_backend:
         cmd.append("--use-mock-backend")
 
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         cwd=str(bundle_root),
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=timeout_sec,
-        check=False,
         **subprocess_no_window_kwargs(),
     )
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def _drain(pipe, sink: list[str]) -> None:
+        if pipe is None:
+            return
+        try:
+            sink.append(pipe.read() or "")
+        except Exception:
+            pass
+        finally:
+            try:
+                pipe.close()
+            except Exception:
+                pass
+
+    t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks), name="ListenScope-BenchOut", daemon=True)
+    t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks), name="ListenScope-BenchErr", daemon=True)
+    t_out.start()
+    t_err.start()
+
+    deadline = time.monotonic() + max(0.5, float(timeout_sec))
+    canceled = False
+    timed_out = False
+    while proc.poll() is None:
+        if cancel_event is not None and cancel_event.is_set():
+            canceled = True
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            break
+        time.sleep(0.05)
+
+    if canceled or timed_out:
+        try:
+            proc.terminate()
+            proc.wait(timeout=0.6)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=0.4)
+            except Exception:
+                pass
+        t_out.join(timeout=0.5)
+        t_err.join(timeout=0.5)
+        if canceled:
+            raise InterruptedError("实时分轨基准测试已被紧急停止/取消")
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout_sec)
+
+    t_out.join(timeout=1.0)
+    t_err.join(timeout=1.0)
+    stdout_text = "".join(stdout_chunks)
+    stderr_text = "".join(stderr_chunks)
+
     if proc.returncode != 0:
-        err_tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-5:]
+        err_tail = (stderr_text or stdout_text).strip().splitlines()[-5:]
         raise RuntimeError(
             f"RTF 基准子进程失败 (exitcode={proc.returncode}): {' | '.join(err_tail) or '未知错误'}"
         )
 
-    raw_out = proc.stdout.strip()
+    raw_out = stdout_text.strip()
     lines = [ln.strip() for ln in raw_out.splitlines() if ln.strip()]
     candidate = lines[-1] if lines else raw_out
     brace = candidate.find("{")

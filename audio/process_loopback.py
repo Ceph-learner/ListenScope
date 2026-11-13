@@ -258,7 +258,9 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                     break
 
                 with self._lock:
-                    native = self._get_native_handle(self._tap) if self._tap is not None else None
+                    tap_obj = self._tap
+                    tap_running = bool(getattr(tap_obj, "is_running", True)) if tap_obj is not None else False
+                    native = self._get_native_handle(tap_obj) if tap_obj is not None else None
                 err_fn = getattr(native, "get_last_error", None) if native is not None else None
                 if callable(err_fn):
                     try:
@@ -268,6 +270,17 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                             self._stats.set_error(f"底层 WASAPI 提示: {err}")
                     except Exception:
                         pass
+
+                if tap_obj is not None and not tap_running:
+                    msg = (
+                        f"WASAPI Process Loopback 捕获流已断开或结束 ({last_native_err})"
+                        if last_native_err
+                        else f"WASAPI Process Loopback 捕获流已断开或结束 (PID={self._pid})，已自动停止捕获。"
+                    )
+                    logger.warning(msg)
+                    self._stats.set_error(msg)
+                    self._stop_internal(clear_error=False)
+                    break
 
                 # If paused and WASAPI stops pushing packets for >350ms, decay meter to silence
                 now = time.monotonic()

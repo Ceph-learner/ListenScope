@@ -13,7 +13,7 @@ from scipy.signal import resample_poly
 
 from ai.backend import SeparationBackend
 from ai.models import AIModelSpec
-from ai.resource_guard import is_oom_exception, release_torch_and_memory
+from ai.resource_guard import cleanup_temp_outputs, is_oom_exception, release_torch_and_memory
 from core.config import AIConfig
 from core.models import OOMRecoveryAction
 
@@ -201,7 +201,7 @@ class DemucsSeparatorBackend(SeparationBackend):
         tensor = None
         sources = None
         try:
-            tensor = torch.from_numpy(work.T).unsqueeze(0).to(self._device, dtype=torch.float32)
+            tensor = torch.from_numpy(np.ascontiguousarray(work.T, dtype=np.float32)).unsqueeze(0).to(self._device, dtype=torch.float32)
             with torch.inference_mode():
                 # Upstream demucs.apply.apply_model does NOT accept `jobs=`; use shifts=1 and num_workers=0.
                 sources = self._apply_model_fn(
@@ -247,7 +247,7 @@ class DemucsSeparatorBackend(SeparationBackend):
         in_wav = tmp_base / "chunk_in.wav"
         out_dir = tmp_base / "out"
         for leftover in out_dir.glob("*"):
-            leftover.unlink(missing_ok=True)
+            cleanup_temp_outputs(leftover)
         _write_pcm16_wav(in_wav, chunk_f32, sample_rate)
         target_frames = int(chunk_f32.shape[0])
 
@@ -284,7 +284,7 @@ class DemucsSeparatorBackend(SeparationBackend):
         finally:
             in_wav.unlink(missing_ok=True)
             for leftover in out_dir.glob("*"):
-                leftover.unlink(missing_ok=True)
+                cleanup_temp_outputs(leftover)
 
     def unload_model(self) -> None:
         self._model = None

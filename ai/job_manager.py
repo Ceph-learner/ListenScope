@@ -95,6 +95,7 @@ class AIJobManager:
         self._gpu_readiness_provider = gpu_readiness_provider
 
         self._lock = threading.RLock()
+        self._emergency_stop_lock = threading.Lock()
         self._accepting_jobs = True
         self._emergency_stopping = False
 
@@ -252,7 +253,36 @@ class AIJobManager:
             self._stop_monitor.clear()
             self._last_result = None
 
-            self._launch_worker_locked(request)
+            try:
+                self._launch_worker_locked(request)
+                monitor_thread = threading.Thread(
+                    target=self._monitor_loop,
+                    args=(request,),
+                    name=f"ListenScope-AIMonitor-{request.task_id}",
+                    daemon=True,
+                )
+                self._monitor_thread = monitor_thread
+                monitor_thread.start()
+            except Exception as exc:
+                logger.exception("Failed to launch AI worker subprocess for %s", request.task_id)
+                self._stop_monitor.set()
+                self._terminate_and_cleanup_ipc(grace_timeout=0.1)
+                self._cleanup_task_staging(request)
+                self._active_request = None
+                self._worker_pid = None
+                self._monitor_thread = None
+                self._result_dispatched = True
+                self._done_event.set()
+                self.resource_manager.update_runtime_state(
+                    active_ai_jobs=0,
+                    loaded_models=0,
+                    current_model=None,
+                    current_task=None,
+                    ai_worker_pid=None,
+                    ai_buffer_seconds=0.0,
+                )
+                return False, f"启动 AI Worker 子进程失败: {exc}"
+
             self.resource_manager.update_runtime_state(
                 active_ai_jobs=1,
                 loaded_models=1,
@@ -270,13 +300,6 @@ class AIJobManager:
             )
             self._latest_progress = init_prog
             init_cbs = list(self._progress_callbacks)
-            self._monitor_thread = threading.Thread(
-                target=self._monitor_loop,
-                args=(request,),
-                name=f"ListenScope-AIMonitor-{request.task_id}",
-                daemon=True,
-            )
-            self._monitor_thread.start()
 
         for cb in init_cbs:
             try:
@@ -559,7 +582,6 @@ class AIJobManager:
                 should_stop, stop_reason = self.resource_manager.should_emergency_stop_ai()
                 if should_stop:
                     logger.error("Automatic AI emergency stop triggered: %s", stop_reason)
-                    # Trigger on separate thread or handle inline cleanly:
                     self._perform_emergency_stop_inline(req, stop_reason)
                     return
 
@@ -595,33 +617,44 @@ class AIJobManager:
                     break
 
                 self._stop_monitor.wait(timeout=0.05)
+        except Exception as exc:
+            logger.exception("Unhandled exception in AI monitor loop for %s", req.task_id)
+            self._cleanup_task_staging(req)
+            final_result = AIJobResult(
+                task_id=req.task_id,
+                state=AIJobState.FAILED,
+                model_id=req.model_id,
+                device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
+                error=f"AI 监控线程异常: {exc}，主程序捕获与频谱保持正常。",
+            )
         finally:
             if not self._stop_monitor.is_set() and final_result is not None:
                 self._terminate_and_cleanup_ipc(grace_timeout=0.1)
                 self._dispatch_result(req, final_result)
 
     def _perform_emergency_stop_inline(self, req: AIJobRequest, reason: str) -> ResourceSnapshot:
-        with self._lock:
-            self._accepting_jobs = False
-            self._emergency_stopping = True
-            self._stop_monitor.set()
-        try:
-            self._terminate_and_cleanup_ipc(grace_timeout=min(0.6, self.ai_config.worker_graceful_cancel_timeout_sec))
-            self._cleanup_task_staging(req)
-            snap = self.resource_manager.sample()
-            res = AIJobResult(
-                task_id=req.task_id,
-                state=AIJobState.EMERGENCY_STOPPED,
-                model_id=req.model_id,
-                device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
-                error=reason,
-            )
-            self._dispatch_result(req, res)
-            return snap
-        finally:
+        with self._emergency_stop_lock:
             with self._lock:
-                self._emergency_stopping = False
-                self._accepting_jobs = True
+                self._accepting_jobs = False
+                self._emergency_stopping = True
+                self._stop_monitor.set()
+            try:
+                self._terminate_and_cleanup_ipc(grace_timeout=min(0.6, self.ai_config.worker_graceful_cancel_timeout_sec))
+                self._cleanup_task_staging(req)
+                snap = self.resource_manager.sample()
+                res = AIJobResult(
+                    task_id=req.task_id,
+                    state=AIJobState.EMERGENCY_STOPPED,
+                    model_id=req.model_id,
+                    device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
+                    error=reason,
+                )
+                self._dispatch_result(req, res)
+                return snap
+            finally:
+                with self._lock:
+                    self._emergency_stopping = False
+                    self._accepting_jobs = True
 
     def cancel_job(self, timeout: Optional[float] = None) -> Optional[AIJobResult]:
         """Gracefully cancel the active AI separation job, escalating to terminate if needed."""
@@ -658,41 +691,43 @@ class AIJobManager:
         6. Re-read RAM and VRAM
         7. Restore main program ready state without interrupting capture/DSP/GUI
         """
-        with self._lock:
-            self._accepting_jobs = False
-            self._emergency_stopping = True
-            req = self._active_request
-            self._stop_monitor.set()
-            mon = self._monitor_thread
+        with self._emergency_stop_lock:
+            with self._lock:
+                self._accepting_jobs = False
+                self._emergency_stopping = True
+                req = self._active_request
+                self._stop_monitor.set()
+                mon = self._monitor_thread
 
-        if req is not None:
-            self._terminate_and_cleanup_ipc(grace_timeout=min(0.6, self.ai_config.worker_graceful_cancel_timeout_sec))
-            if mon is not None and mon.is_alive() and mon is not threading.current_thread():
-                mon.join(timeout=1.0)
-            self._cleanup_task_staging(req)
-            res = AIJobResult(
-                task_id=req.task_id,
-                state=AIJobState.EMERGENCY_STOPPED,
-                model_id=req.model_id,
-                device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
-                error=reason,
-            )
-            self._dispatch_result(req, res)
-        else:
-            self.resource_manager.update_runtime_state(
-                active_ai_jobs=0,
-                loaded_models=0,
-                current_model=None,
-                current_task=None,
-                ai_worker_pid=None,
-                ai_buffer_seconds=0.0,
-            )
+            try:
+                if req is not None:
+                    self._terminate_and_cleanup_ipc(grace_timeout=min(0.6, self.ai_config.worker_graceful_cancel_timeout_sec))
+                    if mon is not None and mon.is_alive() and mon is not threading.current_thread():
+                        mon.join(timeout=1.0)
+                    self._cleanup_task_staging(req)
+                    res = AIJobResult(
+                        task_id=req.task_id,
+                        state=AIJobState.EMERGENCY_STOPPED,
+                        model_id=req.model_id,
+                        device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
+                        error=reason,
+                    )
+                    self._dispatch_result(req, res)
+                else:
+                    self.resource_manager.update_runtime_state(
+                        active_ai_jobs=0,
+                        loaded_models=0,
+                        current_model=None,
+                        current_task=None,
+                        ai_worker_pid=None,
+                        ai_buffer_seconds=0.0,
+                    )
 
-        snap = self.resource_manager.sample()
-        with self._lock:
-            self._emergency_stopping = False
-            self._accepting_jobs = True
-        return snap
+                return self.resource_manager.sample()
+            finally:
+                with self._lock:
+                    self._emergency_stopping = False
+                    self._accepting_jobs = True
 
     def wait_for_completion(self, timeout: Optional[float] = None) -> Optional[AIJobResult]:
         self._done_event.wait(timeout=timeout)

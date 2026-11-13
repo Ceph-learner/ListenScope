@@ -156,6 +156,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._dialog_closed = True
         super().closeEvent(event)
 
+    def done(self, result: int) -> None:  # type: ignore[override]
+        self._dialog_closed = True
+        super().done(result)
+
     def _refresh_status_alert(self, r: SystemHardwareReport) -> None:
         if not r.gpu_ai_ready or not r.is_windows:
             warn_text = r.gpu_ai_block_reason or ""
@@ -189,7 +193,10 @@ class SettingsDialog(QtWidgets.QDialog):
         def _worker() -> None:
             res = probe_external_ai_environment(target_py)
             if not self._dialog_closed:
-                self._probe_finished.emit(res)
+                try:
+                    self._probe_finished.emit(res)
+                except RuntimeError:
+                    pass
 
         threading.Thread(target=_worker, name="ListenScope-VerifyAIEnv", daemon=True).start()
 
