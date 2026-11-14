@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import stat
 import subprocess
 import sys
 import time
@@ -75,7 +74,18 @@ def test_p0_installer_requirements_and_scripts() -> None:
     assert any(ln.startswith("demucs>=4.1.0") for ln in ai_lines)
     assert any(ln.startswith("audio-separator[gpu]>=0.48.0") for ln in ai_lines)
     assert "torch==2.11.0" in ai_req and "cu128" in ai_req
+    assert "torchvision==0.26.0" in ai_req
+    assert "constraints-ai-cu128.txt" in ai_req
     assert "sitecustomize.py" in ai_req
+
+    constraints_txt = (ROOT / "constraints-ai-cu128.txt").read_text(encoding="utf-8")
+    for pinned in (
+        "torch==2.11.0+cu128",
+        "torchaudio==2.11.0+cu128",
+        "torchvision==0.26.0+cu128",
+        "onnxruntime-gpu>=1.21.0,<1.27",
+    ):
+        assert pinned in constraints_txt
 
     midi_req = (ROOT / "requirements-midi.txt").read_text(encoding="utf-8")
     midi_lines = [ln.strip() for ln in midi_req.splitlines() if ln.strip() and not ln.strip().startswith("#")]
@@ -84,15 +94,21 @@ def test_p0_installer_requirements_and_scripts() -> None:
     assert any("setuptools>=68.0,<81" in ln for ln in midi_lines)
     assert any(ln.startswith("psutil>=") for ln in midi_lines)
     assert any(ln.startswith("mido>=") for ln in midi_lines)
+    assert "LongPathsEnabled" in midi_req
 
     ps1 = (ROOT / "scripts" / "setup_windows.ps1").read_text(encoding="utf-8")
     for token in (
         "[string]$MidiPythonExe",
+        "[string]$MidiVenvPath",
+        "[string]$TorchvisionSpec",
         "[switch]$SkipMidi",
         "[switch]$AllowUntestedPython",
         "https://download.pytorch.org/whl/cu128",
         "torch==2.11.0",
         "torchaudio==2.11.0",
+        "torchvision==0.26.0",
+        "cuda-constraints.txt",
+        "PIP_CONSTRAINT",
         "-ExpectedMajor 3 -ExpectedMinor 12",
         "-ExpectedMajor 3 -ExpectedMinor 11",
         "requirements-midi.txt",
@@ -104,8 +120,14 @@ def test_p0_installer_requirements_and_scripts() -> None:
 
     spec_text = (ROOT / "packaging" / "listenscope_core.spec").read_text(encoding="utf-8")
     assert "requirements-midi.txt" in spec_text
+    assert "constraints-ai-cu128.txt" in spec_text
     assert '"basic_pitch"' in spec_text
     assert '"tensorflow"' in spec_text
+
+    packaging_doc = (ROOT / "docs" / "PACKAGING.md").read_text(encoding="utf-8")
+    assert "constraints-ai-cu128.txt" in packaging_doc
+    assert "LongPathsEnabled" in packaging_doc
+    assert "-MidiVenvPath" in packaging_doc
 
 
 def test_p0_check_env_json_and_gpu_readiness_without_basic_pitch() -> None:
@@ -460,7 +482,14 @@ def test_p1_midi_probe_discovery_settings_and_standalone_routing(
         ),
         encoding="utf-8",
     )
-    stub_midi_py.chmod(stub_midi_py.stat().st_mode | stat.S_IXUSR)
+    real_run = subprocess.run
+
+    def run_midi_stub(args, *rest, **kwargs):
+        if isinstance(args, list) and args[0] == str(stub_midi_py):
+            args = [sys.executable, str(stub_midi_py), *args[1:]]
+        return real_run(args, *rest, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_midi_stub)
 
     ctrl_ext = main_mod.ListenScopeController(
         use_mock_ai_for_demo=False,
@@ -512,3 +541,133 @@ def test_p1_midi_probe_discovery_settings_and_standalone_routing(
         ctrl_ext.window.close()
         ctrl_ext.shutdown()
         app.processEvents()
+
+
+def test_p1_run_external_python_frozen_windows_dll_and_sys_path_isolation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+    from core.paths import run_external_python
+
+    bundle_dir = (tmp_path / "dist" / "ListenScopeCore" / "_internal").resolve()
+    bundle_sub = bundle_dir / "torch" / "lib"
+    bundle_sub.mkdir(parents=True, exist_ok=True)
+
+    # Plant a poison '_socket.py' inside the frozen bundle root to simulate bundled
+    # Python 3.12 '_socket.pyd' in _internal. External Python 3.11 must import its
+    # own stdlib '_socket' first because bundle_dir is appended at the end of sys.path.
+    (bundle_dir / "_socket.py").write_text(
+        "raise RuntimeError('Frozen bundle _socket shadowed external interpreter stdlib!')\n",
+        encoding="utf-8",
+    )
+
+    # Plant a ListenScope bundle entrypoint module inside _internal
+    pkg_dir = bundle_dir / "analysis"
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
+    (pkg_dir / "frozen_probe_entry.py").write_text(
+        "\n".join(
+            [
+                "import _socket, json, os, sys",
+                "payload = {",
+                "    'argv': sys.argv,",
+                "    'cwd': os.getcwd(),",
+                "    'sys_path_tail': sys.path[-1],",
+                "    'sys_path_head': sys.path[0],",
+                "    'socket_ok': hasattr(_socket, 'socket'),",
+                "    'env_path': os.environ.get('PATH', ''),",
+                "    'env_pythonpath': os.environ.get('PYTHONPATH', ''),",
+                "}",
+                "print(json.dumps(payload))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ext_dir = (tmp_path / "midi_venv" / "Scripts").resolve()
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    fake_ext_python = ext_dir / "python.exe"
+    fake_ext_python.write_text("", encoding="utf-8")
+
+    external_ffmpeg_dir = (tmp_path / "tools" / "ffmpeg" / "bin").resolve()
+    external_ffmpeg_dir.mkdir(parents=True, exist_ok=True)
+
+    dll_calls: list[object] = []
+
+    class _FakeSetDllDirectoryW:
+        argtypes = None
+
+        def __call__(self, arg: object) -> int:
+            dll_calls.append(arg)
+            return 1
+
+    class _FakeKernel32:
+        def __init__(self) -> None:
+            self.SetDllDirectoryW = _FakeSetDllDirectoryW()
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle_dir), raising=False)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda name, use_last_error=False: _FakeKernel32(), raising=False)
+
+    real_popen = subprocess.Popen
+    captured_popen: dict[str, object] = {}
+
+    def fake_popen(command, *rest, **kwargs):
+        # Verify SetDllDirectoryW(None) is active at the exact moment Popen is called
+        captured_popen["dll_calls_at_spawn"] = list(dll_calls)
+        captured_popen["command"] = list(command)
+        captured_popen["cwd"] = kwargs.get("cwd")
+        captured_popen["env"] = dict(kwargs.get("env") or {})
+        real_cmd = [sys.executable, *command[1:]]
+        return real_popen(real_cmd, *rest, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    input_env = os.environ.copy()
+    input_env["PATH"] = os.pathsep.join([str(bundle_dir), str(bundle_sub), str(external_ffmpeg_dir)])
+    input_env["PYTHONPATH"] = os.pathsep.join([str(bundle_dir), str(bundle_sub)])
+
+    orig_args = [
+        str(fake_ext_python),
+        "-m",
+        "analysis.frozen_probe_entry",
+        "--audio",
+        "bass.wav",
+        "--json",
+    ]
+    res = run_external_python(
+        orig_args,
+        timeout=15.0,
+        check=True,
+        text=True,
+        encoding="utf-8",
+        env=input_env,
+    )
+
+    assert res.returncode == 0
+    assert res.args == orig_args
+    assert captured_popen["dll_calls_at_spawn"] == [None]
+    assert dll_calls == [None, str(bundle_dir)]
+    assert captured_popen["cwd"] == str(ext_dir)
+
+    cmd = captured_popen["command"]
+    assert isinstance(cmd, list)
+    assert cmd[0] == str(fake_ext_python)
+    assert cmd[1] == "-c"
+    assert "sys.path.append(root)" in cmd[2]
+    assert "runpy.run_module" in cmd[2]
+    assert cmd[3:] == [str(bundle_dir), "analysis.frozen_probe_entry", "--audio", "bass.wav", "--json"]
+
+    out = json.loads(res.stdout.strip())
+    assert out["socket_ok"] is True
+    assert out["cwd"] == str(ext_dir)
+    assert out["sys_path_tail"] == str(bundle_dir)
+    assert out["sys_path_head"] != str(bundle_dir)
+    assert out["argv"][1:] == ["--audio", "bass.wav", "--json"]
+    assert str(bundle_dir) not in out["env_path"].split(os.pathsep)
+    assert str(bundle_sub) not in out["env_path"].split(os.pathsep)
+    assert str(external_ffmpeg_dir) in out["env_path"].split(os.pathsep)
+    assert out["env_pythonpath"] == ""
+

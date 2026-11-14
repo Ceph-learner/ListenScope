@@ -8,7 +8,60 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from threading import Lock
 from typing import Any, Optional
+
+
+_external_launch_lock = Lock()
+
+
+def run_external_python(
+    args: list[str], *, timeout: float, check: bool, **kwargs: Any
+) -> subprocess.CompletedProcess[str]:
+    """Launch external Python without inheriting the frozen Windows DLL directory."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return subprocess.run(args, timeout=timeout, check=check, capture_output=True, **kwargs)
+
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    set_dll_directory = kernel32.SetDllDirectoryW
+    set_dll_directory.argtypes = [ctypes.c_wchar_p]
+    bundle = str(get_bundle_root())
+    env = kwargs["env"].copy()
+    bundle_path = Path(bundle)
+    for key in ("PATH", "PYTHONPATH"):
+        entries = env.get(key, "").split(os.pathsep)
+        env[key] = os.pathsep.join(
+            entry for entry in entries if entry and not Path(entry).resolve().is_relative_to(bundle_path)
+        )
+    # Bundled source modules must be below the external interpreter's stdlib and
+    # site-packages. The bundle also contains Python 3.12 extensions such as _socket.
+    launcher = "import runpy, sys; root, mod = sys.argv[1:3]; sys.argv = sys.argv[2:]; sys.path.append(root); runpy.run_module(mod, run_name='__main__', alter_sys=True)"
+    command = [args[0], "-c", launcher, bundle, *args[2:]]
+    kwargs.update(env=env, cwd=str(Path(args[0]).resolve().parent))
+    with _external_launch_lock:
+        if not set_dll_directory(None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+        finally:
+            set_dll_directory(bundle)
+
+    with proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            proc.kill()
+            exc.stdout, exc.stderr = proc.communicate()
+            raise
+        except BaseException:
+            proc.kill()
+            raise
+        result = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
+        if check:
+            result.check_returncode()
+        return result
 
 
 def get_bundle_root() -> Path:

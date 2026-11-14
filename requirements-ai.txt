@@ -1,13 +1,17 @@
 # ListenScope AI Worker Isolated Environment Dependencies (Python 3.12 x64 / RTX 5060 Ti 8GB VRAM / Blackwell sm_120)
 #
-# Verified baseline on Windows 11 + RTX 5060 Ti 8GB VRAM + Python 3.12.16 x64:
-# 1. Install PyTorch CUDA 12.8 build FIRST (matching Blackwell sm_120):
-#      pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
-# 2. Install AI separation packages below (Basic Pitch is intentionally excluded here because
-#    basic-pitch 0.4.0 requires tensorflow<2.15.1 / Python <=3.11; see requirements-midi.txt).
+# Verified baseline on Windows 11 + RTX 5060 Ti 8GB VRAM + Python 3.12.16 x64 (Round 1-3):
+# 1. Install PyTorch CUDA 12.8 trio FIRST (matching Blackwell sm_120, including torchvision so PyPI
+#    never pulls a conflicting PyTorch release during step 2):
+#      pip install torch==2.11.0 torchaudio==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+# 2. Install AI separation packages below WITH the cu128 constraint file to preserve the installed
+#    `2.11.0+cu128` / `0.26.0+cu128` builds:
+#      pip install -r requirements-ai.txt -c constraints-ai-cu128.txt
+#    (Basic Pitch is intentionally excluded here because basic-pitch 0.4.0 requires
+#    tensorflow<2.15.1 / Python <=3.11; see requirements-midi.txt and short-path note.)
 # 3. onnxruntime-gpu MUST stay <1.27 with cu128 PyTorch builds (ORT 1.27+ switched to CUDA 13; 1.26.0 tested).
 # 4. Ensure `ffmpeg` (ffmpeg.exe) is on PATH or placed alongside ListenScope/cwd for audio-separator/pydub.
-# 5. Round 2 verified clean GPU separation with stock ORT settings (no temporary sitecustomize.py needed).
+# 5. Verified clean GPU separation with stock ORT settings (no temporary sitecustomize.py needed).
 # 6. Verify afterwards with: python scripts/check_env.py --json --check-ai-packages --write-report
 
 numpy>=1.24.0

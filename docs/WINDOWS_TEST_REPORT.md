@@ -66,3 +66,33 @@ MDX 成功时由工作目录的 `mdx-profile/sitecustomize.py` 给真实 ONNX �
 - **本机实测通过，独立 CPU 环境**。Python 3.11 执行 `-m analysis.midi_transcription --audio <真实 HTDemucs bass.wav> --output-midi <bass.mid> --stem-name bass --json`。补装 psutil，并用 `setuptools<81` 恢复旧版 resampy 需要的 `pkg_resources` 后通过。Basic Pitch 0.4.0 使用 TensorFlow 2.15 CPU，得到 141 个候选音符。当前打包界面的 MIDI 仍指向 GPU Worker 环境，此环境内没有 Basic Pitch。日志 `midi-real-fixed.json`、`midi-real-fixed.stderr`。
 
 四项核心用途均已在本机跑通。短片段 GPU 二轨与四轨的重复测试使用 6 秒分块，运行时起始可用内存约 4.3–4.9 GiB。较低可用内存时 MDX 可触发保护。仍未覆盖完整 30 分钟 QQ 音乐连续捕获、近实时长期播放、逐项对时的切歌重置和打包版 MIDI。
+
+## 第三轮 · Windows 11 交付提交复测（2026-11-14）
+
+- **基线与隔离**：`51f4554f9b70bc795dcf965a590251da694ec621`，独立检出 `work\ListenScope-51f4554`。Windows Build 26300、NVIDIA 616.64、RTX 5060 Ti（NVML 8151 MiB）、16 GB 系统内存。原工作树、虚拟环境和旧 exe 保留。本轮单独设置文件为 `work\round3-log\clean-settings.json`，首次启动前不存在。已缓存模型用于复测，设置 `HF_HUB_OFFLINE=1`。
+- **全新安装的首个阻塞点**：使用 PowerShell 7 运行 `& .\scripts\setup_windows.ps1 -PythonExe $p -MidiPythonExe $m`，其中 `$p` 为 Python 3.12.16 x64，`$m` 为 3.11.18 x64。脚本后半段 `pip install -r requirements-ai.txt` 从 PyPI 解析 torchvision 时要求替换已装的 CUDA PyTorch 为 2.15.0，停止该次安装。用 `-TorchSpec` 指向核验过的官方 cu128 wheel，并设置 `PIP_CONSTRAINT=../round3-log/cuda-constraints.txt`，固定 torch/torchaudio 2.11.0+cu128，指定官方 torchvision 0.26.0+cu128 wheel 后重跑。提交中的安装脚本仍需处理此依赖解析问题。
+- **Core / GPU 本机实测**：`.\.venv-core\Scripts\python.exe -m pip check`、`.\.venv-ai\Scripts\python.exe -m pip check` 均返回 `No broken requirements found`。Core 为 PySide6 6.9.3、NumPy 2.5.4、SciPy 1.18.1、proc-tap 1.1.1。AI 为 torch/torchaudio 2.11.0+cu128、torchvision 0.26.0+cu128、ORT GPU 1.26.0、audio-separator 0.48.0、Demucs 4.1.0、audioread 3.1.0。FFmpeg 位于 `work\bin\ffmpeg.exe`，版本 9.0.2 essentials。实跑 `torch.arange(16,device='cuda').square().sum()` 加 `torch.cuda.synchronize()`，返回 1240，CUDA 12.8、设备能力 (12,0)、编译架构包含 sm_120。日志 `setup-final.log`、`cuda.log`。
+- **Windows pytest 本机实测**：Core 环境运行 `python -m pytest -q --tb=short`，原提交 110 通过、1 失败。失败项目 `test_p1_midi_probe_discovery_settings_and_standalone_routing` 直接执行 POSIX shebang 夹具，Windows 无法像 POSIX 一样启动。仅本检出修改测试夹具，通过 `sys.executable` 运行相同脚本，完整重跑 111 通过（60.61 s）。日志 `pytest.log`、`pytest-fixed.log`。
+- **打包版 QQ 捕获本机实测**：`& .\scripts\build_windows.ps1` 成功，启动 `dist\ListenScopeCore\ListenScope.exe --settings <clean-settings.json>`。从进程下拉框选择 QQMusic.exe PID 12336，看到 `process_loopback`，播放中采样约 −42 至 −34 dBFS，截图样本无丢帧或欠载。捕获历史中选择「选最近 30s」后停止捕获，以同一选择串行跑两模型。两份 `excerpt_input.wav` SHA-256 相同（`A11F185A449158F427AF46DB168892BD2B79215A46F59B65EDBDFE68921D641B`）。
+- **打包版默认 GPU 分轨本机实测**：项目日志两个作业均 `Completed`、`GPU-CUDA`、`oom_occurred=false`、`fallback_used=false`。二轨 MDX `job_3f80a745`，6.0 s 分块、MDX segment 256，耗时 10.656 s，生成 vocals/instrumental。临时 ORT profiling 捕获 2,670 条 CUDAExecutionProvider Node 事件，此次 profile 无 CPU Node 事件。四轨 `job_cf9a04ab`，6.0 s 分块、HTDemucs segment 6 s，耗时 4.921 s，输出 vocals/drums/bass/other。低内存门槛保持 5120/3072/2048 MiB，两次运行均未触发急停。profile 只启用记录，未修改执行提供程序。
+- **资源实测**（MiB，NVML 整卡和进程树约每 150 ms 采一次；系统可用 RAM 含其他应用的波动）：
+
+| 作业 | 主进程峰值 | Worker 自报峰值 | Python 子树峰值 | 最低系统可用 RAM | 整卡显存，启动前 → 峰值 → Worker 退出后 | 退出后系统可用 RAM |
+| --- | ---: | ---: | ---: | ---: | --- | ---: |
+| MDX 二轨 | 301 | 1819 | 1846 | 2425 | 1952 → 4420 → 1948 | 4290 |
+| HTDemucs 四轨 | 305 | 1489 | 1505 | 2811 | 1965 → 3532 → 1952 | 4360 |
+
+两次退出后 Python 子树均为 0 MiB。资源原始采样 `resources.csv`，ORT 文件 `ort-mdx_2026-11-14_10-34-46_686.json`，项目任务日志 `ai_perf_20261114.jsonl`。
+
+- **MIDI 安装本机复现**：初次在深目录安装 TensorFlow 2.15，pip 以 `[Errno 2]` 报错，目标头文件为 `alts_grpc_integrity_only_record_protocol.h`。本机 `LongPathsEnabled=0`。未修改系统选项，改在 `E:\LS51f4554-midi` 的同提交 worktree 运行 `& .\scripts\setup_windows.ps1 -PythonExe $p -MidiPythonExe $m -SkipAI`。Windows PowerShell 5.1 直接读取 UTF-8 无 BOM 脚本出现中文解析错误，实际复跑使用 PowerShell 7。日志 `setup-final.log`、`setup-midi-short.log`。
+
+- **暂停和恢复本机实测通过**：同一次打包版捕获，播放约 −33.7 dBFS，暂停为 −120.0 dBFS，恢复后前台画面为 −35.0 至 −35.5 dBFS，全程显示 `process_loopback`。应用被遮挡期间，读取的可访问性标签短时仍显示暂停值。交叉验证运行 `.\.venv-core\Scripts\python.exe capture_test.py --pid 12336 --duration 5`，恢复后同 PID 约 −33.7 至 −35.8 dBFS、零欠载/过载，保存为 `qq-resume-cli.log`。在 GPU 作业全部结束后，操作设置时误点了一次手动急停，GUI 当时显示可用 RAM 4431 MiB、无活跃 Worker。两次 GPU 作业均未触发资源急停。
+
+
+- **独立 MIDI 环境本机实测通过**。短路径脚本顺利完成，`E:\LS51f4554-midi\.venv-midi\Scripts\python.exe -m pip check` 返回 `No broken requirements found`。实际安装 Basic Pitch 0.4.0、TensorFlow / tensorflow-intel 2.15.0、NumPy 1.26.4、setuptools 79.0.1、mido 1.3.3。TensorFlow `list_physical_devices()` 只报告 CPU:0。相同四轨 bass 的源码 CLI 诊断返回 `backend_used=basic-pitch`。
+- **提交原样打包版 MIDI 阻塞**。在设置页填写独立 Python 3.11 并点击「验证 MIDI 环境」，报 `ImportError: Module use of python312.dll conflicts with this version of Python`，出现在标准库 `import _socket`。PyInstaller 包内 DLL 搜索路径会被子进程继承，初次仅清除该 DLL 目录后仍可复现，因为工作目录和 `PYTHONPATH` 依旧把包内扩展放在外部 3.11 的标准库前。本地修复在启动外部解释器时临时复原 Windows DLL 默认搜索路径，并将打包源码置于外部解释器模块搜索路径末尾，覆盖环境验证及 MIDI 转录。再次运行 `scripts\build_windows.ps1`。日志 `build-midi-fixed.log`、`build-midi-fixed2.log`。参考 [PyInstaller 外部程序启动文档](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html#launching-external-programs)。
+
+
+- **本地修复版 MIDI 本机实测通过**。重建 exe 后，设置页显示 Python 3.11.18、`Basic Pitch CPU 准入: READY`。在 GUI 重新导入原 30 秒 WAV 并重跑 CUDA 四轨 `job_eda7491a`，耗时 4.844 s。导入再导出的 PCM 与首测同为 48 kHz 双声道、1,440,000 帧，峰值差为 1 个 int16 量化单位。点击 BASS 行的「转 MIDI」，GUI 显示 `实际算法: Spotify Basic Pitch CPU (basic-pitch)`、120 个音符。点击「另存 MIDI (.mid)」写入 `outputs\ListenScope-51f4554-bass.mid`，由独立 MIDI Python 的 `mido.MidiFile` 解析为 type 1、2 个轨道、120 个速度大于零的 Note On、29.80 s。转录期主进程峰值 391 MiB、Python 子树峰值 520 MiB、最低系统可用 RAM 5065 MiB、整卡显存峰值 2134 MiB，退出后 Python 子树回到 0 MiB。关闭 exe 并以同一 `--settings` 参数重启，GUI 保留完整 MIDI 路径 `E:\LS51f4554-midi\.venv-midi\Scripts\python.exe`。
+- **最终 Windows 回归**：设置 `QT_QPA_PLATFORM=offscreen` 和 `PYTHONUTF8=1` 后，Core 执行 `python -m pytest -q --tb=short`，111 通过（56.86 s）。在未设 UTF-8 的一次运行中，Windows GBK 重定向无法编码 `capture_test.py` 的 emoji，导致 1 项 CLI 测试失败。修复及测试变更保留在独立检出，安装的依赖约束和短路径是本地绕过方案。
+- **留待下一轮**：完整 30 分钟连续捕获、切歌重置和持续近实时播放。本轮没有对这些项目作出通过结论。

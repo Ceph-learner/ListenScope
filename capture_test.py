@@ -231,6 +231,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    for _stream in (sys.stdout, sys.stderr):
+        _reconf = getattr(_stream, "reconfigure", None)
+        if callable(_reconf):
+            try:
+                _reconf(errors="replace")
+            except Exception:
+                pass
     parser = build_parser()
     args = parser.parse_args()
 

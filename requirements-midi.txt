@@ -1,8 +1,12 @@
 # ListenScope Isolated CPU MIDI Transcription Environment (Python 3.11 x64 recommended)
 #
-# Verified baseline on Windows 11 Python 3.11:
+# Verified baseline on Windows 11 Python 3.11.18 x64 (Round 2-3):
 # - Basic Pitch 0.4.0 requires TensorFlow <= 2.15.0 (max Python 3.11) and `pkg_resources`
 #   provided by setuptools < 81 (imported by resampy).
+# - Windows Long Path Note: TensorFlow 2.15 contains deep C++ header paths (e.g.
+#   `alts_grpc_integrity_only_record_protocol.h`). When Windows `LongPathsEnabled=0`, create the
+#   checkout or `.venv-midi` under a short path such as `E:\LS-midi` (or pass
+#   `-MidiVenvPath E:\LS-midi\.venv-midi` to `scripts\setup_windows.ps1`) to avoid `[Errno 2]`.
 # - Kept strictly isolated from `.venv-core` and `.venv-ai` (Python 3.12 CUDA).
 
 basic-pitch>=0.4.0,<0.5

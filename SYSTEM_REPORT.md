@@ -1,6 +1,6 @@
 # ListenScope 系统与硬件检测报告 (Phase 0)
 
-- **检测时间**: `2026-11-13 14:03:49 UTC`
+- **检测时间**: `2026-11-14 03:15:36 UTC`
 
 ## 1. 目标用户真机硬性规格（不可更改）
 
@@ -27,7 +27,7 @@
 | Git 版本 | `git version 2.39.5` | 已安装 |
 | CPU | `Intel(R) Xeon(R) Platinum 8481C` (2 逻辑核) | Windows PC CPU (实时分析默认 CPU 运行) |
 | 系统总 RAM | `7947.7 MB` (7.76 GB) | **16GB RAM** |
-| 当前可用 RAM (`psutil.available`) | `7202.3 MB` (7.03 GB) | AI 前建议 >= 5GB，低于 3GB 拒绝启动 |
+| 当前可用 RAM (`psutil.available`) | `7244.1 MB` (7.07 GB) | AI 前建议 >= 5GB，低于 3GB 拒绝启动 |
 | NVML (`pynvml`) | `不可用` | 可用 (用于监控 8GB VRAM) |
 | `nvidia-smi` | `未找到` | 可用 |
 | NVIDIA 驱动 | `未检测到` | 支持 CUDA >= 12.8 |
@@ -66,5 +66,5 @@
 
 1. Core 与 AI Worker 环境隔离：Core 仅安装 `requirements-windows.txt`，不引入 PyTorch。
 2. 在 Windows PC 上运行 `python scripts/check_env.py --write-report` 更新本报告为真机实测值。
-3. AI Worker (`.venv-ai`) 推荐使用 Python 3.12 x64：先安装支持 Blackwell `sm_120` 的 PyTorch (`torch==2.11.0` + `torchaudio==2.11.0`, `--index-url https://download.pytorch.org/whl/cu128`)，再安装 `requirements-ai.txt` (`onnxruntime-gpu<1.27` + `audio-separator[gpu]>=0.48.0` + `audioread>=3.1.0` + `demucs>=4.1.0`)。
-4. Basic Pitch MIDI (`.venv-midi`) 推荐使用 Python 3.11 x64 + `requirements-midi.txt`（含 `basic-pitch>=0.4.0,<0.5`、`tensorflow<2.15.1`、`setuptools<81`、`psutil`、`mido`），并在软件设置页指定。
+3. AI Worker (`.venv-ai`) 推荐使用 Python 3.12 x64：先从 `cu128` 索引安装支持 Blackwell `sm_120` 的 PyTorch 三件套 (`torch==2.11.0` + `torchaudio==2.11.0` + `torchvision==0.26.0`, `--index-url https://download.pytorch.org/whl/cu128`)，再带 cu128 版本约束 (`torch==2.11.0+cu128` / `torchaudio==2.11.0+cu128` / `torchvision==0.26.0+cu128`) 安装 `requirements-ai.txt` (`onnxruntime-gpu<1.27` + `audio-separator[gpu]>=0.48.0` + `audioread>=3.1.0` + `demucs>=4.1.0`)，防止 PyPI 解析 `torchvision` 时覆盖已装的 `cu128` 构建。
+4. Basic Pitch MIDI (`.venv-midi`) 推荐使用 Python 3.11 x64 + `requirements-midi.txt`（含 `basic-pitch>=0.4.0,<0.5`、`tensorflow<2.15.1`、`setuptools<81`、`psutil`、`mido`）。若 Windows 未启用长路径 (`LongPathsEnabled=0`)，请使用短路径目录（如 `E:\LS-midi` 或 `-MidiVenvPath E:\LS-midi\.venv-midi`）避免 TensorFlow 头文件 `[Errno 2]`，并在软件设置页指定。

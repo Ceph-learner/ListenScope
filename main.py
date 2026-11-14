@@ -30,6 +30,7 @@ from core.paths import (
     default_work_dir,
     get_bundle_root,
     prepend_ffmpeg_path_env,
+    run_external_python,
     subprocess_no_window_kwargs,
 )
 
@@ -1068,11 +1069,10 @@ class ListenScopeController:
                         "--json",
                     ]
                     try:
-                        proc = subprocess.run(
+                        proc = run_external_python(
                             cmd,
                             cwd=str(bundle_root),
                             env=env,
-                            capture_output=True,
                             text=True,
                             encoding="utf-8",
                             errors="replace",
