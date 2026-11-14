@@ -25,6 +25,7 @@ class PersistedSettings:
     metronome_volume: float = 0.70
     metronome_count_in: bool = False
     transpose_semitones: int = 0
+    auto_reset_on_track_change: bool = True
     schema_version: int = 2
 
 
@@ -39,6 +40,7 @@ def _clamp_practice_values(
     metronome_volume: Any = 0.70,
     metronome_count_in: Any = False,
     transpose_semitones: Any = 0,
+    auto_reset_on_track_change: Any = True,
 ) -> dict[str, Any]:
     try:
         bpm = float(metronome_bpm)
@@ -71,12 +73,15 @@ def _clamp_practice_values(
         semi = 0
     semi = max(-11, min(11, semi))
 
+    auto_reset = bool(auto_reset_on_track_change) if isinstance(auto_reset_on_track_change, bool) else True
+
     return {
         "metronome_bpm": bpm,
         "metronome_beats_per_bar": beats,
         "metronome_volume": vol,
         "metronome_count_in": count_in,
         "transpose_semitones": semi,
+        "auto_reset_on_track_change": auto_reset,
     }
 
 
@@ -152,6 +157,7 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
         metronome_volume=payload.get("metronome_volume", 0.70),
         metronome_count_in=payload.get("metronome_count_in", False),
         transpose_semitones=payload.get("transpose_semitones", 0),
+        auto_reset_on_track_change=payload.get("auto_reset_on_track_change", True),
     )
     return PersistedSettings(
         resource_limits=limits,
@@ -172,6 +178,7 @@ def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None
         metronome_volume=settings.metronome_volume,
         metronome_count_in=settings.metronome_count_in,
         transpose_semitones=settings.transpose_semitones,
+        auto_reset_on_track_change=settings.auto_reset_on_track_change,
     )
     payload = {
         "schema_version": int(settings.schema_version),

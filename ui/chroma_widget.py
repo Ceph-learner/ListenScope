@@ -134,6 +134,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     """Displays 12-bin chroma, chord candidates, bounded transition strip, key candidates, BPM, and pitch readout."""
 
     reset_harmony_requested = QtCore.Signal()
+    auto_reset_toggled = QtCore.Signal(bool)
     metronome_bpm_changed = QtCore.Signal(float)
     metronome_beats_changed = QtCore.Signal(int)
     metronome_overlay_toggled = QtCore.Signal(bool)
@@ -285,14 +286,30 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.transpose_combo.addItem(lbl, semi)
         self.transpose_combo.currentIndexChanged.connect(self._on_transpose_changed)
 
+        self.auto_reset_chk = QtWidgets.QCheckBox("自动切歌重置")
+        self.auto_reset_chk.setChecked(True)
+        self.auto_reset_chk.setToolTip(
+            "监测到当前播放软件通过 Windows 媒体会话 (SMTC) 真实切歌时自动清空和弦/调性/BPM；"
+            "同一首歌暂停、恢复或拖动进度条不会触发误重置"
+        )
+        self.auto_reset_chk.toggled.connect(self.auto_reset_toggled.emit)
+
         self.reset_harmony_btn = QtWidgets.QPushButton("换歌重置 (和弦/调性/BPM)")
         self.reset_harmony_btn.setToolTip("切歌后一键清空和弦轨迹、调性滑动窗口与 BPM 累积，不中断当前捕获")
         self.reset_harmony_btn.clicked.connect(self._on_reset_clicked)
         prog_bar.addWidget(self.chord_progression_lbl, 1)
         prog_bar.addWidget(QtWidgets.QLabel("移调/Capo:"))
         prog_bar.addWidget(self.transpose_combo)
+        prog_bar.addWidget(self.auto_reset_chk)
         prog_bar.addWidget(self.reset_harmony_btn)
         root.addLayout(prog_bar)
+
+        self.track_status_lbl = QtWidgets.QLabel("曲目会话监测 (SMTC): 待启动按进程捕获（也可随时手动点击「换歌重置」）")
+        self.track_status_lbl.setWordWrap(True)
+        self.track_status_lbl.setStyleSheet(
+            "padding: 3px 10px; background: #181C22; border: 1px solid #262C35; border-radius: 4px; color: #9AA4B2; font-size: 11px;"
+        )
+        root.addWidget(self.track_status_lbl)
 
         # Plots splitter: 12-bin Chroma Bar + Bounded Chroma History Heatmap
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
@@ -381,6 +398,19 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.metronome_vol_lbl.setText(f"音量: {int(value)}%")
         self.metronome_volume_changed.emit(float(value) / 100.0)
 
+    def sync_auto_reset_ui(
+        self,
+        *,
+        enabled: bool | None = None,
+        track_status_text: str | None = None,
+    ) -> None:
+        if enabled is not None:
+            self.auto_reset_chk.blockSignals(True)
+            self.auto_reset_chk.setChecked(bool(enabled))
+            self.auto_reset_chk.blockSignals(False)
+        if track_status_text is not None:
+            self.track_status_lbl.setText(track_status_text)
+
     def sync_metronome_ui(
         self,
         *,
@@ -444,6 +474,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.bpm_stab_lbl.setText("节拍稳定度: Unknown")
         self.pitch_lbl.setText("主音高: -")
         self.tuning_bar.set_pitch(None, 0.0)
+        try:
+            self._chroma_img.clear()
+        except Exception:
+            pass
 
     def _render_harmonic_labels(self, snap: AnalysisSnapshot) -> None:
         semi = self._transpose_semitones

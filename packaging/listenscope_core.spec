@@ -13,18 +13,46 @@ Architecture (Section 21):
 from pathlib import Path
 
 try:
-    from PyInstaller.utils.hooks import collect_dynamic_libs
+    from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 except Exception:
+    collect_all = None
     collect_dynamic_libs = None
 
 block_cipher = None
 project_root = Path(SPECPATH).resolve().parent
 
 extra_binaries = []
+extra_datas = []
+extra_hiddenimports = []
 if collect_dynamic_libs is not None:
     for pkg_name in ("proctap", "soundfile", "_soundfile_data"):
         try:
             extra_binaries.extend(collect_dynamic_libs(pkg_name))
+        except Exception:
+            pass
+if collect_all is not None:
+    seen_bins = set()
+    seen_datas = set()
+    for winrt_pkg in (
+        "winrt",
+        "winrt.system",
+        "winrt.windows.foundation",
+        "winrt.windows.foundation.collections",
+        "winrt.windows.media.control",
+    ):
+        try:
+            w_datas, w_bins, w_hidden = collect_all(winrt_pkg)
+            for item in w_datas:
+                if item not in seen_datas:
+                    seen_datas.add(item)
+                    extra_datas.append(item)
+            for item in w_bins:
+                if item not in seen_bins:
+                    seen_bins.add(item)
+                    extra_binaries.append(item)
+            for mod in w_hidden:
+                if mod not in extra_hiddenimports:
+                    extra_hiddenimports.append(mod)
         except Exception:
             pass
 
@@ -44,6 +72,7 @@ a = Analysis(
         (str(project_root / "core"), "core"),
         (str(project_root / "analysis"), "analysis"),
         (str(project_root / "scripts"), "scripts"),
+        *extra_datas,
     ],
     hiddenimports=[
         "proctap",
@@ -55,6 +84,12 @@ a = Analysis(
         "soundfile",
         "mido",
         "pyqtgraph",
+        "winrt",
+        "winrt.system",
+        "winrt.windows.foundation",
+        "winrt.windows.foundation.collections",
+        "winrt.windows.media.control",
+        *extra_hiddenimports,
     ],
     hookspath=[],
     hooksconfig={},

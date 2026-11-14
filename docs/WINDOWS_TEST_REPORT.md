@@ -96,3 +96,52 @@ MDX 成功时由工作目录的 `mdx-profile/sitecustomize.py` 给真实 ONNX �
 - **本地修复版 MIDI 本机实测通过**。重建 exe 后，设置页显示 Python 3.11.18、`Basic Pitch CPU 准入: READY`。在 GUI 重新导入原 30 秒 WAV 并重跑 CUDA 四轨 `job_eda7491a`，耗时 4.844 s。导入再导出的 PCM 与首测同为 48 kHz 双声道、1,440,000 帧，峰值差为 1 个 int16 量化单位。点击 BASS 行的「转 MIDI」，GUI 显示 `实际算法: Spotify Basic Pitch CPU (basic-pitch)`、120 个音符。点击「另存 MIDI (.mid)」写入 `outputs\ListenScope-51f4554-bass.mid`，由独立 MIDI Python 的 `mido.MidiFile` 解析为 type 1、2 个轨道、120 个速度大于零的 Note On、29.80 s。转录期主进程峰值 391 MiB、Python 子树峰值 520 MiB、最低系统可用 RAM 5065 MiB、整卡显存峰值 2134 MiB，退出后 Python 子树回到 0 MiB。关闭 exe 并以同一 `--settings` 参数重启，GUI 保留完整 MIDI 路径 `E:\LS51f4554-midi\.venv-midi\Scripts\python.exe`。
 - **最终 Windows 回归**：设置 `QT_QPA_PLATFORM=offscreen` 和 `PYTHONUTF8=1` 后，Core 执行 `python -m pytest -q --tb=short`，111 通过（56.86 s）。在未设 UTF-8 的一次运行中，Windows GBK 重定向无法编码 `capture_test.py` 的 emoji，导致 1 项 CLI 测试失败。修复及测试变更保留在独立检出，安装的依赖约束和短路径是本地绕过方案。
 - **留待下一轮**：完整 30 分钟连续捕获、切歌重置和持续近实时播放。本轮没有对这些项目作出通过结论。
+
+## 第四轮 · 873db544 Windows 11 复测（2026-11-14）
+
+- 独立短路径 worktree E:/LS873db54，HEAD 873db5440b96e31e799a76fc71d97dabbf24da68。Windows 11 Build 26300，RTX 5060 Ti，驱动 616.64，NVML 8151 MiB，16 GB 系统内存。
+- 正式命令为 PowerShell 7 的 `& .\scripts\setup_windows.ps1 -PythonExe $p -MidiPythonExe $m`，解释器实际为 3.12.16 x64 / 3.11.18 x64。Core pip check 通过。默认在线安装停在下载 2753.2 MB 的 Torch wheel，约六分钟后当前临时 wheel 仍为 0 字节。主动停止前 pip 无原始异常。日志 setup-official.log。后续使用脚本 -TorchSpec 指向上轮已核验官方 wheel，单独记为诊断。脚本自行生成了 torch==2.11.0+cu128、torchaudio==2.11.0+cu128、torchvision==0.26.0+cu128 和 ORT <1.27 的约束。
+- 用同一项目脚本加 -SkipAI 独立安装 MIDI，通过 pip check。Basic Pitch 0.4.0、TensorFlow 2.15.0、setuptools 79.0.1、mido 1.3.3。Core pytest（PYTHONUTF8=1、QT_QPA_PLATFORM=offscreen，`python -m pytest -q --tb=short`）112 项通过（57.77 秒）。`scripts/build_windows.ps1` 打包成功，新 exe SHA-256 AF1821D93D052D4088F8B50851AFBA138E26C984913885F8A08E6065B8C6DCFC。
+- 原始 bass 文件来自 job_eda7491a，SHA-256 F13EC3BECC9D4EC6920EBE916F9C3FB9EB2B0554925BD2BE4A812627FF3869FF。命令行诊断 `python -m analysis.midi_transcription --audio <原始bass.wav> --output-midi <输出.mid> --stem-name bass --json` 返回 basic-pitch。mido 验证 2 轨、120 个 Note On、29.80 秒，与上轮一致。GUI 缺少将已有单轨 WAV 直接载入混音器的入口。
+- GUI 连续捕获开始采样时间为北京时间 22:44:50，QQMusic.exe PID 4728。起点为 313 MiB RSS、4781 MiB 可用、队列 0/64、溢出/欠载 0/0。22:50:06 样本为 340 MiB RSS、3965 MiB 可用、队列 0/64、溢出/欠载 0/0，仍在 process_loopback。
+- 自动切歌：源码未找到曲目切换事件接入。22:45:07 记录 A 曲和弦历史有 12 项，22:45:24 观察到 QQ 窗口已换歌，22:45:29 捕获仍连续且历史仍为 12 项，分析继续滚动。没有观测到自动清空。人工切歌准确秒数与旧曲条目最后退出时间未采到。
+- 手动重置：22:45:45 在 Chroma 页点「换歌重置」。原 12 项历史清掉，随后出现 G#m 单项，BPM 暂为 Unknown；22:46:21 已重新累积 12 项，BPM 90.8。捕获未停止，溢出/欠载仍为 0/0。
+### 分轨与 MIDI：打包版真机实测
+
+- 新 exe：`E:\LS873db54\dist\ListenScopeCore\ListenScope.exe --settings "<本轮日志目录>\settings.json"`。使用新的设置文件及已有模型缓存；Core、AI、MIDI venv 均为本轮新建。FFmpeg 9.0.2，路径为工作区 `work\bin\ffmpeg.exe`。三个 venv 各以自己的 `Scripts\python.exe -m pip check` 运行并通过。AI 环境实际为 Torch / torchaudio 2.11.0+cu128、torchvision 0.26.0+cu128、ORT GPU 1.26.0、audio-separator 0.48.0、Demucs 4.1.0。PyTorch 在设备能力 (12, 0) 上实际执行 `torch.arange(16, device="cuda").square().sum().item()`，得到 1240。
+- 点击「选最近 30s」→「AI 2-Stem 分轨」。`job_e2c2e1ee`，30.0 秒，6.0 秒分块，MDX 模型 segment 256，GPU-CUDA，耗时 9.469 秒，无出错、回退或急停。为核实节点设备，仅在本轮新 AI 环境挂载临时 ORT profiling，未改 Provider 或资源门槛，测试后已移除。profile 共记录 2,670 个 Node 事件，全部为 CUDAExecutionProvider，含 600 次 Conv 和 330 次 MatMul。
+- 随后串行用 GUI 生成临时四轨作业 `job_5ba834ec` 以得到 BASS 行。该作业 30.0 秒，HTDemucs 6 秒分块、模型 segment 6 秒，GPU-CUDA，耗时 4.344 秒，无回退、OOM 或急停。这次四轨用于验证 MIDI 入口，和前一二轨并非同一段取样。
+- 在设置页指定 `E:\LS873db54\.venv-midi\Scripts\python.exe`，验证显示 Basic Pitch CPU 准入 READY。为用上轮逐字节相同的 bass 输入，没有改源码或旧文件：在本轮临时四轨作业目录中将新生成的 bass 文件替换为上一轮 bass 的拷贝，并核对相同 SHA-256。Windows 拒绝移动正在被混音器使用的新 bass 路径，但允许写入副本；本轮生成的 bass 没有保留。原始上轮 WAV 保留未动。原版 GUI 缺少直接将已有单轨 WAV 载入混音器的入口，此步骤是同输入诊断的准备，后续是打包版实际 GUI。
+- 点击 BASS 行「转 MIDI」。状态栏确认由独立解释器启动，结果为 `Spotify Basic Pitch CPU (basic-pitch)`、120 音符。用「另存 MIDI (.mid)」导出 `outputs\ListenScope-873db544-bass.mid`。独立 MIDI Python 的 `mido.MidiFile` 读出 type 1、2 条 MIDI 轨、120 个速度大于 0 的 Note On、29.80 秒。SHA-256 C066A05976940CAC09B50DF2E8A3EB738019CAFE9946F8227C78271E82EDB4CB，与同输入 CLI 诊断的 MIDI 文件逐字节一致。
+
+| GUI 任务 | Worker 自报峰值 RAM | 外部采样 Python 子树峰值 | 最低系统可用 RAM | 整卡显存启动前 → 峰值 → 退出后 | 退出后可用 RAM |
+| --- | ---: | ---: | ---: | --- | ---: |
+| MDX 二轨 | 1818 | 1845 | 3181 | 2090 → 4631 → 2087 | 5078 |
+| HTDemucs 四轨 | 1442 | 1458 | 3503 | 2168 → 3209 → 2102 | 4996 |
+| Basic Pitch CPU | — | 524 | 4409 | 2107 → 2107 → 2106 | 4934 |
+
+单位 MiB。外部用 psutil / NVML 约每 150 ms 采样，Worker 退出后三次 Python 子树均回到 0 MiB。证据：`work\round4-log` 下的 `ort-mdx_*.json`、`ai-perf-round4.jsonl`、`sample-resources.csv` 和 `sample-continued.csv`。默认内存保护维持原值。
+
+### 连续捕获采样：北京时间
+
+| 目标采样点 | 实际时间 | 主进程 RSS (MiB) | 系统可用 (MiB) | 队列 | 溢出/欠载 | 状态 |
+| --- | --- | ---: | ---: | --- | --- | --- |
+| 0 分钟 | 22:44:50 | 313 | 4781 | 0/64 | 0/0 | process_loopback，有信号 |
+| 5 分钟 | 22:50:06 | 340 | 3965 | 0/64 | 0/0 | process_loopback，有信号 |
+| 10 分钟 | 22:54:50 | 319 | 4453 | 0/64 | 0/0 | process_loopback，有信号，MIDI 子进程转录期间 |
+| 15 分钟 | 22:59:57 | 350 | 4902 | 0/64 | 0/0 | process_loopback，有信号 |
+| 20 分钟 | 23:04:52 | 349 | 5181 | 0/64 | 0/0 | process_loopback，有信号 |
+| 25 分钟 | 23:10:23 | 325 | 5394 | 0/64 | 0/0 | process_loopback，有信号 |
+| 30 分钟 | 23:14:53 | 289 | 5906 | 0/64 | 0/0 | process_loopback，有信号（−64.3 dBFS） |
+
+本机从 22:44:50 至 23:14:53 连续捕获满 30 分钟。所有采样点队列均为 0/64、累计溢出/欠载均为 0，没有观测到中断或切到系统捕获。外部采样中 MIDI 导出后主进程短时达 362 MiB，随后经约 349 MiB 平台回落至 289 MiB，未见持续增长。队列为各时点的观测值，无法排除采样点间瞬间非零。
+
+采完后正常关闭本轮 exe（PID 15124），以同一 `--settings` 参数重开（PID 29780）。设置页仍显示 `E:\LS873db54\.venv-midi\Scripts\python.exe`，GPU 已解锁，分块与 Demucs 分段均仍为 6 秒。Core 环境主要版本：PySide6 6.9.3、pyqtgraph 0.14.0、NumPy 2.5.4、sounddevice 0.5.6、psutil 7.2.2、PyInstaller 6.22.3。三套完整版本保存在 `work\round4-log\pip-freeze-*.txt`。
+
+### 回传 Gemini 的问题
+
+1. 默认正式安装首个阻塞点为官方 2.75 GB Torch 下载停滞，未得到原始 pip 异常；在线默认路径尚未通过。短路径加已核验本地 wheel 的诊断路径验证了 cu128 约束正常工作。建议为大 wheel 下载提供本地缓存提示或超时及重试说明。
+2. 当前未实现 QQ 音乐曲目识别与自动重置。切歌后历史留在滚动窗口，手动「换歌重置」通过。
+3. 建议允许把已有单轨 WAV 直接交给 MIDI，以便从先前分轨结果重做转录或复现实验。独立 Python 3.11 的打包版转录与重启保留已通过，此前 DLL 冲突未重现。
+
+持续近实时分轨按要求未测。源码无修改，旧 worktree、旧虚拟环境与旧 exe 保留。

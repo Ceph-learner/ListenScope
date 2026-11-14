@@ -2,11 +2,11 @@
 .SYNOPSIS
     ListenScope Windows 隔离环境一键初始化脚本 (.venv-core + .venv-ai + 可选 .venv-midi).
 .DESCRIPTION
-    已结合 Windows 11 真机验收实测基线更新 (2026-11-14 第三轮):
+    已结合 Windows 11 真机验收实测基线更新 (2026-11-14 第四轮):
       - Core 与 GPU AI 基线解释器: Python 3.12 x64 (实测 3.12.16)
       - AI GPU 实测组合与 cu128 约束:
           torch==2.11.0+cu128, torchaudio==2.11.0+cu128, torchvision==0.26.0+cu128
-          (@ https://download.pytorch.org/whl/cu128)
+          (@ https://download.pytorch.org/whl/cu128 或通过 -CudaWheelDir 优先使用本地已下载官方 wheel)
           安装 requirements-ai.txt 时自动生成并传入 pip 约束文件 (-c / PIP_CONSTRAINT)，锁住已安装的
           +cu128 版本，防止 PyPI 在解析 torchvision 等传递依赖时替换已装的 CUDA PyTorch。
           同时安装 onnxruntime-gpu 1.26.0 (<1.27), audio-separator 0.48.0, demucs 4.1.0, audioread 3.1.0。
@@ -22,7 +22,7 @@
       - 系统内存: 16GB RAM
 
     结构说明:
-      1) .venv-core: 轻量 GUI (PySide6 < 6.10) + WASAPI 捕获 + CPU 实时分析，禁止混入 PyTorch/CUDA。
+      1) .venv-core: 轻量 GUI (PySide6 < 6.10) + WASAPI 捕获 + winrt SMTC + CPU 实时分析，禁止混入 PyTorch/CUDA。
       2) .venv-ai:   独立子进程 AI Worker (PyTorch cu128 三件套 + onnxruntime-gpu<1.27 + demucs + audio-separator + audioread)。
       3) .venv-midi: 独立子进程 CPU MIDI 转录 (Python 3.11 + basic-pitch + tensorflow<2.15.1 + setuptools<81)。
 #>
@@ -34,6 +34,7 @@ param(
     [string]$TorchSpec = "torch==2.11.0",
     [string]$TorchaudioSpec = "torchaudio==2.11.0",
     [string]$TorchvisionSpec = "torchvision==0.26.0",
+    [string]$CudaWheelDir = "",
     [string]$MidiPythonExe = "",
     [string]$MidiVenvPath = "",
     [switch]$SkipAI,
@@ -88,8 +89,92 @@ function Test-PythonSpec {
     return [PSCustomObject]@{
         Version = $ver
         Arch = $arch
+        Major = $maj
+        Minor = $min
         Matches = ($maj -eq $ExpectedMajor -and $min -eq $ExpectedMinor -and $arch -eq "64bit")
     }
+}
+
+function Resolve-LocalCudaWheel {
+    param(
+        [string]$WheelDir,
+        [string]$PkgName,
+        [string]$RequestedSpec,
+        [string]$ExpectedCudaTag,
+        [string]$ExpectedPyTag,
+        [string]$ExpectedPlatTag,
+        [switch]$SkipAbiStrict
+    )
+    if (-not $RequestedSpec) {
+        return $null
+    }
+    if ($RequestedSpec -match "\.whl$" -and (Test-Path $RequestedSpec -PathType Leaf)) {
+        return (Resolve-Path $RequestedSpec).Path
+    }
+
+    $ExpectedVerBase = ""
+    if ($RequestedSpec -match "^[^=<>!~]+==([0-9A-Za-z._-]+?)(?:\+(cu[0-9]+))?$") {
+        $ExpectedVerBase = $Matches[1]
+        if ($Matches[2]) {
+            $ExpectedCudaTag = $Matches[2]
+        }
+    }
+
+    $NormTargetPkg = $PkgName.ToLowerInvariant().Replace("-", "_")
+    $Candidates = Get-ChildItem -Path $WheelDir -Filter "*.whl" -File | Sort-Object Name
+    $MismatchReasons = @()
+
+    foreach ($Whl in $Candidates) {
+        $BaseNoExt = [System.IO.Path]::GetFileNameWithoutExtension($Whl.Name)
+        $Parts = $BaseNoExt.Split("-")
+        if ($Parts.Length -lt 5) {
+            continue
+        }
+        $WhlPkg = $Parts[0].ToLowerInvariant().Replace("-", "_")
+        if ($WhlPkg -ne $NormTargetPkg) {
+            continue
+        }
+
+        if ($Whl.Name -match "%2[Bb]") {
+            throw "检测到 URL 编码文件名 '$($Whl.Name)'（含 %2B）；pip 不接受含 %2B 的本地 wheel 文件名。请将 %2B 重命名为 '+' 后重试（例如 torch-2.11.0+cu128-...whl）。"
+        }
+
+        $WhlVer = $Parts[1]
+        $WhlPyTag = $Parts[$Parts.Length - 3].ToLowerInvariant()
+        $WhlPlatTag = $Parts[$Parts.Length - 1].ToLowerInvariant()
+
+        $WhlVerBase = $WhlVer
+        $WhlCudaTag = ""
+        if ($WhlVer -match "^([^\+]+)\+(.+)$") {
+            $WhlVerBase = $Matches[1]
+            $WhlCudaTag = $Matches[2].ToLowerInvariant()
+        }
+
+        if ($ExpectedVerBase -and ($WhlVerBase -ne $ExpectedVerBase)) {
+            $MismatchReasons += "$($Whl.Name): 版本=$WhlVerBase（期望 $ExpectedVerBase）"
+            continue
+        }
+        if ($ExpectedCudaTag -and ($WhlCudaTag -ne $ExpectedCudaTag.ToLowerInvariant())) {
+            $MismatchReasons += "$($Whl.Name): CUDA标识='$WhlCudaTag'（期望 '+$ExpectedCudaTag'）"
+            continue
+        }
+        if (-not $SkipAbiStrict) {
+            if ($ExpectedPyTag -and ($WhlPyTag -ne $ExpectedPyTag.ToLowerInvariant()) -and ($WhlPyTag -ne "py3")) {
+                $MismatchReasons += "$($Whl.Name): Python标签=$WhlPyTag（期望 $ExpectedPyTag）"
+                continue
+            }
+            if ($ExpectedPlatTag -and ($WhlPlatTag -ne $ExpectedPlatTag.ToLowerInvariant()) -and ($WhlPlatTag -ne "any")) {
+                $MismatchReasons += "$($Whl.Name): 平台=$WhlPlatTag（期望 $ExpectedPlatTag）"
+                continue
+            }
+        }
+        return $Whl.FullName
+    }
+
+    if ($MismatchReasons.Count -gt 0) {
+        throw "在 -CudaWheelDir '$WheelDir' 中发现 '$PkgName' 的 wheel，但版本/CUDA/Python/平台不匹配: $($MismatchReasons -join '; ')"
+    }
+    return $null
 }
 
 if (-not $PythonExe) {
@@ -123,7 +208,13 @@ Invoke-Checked $CorePy @("-m", "pip", "check")
 Invoke-Checked $CorePy @("scripts\check_env.py", "--write-report", "SYSTEM_REPORT.md")
 
 if (-not $SkipAI) {
-    Write-Host "=== [2/3] 初始化隔离 RTX 5060 Ti AI Worker 环境 (.venv-ai) [$TorchSpec $TorchaudioSpec $TorchvisionSpec @ $CudaIndexUrl] ===" -ForegroundColor Green
+    $ExpectedCudaTag = "cu128"
+    if ($CudaIndexUrl -and ($CudaIndexUrl -match "(cu[0-9]+)$")) {
+        $ExpectedCudaTag = $Matches[1].ToLowerInvariant()
+    }
+    $ExpectedPyTag = "cp$($CorePyMeta.Major)$($CorePyMeta.Minor)"
+    $ExpectedPlatTag = "win_amd64"
+
     $AiVenv = Join-Path $RepoRoot ".venv-ai"
     $AiPy = Join-Path $AiVenv "Scripts\python.exe"
     if (-not (Test-Path $AiPy)) {
@@ -131,14 +222,79 @@ if (-not $SkipAI) {
     }
     Invoke-Checked $AiPy @("-m", "pip", "install", "--upgrade", "pip")
 
-    $TorchInstallArgs = @("-m", "pip", "install", $TorchSpec, $TorchaudioSpec)
-    if ($TorchvisionSpec) {
-        $TorchInstallArgs += $TorchvisionSpec
+    $ResolvedCudaWheelDir = ""
+    if ($CudaWheelDir) {
+        if (-not (Test-Path $CudaWheelDir -PathType Container)) {
+            throw "指定的 -CudaWheelDir 目录不存在: $CudaWheelDir"
+        }
+        $ResolvedCudaWheelDir = (Resolve-Path $CudaWheelDir).Path
     }
-    if ($CudaIndexUrl) {
-        $TorchInstallArgs += @("--index-url", $CudaIndexUrl)
+
+    $PackageJobs = @(
+        @{ Name = "torch"; Spec = $TorchSpec },
+        @{ Name = "torchaudio"; Spec = $TorchaudioSpec },
+        @{ Name = "torchvision"; Spec = $TorchvisionSpec }
+    )
+
+    if ($ResolvedCudaWheelDir) {
+        Write-Host "=== [2/3] 初始化隔离 RTX 5060 Ti AI Worker 环境 (.venv-ai) [优先本地 wheel: $ResolvedCudaWheelDir] ===" -ForegroundColor Green
+        $LocalWheels = @()
+        $MissingOnlineSpecs = @()
+        foreach ($Item in $PackageJobs) {
+            if (-not $Item.Spec) {
+                continue
+            }
+            $MatchedWhl = Resolve-LocalCudaWheel `
+                -WheelDir $ResolvedCudaWheelDir `
+                -PkgName $Item.Name `
+                -RequestedSpec $Item.Spec `
+                -ExpectedCudaTag $ExpectedCudaTag `
+                -ExpectedPyTag $ExpectedPyTag `
+                -ExpectedPlatTag $ExpectedPlatTag `
+                -SkipAbiStrict:$AllowUntestedPython
+            if ($MatchedWhl) {
+                $LocalWheels += $MatchedWhl
+            } else {
+                $MissingOnlineSpecs += $Item.Spec
+            }
+        }
+
+        if ($LocalWheels.Count -eq 0) {
+            throw "在 -CudaWheelDir '$ResolvedCudaWheelDir' 中未找到任何匹配的 $ExpectedCudaTag wheel（需要 $TorchSpec / $TorchaudioSpec / $TorchvisionSpec 的 +$ExpectedCudaTag, $ExpectedPyTag, $ExpectedPlatTag 文件）。如仅需在线安装，请移除 -CudaWheelDir。"
+        }
+
+        Write-Host "[cu128 本地 wheel 优先] 命中 $($LocalWheels.Count) 个本地 wheel:" -ForegroundColor Green
+        foreach ($WhlPath in $LocalWheels) {
+            Write-Host "  - $WhlPath" -ForegroundColor Green
+        }
+
+        $TorchInstallArgs = @("-m", "pip", "install", "--find-links", $ResolvedCudaWheelDir) + $LocalWheels
+        if ($MissingOnlineSpecs.Count -gt 0) {
+            Write-Warning "下列包未在 $ResolvedCudaWheelDir 中找到本地 wheel，将回退到 $CudaIndexUrl 在线获取: $($MissingOnlineSpecs -join ', ')"
+            $TorchInstallArgs += $MissingOnlineSpecs
+            if ($CudaIndexUrl) {
+                $TorchInstallArgs += @("--index-url", $CudaIndexUrl)
+            }
+        } else {
+            Write-Host "[cu128 本地 wheel 优先] torch/torchaudio/torchvision 全部从本地 wheel 安装（传递纯 Python 依赖优先复用 $ResolvedCudaWheelDir，缺项将按需联网获取）。" -ForegroundColor Gray
+        }
+        Invoke-Checked $AiPy $TorchInstallArgs
+    } else {
+        Write-Host "=== [2/3] 初始化隔离 RTX 5060 Ti AI Worker 环境 (.venv-ai) [$TorchSpec $TorchaudioSpec $TorchvisionSpec @ $CudaIndexUrl] ===" -ForegroundColor Green
+        $TorchInstallArgs = @("-m", "pip", "install", $TorchSpec, $TorchaudioSpec)
+        if ($TorchvisionSpec) {
+            $TorchInstallArgs += $TorchvisionSpec
+        }
+        if ($CudaIndexUrl) {
+            $TorchInstallArgs += @("--index-url", $CudaIndexUrl)
+        }
+        try {
+            Invoke-Checked $AiPy $TorchInstallArgs
+        } catch {
+            Write-Warning "在线安装 CUDA PyTorch 失败。若遇到 2.75 GB cu128 wheel 下载停滞/超时，可先将官方匹配 wheel 下载到本地目录后传入 `-CudaWheelDir <目录>` 重试（详见 docs\PACKAGING.md）。"
+            throw
+        }
     }
-    Invoke-Checked $AiPy $TorchInstallArgs
 
     # 读取已安装的 torch/torchaudio/torchvision 精确版本 (例如 2.11.0+cu128 / 0.26.0+cu128) 生成 pip 约束，
     # 防止后续从 PyPI 安装 requirements-ai.txt 时因解析 torchvision 等依赖而替换已安装的 cu128 PyTorch。
@@ -168,9 +324,10 @@ if (-not $SkipAI) {
         }
     }
 
+    $CudaSuffixCheck = if ($ExpectedCudaTag) { "+$ExpectedCudaTag" } else { "+cu" }
     Invoke-Checked $AiPy @(
         "-c",
-        "import torch, torchaudio, torchvision; assert '+cu' in torch.__version__, f'Expected CUDA torch build, got {torch.__version__}'; print('Verified cu128 stack:', torch.__version__, torchaudio.__version__, torchvision.__version__)"
+        "import torch, torchaudio, torchvision; exp='$CudaSuffixCheck'; assert all(exp in str(v) for v in (torch.__version__, torchaudio.__version__, torchvision.__version__)), f'Expected {exp} stack, got torch={torch.__version__}, torchaudio={torchaudio.__version__}, torchvision={torchvision.__version__}'; print('Verified CUDA stack:', torch.__version__, torchaudio.__version__, torchvision.__version__)"
     )
     Invoke-Checked $AiPy @("-m", "pip", "check")
     Invoke-Checked $AiPy @("scripts\check_env.py", "--json", "--check-ai-packages", "--write-report", "SYSTEM_REPORT.md")

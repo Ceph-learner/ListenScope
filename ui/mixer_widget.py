@@ -134,6 +134,7 @@ class StemMixerWidget(QtWidgets.QWidget):
     export_mix_requested = QtCore.Signal(str)
     send_stem_to_analysis = QtCore.Signal(str, str)
     transcribe_stem_midi = QtCore.Signal(str, str)
+    open_single_stem_midi_requested = QtCore.Signal(str)  # local single-stem WAV path
     before_play_requested = QtCore.Signal()
     deep_analyze_requested = QtCore.Signal(object)  # dict[stem_name, stem_path]
     export_sheet_requested = QtCore.Signal(str)     # output .md/.csv path
@@ -151,6 +152,8 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._piano_roll_max_sec: float = 0.0
         self._transpose_semitones: int = 0
         self._last_deep_report: Optional[StemDeepAnalysisReport] = None
+        self._last_single_stem_dir: str = ""
+        self._last_midi_stem_name: str = ""
 
         root = QtWidgets.QVBoxLayout(self)
         root.setSpacing(8)
@@ -210,6 +213,10 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.sevenths_chk.setToolTip("离线深度分轨和声识别是否启用 7 和弦与 sus4 模板（实时视图仍保持 12 大/小三和弦标准）")
         self.export_sheet_btn = QtWidgets.QPushButton("导出扒谱报告")
         self.export_sheet_btn.setEnabled(False)
+        self.open_stem_midi_btn = QtWidgets.QPushButton("打开单轨 WAV 转 MIDI...")
+        self.open_stem_midi_btn.setToolTip(
+            "从任意目录选择已有单轨 WAV (如上一轮导出的 bass.wav) 直接载入混音器，并通过独立 Python 3.11 Basic Pitch 转录与导出 MIDI；不中断当前实时捕获"
+        )
 
         self.play_btn.clicked.connect(self._on_play_clicked)
         self.pause_btn.clicked.connect(self.mixer_engine.pause)
@@ -217,6 +224,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.export_btn.clicked.connect(self._on_export_clicked)
         self.deep_analyze_btn.clicked.connect(self._on_deep_analyze_clicked)
         self.export_sheet_btn.clicked.connect(self._on_export_sheet_clicked)
+        self.open_stem_midi_btn.clicked.connect(self._on_open_single_stem_clicked)
 
         ctrl_bar.addWidget(self.play_btn)
         ctrl_bar.addWidget(self.pause_btn)
@@ -226,6 +234,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         ctrl_bar.addWidget(self.deep_analyze_btn)
         ctrl_bar.addWidget(self.sevenths_chk)
         ctrl_bar.addWidget(self.export_sheet_btn)
+        ctrl_bar.addWidget(self.open_stem_midi_btn)
         ctrl_bar.addSpacing(8)
 
         presets = [
@@ -359,10 +368,14 @@ class StemMixerWidget(QtWidgets.QWidget):
             "尚未执行分轨 MIDI 转录（Basic Pitch 默认通过独立 Python 3.11 CPU 环境 `.venv-midi` 仅针对单一分轨运行；点击音符行可跳转至对应时间位置）。"
         )
         self.midi_info_lbl.setWordWrap(True)
+        self.midi_open_stem_btn = QtWidgets.QPushButton("打开单轨 WAV...")
+        self.midi_open_stem_btn.setToolTip("直接打开本地任意目录的单轨 WAV 文件 (如 bass.wav) 载入混音器并转录 MIDI")
+        self.midi_open_stem_btn.clicked.connect(self._on_open_single_stem_clicked)
         self.save_midi_btn = QtWidgets.QPushButton("另存 MIDI (.mid)")
         self.save_midi_btn.setEnabled(False)
         self.save_midi_btn.clicked.connect(self._on_save_midi_clicked)
         midi_hdr.addWidget(self.midi_info_lbl, 1)
+        midi_hdr.addWidget(self.midi_open_stem_btn)
         midi_hdr.addWidget(self.save_midi_btn)
         midi_l.addLayout(midi_hdr)
 
@@ -577,17 +590,54 @@ class StemMixerWidget(QtWidgets.QWidget):
         if file_path:
             self.export_sheet_requested.emit(file_path)
 
+    def _on_open_single_stem_clicked(self) -> None:
+        from core.paths import default_export_dir
+
+        start_dir = self._last_single_stem_dir or str(default_export_dir())
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "打开已有单轨 WAV 进行 MIDI 转录 (如 bass.wav)",
+            start_dir,
+            "WAV Audio (*.wav);;All Files (*)",
+        )
+        if file_path:
+            self._last_single_stem_dir = str(Path(file_path).parent)
+            self.open_single_stem_midi_requested.emit(file_path)
+
     def _on_save_midi_clicked(self) -> None:
         from core.paths import default_export_dir
 
+        stem_base = (self._last_midi_stem_name or "listenscope_stem").strip() or "listenscope_stem"
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "另存转录 MIDI 文件",
-            str(default_export_dir() / "listenscope_stem.mid"),
+            str(default_export_dir() / f"{stem_base}.mid"),
             "MIDI File (*.mid)",
         )
         if file_path:
             self.save_midi_requested.emit(file_path)
+
+    def set_midi_transcribing(self, stem_name: str, midi_python: str = "") -> None:
+        self._last_midi_stem_name = stem_name or "listenscope_stem"
+        self.save_midi_btn.setEnabled(False)
+        self.midi_info_lbl.setStyleSheet(
+            "padding: 6px; background: #1C2026; color: #74C0FC; border: 1px solid #303742; border-radius: 5px;"
+        )
+        if midi_python and Path(midi_python).exists():
+            self.midi_info_lbl.setText(
+                f"⏳ 正在通过独立 MIDI 解释器 ({midi_python}) 对 `{self._last_midi_stem_name}` 执行 Spotify Basic Pitch CPU 转录..."
+            )
+        else:
+            self.midi_info_lbl.setText(
+                f"⏳ 未配置独立 `.venv-midi`，正在后台对 `{self._last_midi_stem_name}` 执行轻量回退 MIDI 转录..."
+            )
+
+    def set_midi_error(self, message: str) -> None:
+        self.save_midi_btn.setEnabled(False)
+        self.midi_info_lbl.setStyleSheet(
+            "padding: 6px; background: #4D1D1D; color: #FF9B9B; border: 1px solid #E03E3E; border-radius: 5px;"
+        )
+        self.midi_info_lbl.setText(f"❌ {message}")
 
     def _apply_preset(self, preset: str) -> None:
         self.mixer_engine.apply_preset(preset)
@@ -636,6 +686,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._chord_segments.clear()
         self._midi_notes.clear()
         self._last_deep_report = None
+        self._last_midi_stem_name = ""
         self._piano_roll_max_sec = 0.0
 
         if self._piano_roll_item is not None:
@@ -740,6 +791,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.sync_playback_position()
 
     def display_midi_result(self, result: MidiTranscriptionResult) -> None:
+        self._last_midi_stem_name = str(result.source_stem_name or self._last_midi_stem_name or "listenscope_stem")
         backend = str(result.backend_used or "unknown")
         if backend == "basic-pitch":
             algo_desc = "Spotify Basic Pitch CPU (basic-pitch)"

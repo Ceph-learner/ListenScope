@@ -10,6 +10,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -58,6 +59,13 @@ from audio.system_loopback import (
 from core.config import AIConfig, AnalysisConfig, AudioConfig, ResourceLimits
 from core.diagnostics import export_diagnostic_bundle
 from core.logging import BoundedMemoryLogHandler, PerformanceLogger
+from core.media_session import (
+    MediaSessionSnapshot,
+    TrackChangeTracker,
+    TrackTrackerDecision,
+    WindowsMediaSessionReader,
+    is_python_winrt_smtc_available,
+)
 from core.models import (
     AIJobProgress,
     AIJobRequest,
@@ -261,9 +269,15 @@ class ListenScopeController:
             maxsize=4
         )
         self._ui_hw_probe_q: queue.Queue[tuple[int, dict[str, Any]]] = queue.Queue(maxsize=4)
+        self._ui_track_decision_q: queue.Queue[TrackTrackerDecision] = queue.Queue(maxsize=32)
         self._probe_seq = 0
         self._stem_generation = 0
         self._practice_dirty = False
+        self._auto_reset_on_track_change = bool(saved_settings.auto_reset_on_track_change)
+        self._track_tracker = TrackChangeTracker(confirm_polls=2)
+        self._track_monitor_stop = threading.Event()
+        self._track_monitor_thread: Optional[threading.Thread] = None
+        self._track_target_process: Optional[str] = None
         self._last_ai_request: Optional[AIJobRequest] = None
         self._latest_deep_report: Optional[StemDeepAnalysisReport] = None
         self._latest_midi_result: Optional[MidiTranscriptionResult] = None
@@ -291,6 +305,7 @@ class ListenScopeController:
         )
         self.window.chroma_widget.set_transpose_semitones(saved_settings.transpose_semitones)
         self.window.mixer_widget.set_transpose_semitones(saved_settings.transpose_semitones)
+        self.window.chroma_widget.sync_auto_reset_ui(enabled=self._auto_reset_on_track_change)
 
         self.window.set_closing_handler(self.shutdown)
         self._connect_signals()
@@ -378,6 +393,7 @@ class ListenScopeController:
         w.ai_separate_requested.connect(self._on_start_ai_separation)
         w.emergency_stop_requested.connect(self._on_emergency_stop)
         w.chroma_widget.reset_harmony_requested.connect(self._on_reset_harmony)
+        w.chroma_widget.auto_reset_toggled.connect(self._on_auto_reset_toggled)
         w.toggle_playback_requested.connect(self._on_toggle_active_playback)
         w.mixer_widget.before_play_requested.connect(self._on_mixer_before_play)
         w.mixer_widget.cancel_ai_requested.connect(self._on_cancel_ai)
@@ -388,6 +404,7 @@ class ListenScopeController:
         w.mixer_widget.save_midi_requested.connect(self._on_save_midi_as)
         w.mixer_widget.send_stem_to_analysis.connect(self._on_send_stem_to_analysis)
         w.mixer_widget.transcribe_stem_midi.connect(self._on_transcribe_stem_midi)
+        w.mixer_widget.open_single_stem_midi_requested.connect(self._on_open_single_stem_midi)
         w.live_widget.benchmark_requested.connect(self._on_live_benchmark)
         w.live_widget.start_requested.connect(self._on_live_start)
         w.live_widget.stop_requested.connect(self._on_live_stop)
@@ -413,6 +430,7 @@ class ListenScopeController:
     def start_capture(self, source_desc: dict[str, Any]) -> None:
         self.stop_capture()
         kind = source_desc.get("kind", "synthetic")
+        target_proc_name: Optional[str] = None
         if kind == "synthetic":
             backend: AudioCaptureBackend = SyntheticSimulationBackend(
                 pattern=str(source_desc.get("pattern", "switching")),
@@ -425,6 +443,7 @@ class ListenScopeController:
         else:
             pid = int(source_desc["pid"])
             name = str(source_desc["name"])
+            target_proc_name = name
             backend = WasapiProcessLoopbackBackend(pid=pid, process_name=name, audio_config=self.audio_config)
             self.window.show_banner_message("")
 
@@ -446,7 +465,16 @@ class ListenScopeController:
         self._drain_thread.start()
         self.window.set_capture_active_ui(True)
 
+        if kind == "synthetic":
+            self._track_tracker.reset(target_process_name=None)
+            self.window.chroma_widget.sync_auto_reset_ui(
+                track_status_text="曲目会话监测 (SMTC): 当前为合成测试信号源（可手动点「换歌重置」或注入 SMTC 模拟测试）"
+            )
+        else:
+            self._start_track_monitor(target_proc_name)
+
     def stop_capture(self) -> None:
+        self._stop_track_monitor()
         self._drain_stop.set()
         if self._capture_backend is not None:
             try:
@@ -458,6 +486,165 @@ class ListenScopeController:
             self._drain_thread.join(timeout=2.0)
         self._drain_thread = None
         self.window.set_capture_active_ui(False)
+        self.window.chroma_widget.sync_auto_reset_ui(
+            track_status_text="曲目会话监测 (SMTC): 已停止捕获（待重新开始后监测）"
+        )
+
+    def _on_auto_reset_toggled(self, enabled: bool) -> None:
+        self._auto_reset_on_track_change = bool(enabled)
+        self._practice_dirty = True
+        active_track = self._track_tracker.active_track
+        if active_track is not None:
+            self.window.chroma_widget.sync_auto_reset_ui(
+                track_status_text=(
+                    f"曲目监测 (SMTC): {active_track.display_label} "
+                    f"(自动切歌重置={'开' if self._auto_reset_on_track_change else '关'})"
+                )
+            )
+        else:
+            self.window.chroma_widget.sync_auto_reset_ui(
+                track_status_text=(
+                    f"曲目会话监测 (SMTC): 自动切歌重置已{'开启' if self._auto_reset_on_track_change else '关闭'}（保留手动重置）"
+                )
+            )
+        self.window.show_banner_message(
+            f"{'✅ 已开启自动切歌重置：仅在 SMTC 确认换歌后清空历史，暂停/恢复/拖动进度条不会触发' if self._auto_reset_on_track_change else '已关闭自动切歌重置（可随时手动点击「换歌重置」）'}"
+        )
+
+    def _start_track_monitor(self, target_process_name: Optional[str]) -> None:
+        self._stop_track_monitor()
+        self._track_target_process = target_process_name
+        self._track_tracker.reset(target_process_name=target_process_name)
+        winrt_ok, backend_name = is_python_winrt_smtc_available()
+        if not winrt_ok:
+            if sys.platform != "win32":
+                msg = "曲目会话监测 (SMTC): 非 Windows 环境未启用 WinRT（可手动「换歌重置」）"
+            else:
+                msg = (
+                    "曲目会话监测 (SMTC): 未检测到 winrt-Windows.Media.Control，"
+                    "仅保留手动「换歌重置」（可用 scripts\\setup_windows.ps1 重装 .venv-core）"
+                )
+            self.window.chroma_widget.sync_auto_reset_ui(track_status_text=msg)
+            return
+
+        self._track_monitor_stop.clear()
+        self.window.chroma_widget.sync_auto_reset_ui(
+            track_status_text=f"曲目监测 (SMTC/{backend_name}): 正在等待 {target_process_name or '播放会话'} 元数据..."
+        )
+        self._track_monitor_thread = threading.Thread(
+            target=self._track_monitor_loop,
+            args=(target_process_name,),
+            name="ListenScope-SmtcTrackWatch",
+            daemon=True,
+        )
+        self._track_monitor_thread.start()
+
+    def _stop_track_monitor(self) -> None:
+        self._track_monitor_stop.set()
+        if self._track_monitor_thread is not None and self._track_monitor_thread.is_alive():
+            self._track_monitor_thread.join(timeout=1.5)
+        self._track_monitor_thread = None
+        self._track_target_process = None
+        while True:
+            try:
+                self._ui_track_decision_q.get_nowait()
+            except queue.Empty:
+                break
+        self._track_tracker.reset(target_process_name=None)
+
+    def _enqueue_track_decision(self, decision: TrackTrackerDecision) -> None:
+        try:
+            self._ui_track_decision_q.put_nowait(decision)
+        except queue.Full:
+            # Make room only for newest decision if consumer lagged
+            try:
+                self._ui_track_decision_q.get_nowait()
+                self._ui_track_decision_q.put_nowait(decision)
+            except Exception:
+                pass
+
+    def _track_monitor_loop(self, _target_process_name: Optional[str]) -> None:
+        reader = WindowsMediaSessionReader()
+        last_status_key: Optional[tuple[Any, ...]] = None
+        try:
+            while not self._track_monitor_stop.is_set() and not getattr(self, "_shutdown_done", False):
+                snaps, _backend = reader.query_sessions()
+                decision = self._track_tracker.update(snaps)
+                cur_sess = decision.selected_session
+                key = (
+                    decision.triggered_reset,
+                    decision.reason,
+                    decision.active_track.title_norm if decision.active_track else "",
+                    decision.active_track.artist_norm if decision.active_track else "",
+                    cur_sess.playback_status if cur_sess else "",
+                    decision.pending_count,
+                )
+                if decision.triggered_reset or key != last_status_key:
+                    last_status_key = key
+                    self._enqueue_track_decision(decision)
+                if self._track_monitor_stop.wait(1.0):
+                    break
+        finally:
+            reader.close()
+
+    def process_media_session_snapshots(
+        self,
+        sessions: list[MediaSessionSnapshot] | MediaSessionSnapshot,
+    ) -> TrackTrackerDecision:
+        """Synchronously evaluate SMTC snapshots and apply guarded reset (used by tests & diagnostics)."""
+        decision = self._track_tracker.update(sessions)
+        self._apply_track_decision(decision)
+        return decision
+
+    def _apply_track_decision(self, decision: TrackTrackerDecision) -> None:
+        track_label = decision.active_track.display_label if decision.active_track else "-"
+        sess_st = decision.selected_session.playback_status if decision.selected_session else "unknown"
+        auto_tag = "开" if self._auto_reset_on_track_change else "关"
+
+        if decision.triggered_reset:
+            prev_label = decision.previous_track.display_label if decision.previous_track else "上一首"
+            if self._auto_reset_on_track_change:
+                self.analysis_worker.reset_harmony()
+                self.window.chroma_widget.clear_progression()
+                self.window.chroma_widget.sync_auto_reset_ui(
+                    track_status_text=f"曲目监测 (SMTC): {track_label} [已自动重置旧曲 {prev_label}]"
+                )
+                self.window.show_banner_message(
+                    f"🎵 检测到切歌（{prev_label} -> {track_label}），已自动重置和弦/调性/BPM 分析历史，实时捕获继续运行。"
+                )
+            else:
+                self.window.chroma_widget.sync_auto_reset_ui(
+                    track_status_text=f"曲目监测 (SMTC): {track_label} [自动重置已关闭，可点右侧手动重置]"
+                )
+            return
+
+        if decision.reason == "no_matching_session":
+            self.window.chroma_widget.sync_auto_reset_ui(
+                track_status_text="曲目监测 (SMTC): 未检测到匹配会话，可继续使用右侧「换歌重置」"
+            )
+        elif decision.reason == "transient_empty_or_changing":
+            base_msg = f"曲目监测 (SMTC): {track_label} (切歌/缓冲过渡中，保留当前历史)" if decision.active_track else "曲目监测 (SMTC): 元数据过渡中，保留当前历史"
+            self.window.chroma_widget.sync_auto_reset_ui(track_status_text=base_msg)
+        elif decision.reason == "same_track_paused":
+            self.window.chroma_widget.sync_auto_reset_ui(
+                track_status_text=f"曲目监测 (SMTC): {track_label} (paused · 同曲暂停不清空历史)"
+            )
+        elif decision.reason == "same_track_resumed":
+            self.window.chroma_widget.sync_auto_reset_ui(
+                track_status_text=f"曲目监测 (SMTC): {track_label} (playing · 恢复播放保留历史)"
+            )
+        elif decision.reason == "same_track_seek":
+            self.window.chroma_widget.sync_auto_reset_ui(
+                track_status_text=f"曲目监测 (SMTC): {track_label} (拖动进度条 · 保留和弦历史)"
+            )
+        elif decision.reason == "pending_confirmation":
+            self.window.chroma_widget.sync_auto_reset_ui(
+                track_status_text=f"曲目监测 (SMTC): 检测到新曲切换，二次确认中 ({decision.pending_count}/{decision.confirm_polls})..."
+            )
+        else:
+            self.window.chroma_widget.sync_auto_reset_ui(
+                track_status_text=f"曲目监测 (SMTC): {track_label} ({sess_st} · 自动重置={auto_tag})"
+            )
 
     def _capture_drain_loop(self, backend: AudioCaptureBackend) -> None:
         while not self._drain_stop.is_set() and backend.is_running:
@@ -1026,13 +1213,108 @@ class ListenScopeController:
         except Exception as exc:
             self.window.show_banner_message(f"另存 MIDI 失败: {exc}")
 
+    @staticmethod
+    def _infer_single_stem_name(wav_path: Path) -> str:
+        stem_raw = wav_path.stem.strip()
+        low = stem_raw.lower()
+        canonical = (
+            "vocals",
+            "bass",
+            "drums",
+            "other",
+            "instrumental",
+            "accompaniment",
+            "guitar",
+            "piano",
+            "melody",
+        )
+        aliases = {
+            "vocal": "vocals",
+            "drum": "drums",
+            "inst": "instrumental",
+            "no_vocals": "instrumental",
+            "keys": "piano",
+        }
+        mix_names = {"mix", "full", "full_mix", "original"}
+        tokens = [tok for tok in re.split(r"[^a-z0-9]+", low) if tok]
+        if low in mix_names or (tokens and tokens[-1] in mix_names):
+            return "mix"
+        if low in canonical:
+            return low
+        if low in aliases:
+            return aliases[low]
+        for tok in reversed(tokens):
+            if tok in canonical:
+                return tok
+            if tok in aliases:
+                return aliases[tok]
+        cleaned = re.sub(r'[<>:"/\\|?*]+', "_", stem_raw).strip(" ._") or "stem"
+        if cleaned.lower() in mix_names:
+            return "mix"
+        return cleaned
+
+    def _resolve_intermediate_midi_path(self, stem_path: Path | str, stem_name: str) -> Path:
+        src = Path(stem_path)
+        try:
+            if src.resolve().is_relative_to(self.work_dir.resolve()):
+                return src.with_suffix(".mid")
+        except Exception:
+            pass
+        safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem_name or src.stem).strip("._") or "stem"
+        midi_dir = self.work_dir / "midi"
+        midi_dir.mkdir(parents=True, exist_ok=True)
+        return midi_dir / f"{safe_stem}_{uuid.uuid4().hex[:8]}.mid"
+
+    def _on_open_single_stem_midi(self, file_path: str) -> None:
+        """Load an arbitrary external single-stem WAV into the mixer and start MIDI transcription non-destructively."""
+        if not file_path:
+            return
+        src = Path(file_path)
+        if not src.exists():
+            msg = f"打开单轨 WAV 失败: 文件不存在 ({src})"
+            self.window.mixer_widget.set_midi_error(msg)
+            self.window.show_banner_message(msg)
+            return
+
+        stem_name = self._infer_single_stem_name(src)
+        if stem_name.lower() in ("mix", "full", "full_mix", "original"):
+            msg = (
+                f"拒绝直接对完整混音 `{src.name}` 转录 MIDI：Basic Pitch 仅建议用于分轨后的单轨 WAV（如 bass.wav / vocals.wav / guitar.wav）。"
+            )
+            self.window.tabs.setCurrentWidget(self.window.mixer_widget)
+            self.window.mixer_widget.analysis_tabs.setCurrentIndex(2)
+            self.window.mixer_widget.set_midi_error(msg)
+            self.window.show_banner_message(msg)
+            return
+
+        try:
+            self._stem_generation += 1
+            self._latest_deep_report = None
+            self._latest_midi_result = None
+            # Intentionally do NOT call stop_capture() or clear ring_buffer: single-stem MIDI works standalone or alongside capture
+            self.window.mixer_widget.load_stem_paths({stem_name: str(src)})
+            if stem_name not in self.window.mixer_widget._rows:
+                raise ValueError(f"无法读取单轨 WAV 音频帧: {src}")
+        except Exception as exc:
+            msg = f"载入单轨 WAV 失败 ({src.name}): {exc}"
+            self.window.tabs.setCurrentWidget(self.window.mixer_widget)
+            self.window.mixer_widget.analysis_tabs.setCurrentIndex(2)
+            self.window.mixer_widget.set_midi_error(msg)
+            self.window.show_banner_message(msg)
+            return
+
+        self.window.tabs.setCurrentWidget(self.window.mixer_widget)
+        self.window.mixer_widget.analysis_tabs.setCurrentIndex(2)
+        self._on_transcribe_stem_midi(stem_name, str(src))
+
     def _on_transcribe_stem_midi(self, stem_name: str, stem_path: str) -> None:
-        out_mid = Path(stem_path).with_suffix(".mid")
+        out_mid = self._resolve_intermediate_midi_path(stem_path, stem_name)
         midi_py = str(self._midi_python_executable or "").strip()
         mock_mode = self.use_mock_ai_for_demo
         bundle_root = get_bundle_root()
         req_gen = self._stem_generation
 
+        self.window.mixer_widget.set_midi_transcribing(stem_name, midi_py)
         if midi_py and Path(midi_py).exists():
             self.window.show_banner_message(
                 f"⏳ 正在通过独立 MIDI 环境执行 `{stem_name}` 转录 ({midi_py})..."
@@ -1225,6 +1507,7 @@ class ListenScopeController:
             metronome_volume=self.metronome.volume,
             metronome_count_in=self.metronome.count_in_enabled,
             transpose_semitones=self.window.chroma_widget.transpose_semitones,
+            auto_reset_on_track_change=self._auto_reset_on_track_change,
         )
 
     def _on_settings_applied(
@@ -1315,6 +1598,12 @@ class ListenScopeController:
                 break
         while True:
             try:
+                dec = self._ui_track_decision_q.get_nowait()
+                self._apply_track_decision(dec)
+            except queue.Empty:
+                break
+        while True:
+            try:
                 self.window.live_widget.set_benchmark_text(self._ui_live_bench_q.get_nowait())
             except queue.Empty:
                 break
@@ -1331,6 +1620,8 @@ class ListenScopeController:
                 if midi_res is not None:
                     self._latest_midi_result = midi_res
                     self.window.display_midi_result(midi_res)
+                elif midi_msg:
+                    self.window.mixer_widget.set_midi_error(midi_msg)
                 if midi_msg:
                     self.window.show_banner_message(midi_msg)
             except queue.Empty:

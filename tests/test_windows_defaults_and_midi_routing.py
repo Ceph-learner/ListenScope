@@ -100,9 +100,13 @@ def test_p0_installer_requirements_and_scripts() -> None:
     for token in (
         "[string]$MidiPythonExe",
         "[string]$MidiVenvPath",
+        "[string]$CudaWheelDir",
         "[string]$TorchvisionSpec",
         "[switch]$SkipMidi",
         "[switch]$AllowUntestedPython",
+        "Resolve-LocalCudaWheel",
+        "%2B",
+        "--find-links",
         "https://download.pytorch.org/whl/cu128",
         "torch==2.11.0",
         "torchaudio==2.11.0",
@@ -118,16 +122,27 @@ def test_p0_installer_requirements_and_scripts() -> None:
     ):
         assert token in ps1
 
+    win_req = (ROOT / "requirements-windows.txt").read_text(encoding="utf-8")
+    for dep in (
+        "winrt-runtime>=3.0",
+        "winrt-Windows.Foundation>=3.0",
+        "winrt-Windows.Foundation.Collections>=3.0",
+        "winrt-Windows.Media.Control>=3.0",
+    ):
+        assert dep in win_req
+
     spec_text = (ROOT / "packaging" / "listenscope_core.spec").read_text(encoding="utf-8")
     assert "requirements-midi.txt" in spec_text
     assert "constraints-ai-cu128.txt" in spec_text
     assert '"basic_pitch"' in spec_text
     assert '"tensorflow"' in spec_text
+    assert '"winrt.windows.media.control"' in spec_text
 
     packaging_doc = (ROOT / "docs" / "PACKAGING.md").read_text(encoding="utf-8")
     assert "constraints-ai-cu128.txt" in packaging_doc
     assert "LongPathsEnabled" in packaging_doc
     assert "-MidiVenvPath" in packaging_doc
+    assert "-CudaWheelDir" in packaging_doc
 
 
 def test_p0_check_env_json_and_gpu_readiness_without_basic_pitch() -> None:
