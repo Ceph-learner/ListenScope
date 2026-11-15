@@ -145,3 +145,14 @@ MDX 成功时由工作目录的 `mdx-profile/sitecustomize.py` 给真实 ONNX �
 3. 建议允许把已有单轨 WAV 直接交给 MIDI，以便从先前分轨结果重做转录或复现实验。独立 Python 3.11 的打包版转录与重启保留已通过，此前 DLL 冲突未重现。
 
 持续近实时分轨按要求未测。源码无修改，旧 worktree、旧虚拟环境与旧 exe 保留。
+
+## 第五轮 Windows 验收（2026-11-15，f03dbf1）
+
+以下摘自该提交的本机第五轮报告与测试日志。测试环境为 Windows 11，RTX 5060 Ti 8 GB，16 GB RAM。30 分钟捕获沿用第四轮基线。
+
+- Core Python 3.12，QT_QPA_PLATFORM=offscreen。执行 python -m pytest -q --tb=short，115 passed in 64.60s。三个环境 pip check、Windows 打包和启动通过。本地 cu128 wheel 优先安装完成。
+- QQ Music 暂停、恢复、跳转和切歌时捕获保持，识别到自动重置横幅。因缺少逐次事件日志，无法排除重复重置。
+- 独立 CPU MIDI 环境从 WAV 生成可解析的 MIDI（120 个有效 Note On）。从历史作业目录读取时覆盖了已有同名 MIDI，源目录隔离不通过。
+- 10 秒离线 MDX 在 6 秒分块下约 7.63 秒，抽样确认 CUDA 节点运行。近实时启动则触发 RAM 保护，未听到非静音输出，首段等待与长期延迟未知。
+- 输出环独立样本写八帧，连续三次读四帧均返回同一组尾帧，且剩余帧数未减少。下一步覆盖持续按序消费，再检查真实输出与资源保护。
+- UI 待办是 Chroma 纵轴拥挤和相对于调性的和弦级数显示。
