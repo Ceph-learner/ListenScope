@@ -11,3 +11,4 @@ Before finishing development, apply [project-handoff](.agents/skills/project-han
 - 不要单方面修改 [DECISIONS](docs/DECISIONS.md) 中的约束，例如三环境隔离、cu128 约束、6 秒分块和分段、单 Worker、5120/3072/2048 MiB 内存阈值、settings schema 2、保留手动「换歌重置」。确需修改时，先取得实测依据，再同步更新文档。
 - 协作安全：不要覆盖他人未提交的修改，不要重置工作区，不要 force push，不要删除 `backup/*` 分支或 `*-backup` 标签，未经授权不要创建 Release。高风险改动走分支和 PR，详见 [DEVELOPMENT](docs/DEVELOPMENT.md)。
 - 完成前至少运行 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`，或说明跳过原因。需要目标机验证的项目，要交付可复制执行的 Windows 复测步骤。
+- 每轮使用 AI Worker 协同后，更新 [AI 协同报告](docs/AI_COLLABORATION.md)。记录任务、准确模型 ID、耗时和可用的用量、建议采纳与误报、测试结果和下一轮调度调整。用量以工具回报为准，原始任务文本、会话标识和凭据留在本机。
