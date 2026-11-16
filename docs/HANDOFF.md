@@ -1,15 +1,14 @@
 # 最新交接
 
-- **结果**：近实时输出缓冲新增溢出丢弃帧数，区分输入跳段、输出重缓冲和声卡报告欠载。计数保留到下一次启动，停止后仍可导出。修复超长写入且两轨长度不一致时分别截尾造成的时间错位。
-- **基线与分支**：PR #7 合入 `main` 的 `1f7516825098e92a298b99c7d1fabd9f354de68f`。本轮代码与测试证据为 `bbbede14fa69090d067449822a3124d0b2314ad5`，分支 `fix/live-output-overwrite-diagnostics`。
-- **数据**：[`_append_output`](../streaming/live_separator.py) 以共同帧数保证人声和伴奏对齐。输出溢出发生时，只计因超出队列容量而丢弃的帧。[诊断导出](../core/diagnostics.py) 把 `output_overwritten_frames` 与其他播放指标放在 `diagnostic_summary.json` 的 `live_separation`。
-- **协作**：[AI 协同报告](AI_COLLABORATION.md) 记录两家 V4.1 Flash 在同一审查任务上的结果与用量。都找到了真实错位，零重试。后续优先让 Worker 负责完整的独立模块方案和关键风险复审，同题用于模型对比。
-- **验证**：Windows，Python 3.11.17，Core 环境位于纯 ASCII 路径，`QT_QPA_PLATFORM=offscreen`。旧代码在 `python -m pytest -q --tb=short tests/test_phase7_9_mixer_live_midi.py -k oversized_stems` 上复现错位。修复后 `python -m pytest -q --tb=short tests/test_phase7_9_mixer_live_midi.py tests/test_phase14_practice_tools_and_diag.py` 通过 19 项，全量 `python -m pytest -q --tb=short` 通过 132 项。
-- **待验证**：目标机的真实 WASAPI 模式、GPU 模型耗时及监听听感。torch 在线下载停滞仍可用本地 wheel，根因待查。
+- **结果**：近实时监听直接填充声卡回调缓冲。回绕分段混音，非默认增益复用最多 4096 帧的工作区，避免在回调内分配整块输出或拼接双轨。FIFO、限幅、欠载静音、预缓冲、源失效保护和诊断计数保持。
+- **基线与分支**：PR #8 的合并提交 `70682d98c8b229328d7fe588fca95f13a8622265`。代码与测试提交 `c7d37b4e79914b0dfee8b035cb1f245e8c86426a`，分支 `perf/live-output-callback`。
+- **协作**：Command Code GOAT V4.1 Flash 先交完整文本方案，OpenCode Go V4 Pro 依赖其结果做并发复审。两项完成，无重试。采纳固定工作区和保留停止保护。详见 [AI 协同报告](AI_COLLABORATION.md)。
+- **验证**：Windows Python 3.11.17，Core 环境位于 ASCII 路径，设置 `QT_QPA_PLATFORM=offscreen`。`python -m pytest -q --tb=short` 通过 133 项。最终 `python -m pytest -q --tb=short tests/test_phase7_9_mixer_live_midi.py tests/test_phase14_practice_tools_and_diag.py` 通过 20 项。
+- **基准**：在本机用模拟 OutputStream、同一目的数组、48 kHz 立体声、非默认增益和固定 1024 帧回绕比较。每版测 5 组各 8000 次回调，耗时中位数 10.50→9.78 微秒。另对 40 次回调测 `tracemalloc` 峰值，50,208→1,364 字节，工作区在回调前分配。
+- **待验证**：目标机真实 WASAPI、GPU 模型耗时和持续监听音质。在线 Torch wheel 停滞仍可用 `-CudaWheelDir` 绕开，根因待查。
 
 ## Windows 目标机复测
 
-1. 用含 `bbbede1` 的提交按 [PACKAGING](PACKAGING.md) 配置 Core、AI 与 MIDI 环境，从源码运行 `.\.venv-core\Scripts\python.exe main.py`。
-2. 在 QQ 音乐选择按进程环回，运行近实时监听至少 60 秒。记下首段等待、暂停和恢复以及听到断续的时刻。停止监听后立即导出诊断包，从 `diagnostic_summary.json` 的 `live_separation` 记录 RTF、缓冲、`input_drop_events`、`output_overwritten_frames`、`playback_rebuffers` 和 `device_underflows`。
-3. 停止或切换捕获，确认监听关闭。切到系统环回，确认基础频谱继续，开启监听时提示使用进程环回。若保护触发，记录原因。
-4. 有条件时一并验证离线分轨第 6 秒和第 12 秒的接缝、历史 MIDI 隔离、Chroma 级数及 Capo、QQ 音乐自动切歌重置计数，将提交、事件时间与结果追加至 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。
+1. 用包含 `c7d37b4` 的提交按 [PACKAGING](PACKAGING.md) 配置 Core、AI 和 MIDI 环境。
+2. 在 QQ 音乐按进程环回监听至少 60 秒，试默认和非默认增益，暂停、恢复并切换捕获。停止后导出诊断，在 `live_separation` 下记录 RTF、缓冲、输入跳段、输出溢出帧、重缓冲和设备欠载。系统环回应提示换回按进程捕获。
+3. 用稳定背景的 18 秒以上 WAV 测离线分轨，试听 6 秒和 12 秒附近。按需并测 MIDI 隔离、Chroma 级数和 SMTC 自动重置，将实际证据追加到 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。
