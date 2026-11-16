@@ -39,7 +39,8 @@ param(
     [string]$MidiVenvPath = "",
     [switch]$SkipAI,
     [switch]$SkipMidi,
-    [switch]$AllowUntestedPython
+    [switch]$AllowUntestedPython,
+    [switch]$CheckCudaWheels
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,15 +104,12 @@ function Resolve-LocalCudaWheel {
         [string]$ExpectedCudaTag,
         [string]$ExpectedPyTag,
         [string]$ExpectedPlatTag,
-        [switch]$SkipAbiStrict
+        [switch]$SkipAbiStrict,
+        [switch]$CheckBaseline
     )
     if (-not $RequestedSpec) {
         return $null
     }
-    if ($RequestedSpec -match "\.whl$" -and (Test-Path $RequestedSpec -PathType Leaf)) {
-        return (Resolve-Path $RequestedSpec).Path
-    }
-
     $ExpectedVerBase = ""
     if ($RequestedSpec -match "^[^=<>!~]+==([0-9A-Za-z._-]+?)(?:\+(cu[0-9]+))?$") {
         $ExpectedVerBase = $Matches[1]
@@ -121,26 +119,38 @@ function Resolve-LocalCudaWheel {
     }
 
     $NormTargetPkg = $PkgName.ToLowerInvariant().Replace("-", "_")
-    $Candidates = Get-ChildItem -Path $WheelDir -Filter "*.whl" -File | Sort-Object Name
+    $ExplicitWheel = $RequestedSpec -match "\.whl$" -and (Test-Path -LiteralPath $RequestedSpec -PathType Leaf)
+    if ($CheckBaseline -and -not $ExplicitWheel -and -not $ExpectedVerBase) {
+        throw "$PkgName 预检需要精确版本（例如 $PkgName==2.11.0）或现有本地 wheel 路径: $RequestedSpec"
+    }
+    $Candidates = if ($ExplicitWheel) {
+        Get-Item -LiteralPath $RequestedSpec
+    } else {
+        Get-ChildItem -LiteralPath $WheelDir -Filter "*.whl" -File | Sort-Object Name
+    }
     $MismatchReasons = @()
 
     foreach ($Whl in $Candidates) {
         $BaseNoExt = [System.IO.Path]::GetFileNameWithoutExtension($Whl.Name)
         $Parts = $BaseNoExt.Split("-")
         if ($Parts.Length -lt 5) {
+            if ($ExplicitWheel) { $MismatchReasons += "$($Whl.Name): wheel 文件名缺少标签" }
             continue
         }
         $WhlPkg = $Parts[0].ToLowerInvariant().Replace("-", "_")
         if ($WhlPkg -ne $NormTargetPkg) {
+            if ($ExplicitWheel) { $MismatchReasons += "$($Whl.Name): 包名不匹配 $PkgName" }
             continue
         }
 
         if ($Whl.Name -match "%2[Bb]") {
-            throw "检测到 URL 编码文件名 '$($Whl.Name)'（含 %2B）；pip 不接受含 %2B 的本地 wheel 文件名。请将 %2B 重命名为 '+' 后重试（例如 torch-2.11.0+cu128-...whl）。"
+            $MismatchReasons += "$($Whl.Name): 文件名含 %2B，请将其重命名为 '+' 后重试"
+            continue
         }
 
         $WhlVer = $Parts[1]
         $WhlPyTag = $Parts[$Parts.Length - 3].ToLowerInvariant()
+        $WhlAbiTag = $Parts[$Parts.Length - 2].ToLowerInvariant()
         $WhlPlatTag = $Parts[$Parts.Length - 1].ToLowerInvariant()
 
         $WhlVerBase = $WhlVer
@@ -159,11 +169,15 @@ function Resolve-LocalCudaWheel {
             continue
         }
         if (-not $SkipAbiStrict) {
-            if ($ExpectedPyTag -and ($WhlPyTag -ne $ExpectedPyTag.ToLowerInvariant()) -and ($WhlPyTag -ne "py3")) {
+            if ($WhlPyTag -ne $ExpectedPyTag -and ($CheckBaseline -or $WhlPyTag -ne "py3")) {
                 $MismatchReasons += "$($Whl.Name): Python标签=$WhlPyTag（期望 $ExpectedPyTag）"
                 continue
             }
-            if ($ExpectedPlatTag -and ($WhlPlatTag -ne $ExpectedPlatTag.ToLowerInvariant()) -and ($WhlPlatTag -ne "any")) {
+            if ($WhlAbiTag -ne $ExpectedPyTag -and ($CheckBaseline -or $WhlAbiTag -notin @("abi3", "none"))) {
+                $MismatchReasons += "$($Whl.Name): ABI标签=$WhlAbiTag（期望 $ExpectedPyTag）"
+                continue
+            }
+            if ($WhlPlatTag -ne $ExpectedPlatTag -and ($CheckBaseline -or $WhlPlatTag -ne "any")) {
                 $MismatchReasons += "$($Whl.Name): 平台=$WhlPlatTag（期望 $ExpectedPlatTag）"
                 continue
             }
@@ -177,23 +191,87 @@ function Resolve-LocalCudaWheel {
     return $null
 }
 
-if (-not $PythonExe) {
-    $Auto312 = Resolve-LauncherPython -SpecVersion "3.12"
-    if ($Auto312) {
-        $PythonExe = $Auto312
-        Write-Host "自动检测到 Python 3.12 x64: $PythonExe" -ForegroundColor Gray
-    } else {
-        $PythonExe = "python"
-    }
+if ($CheckCudaWheels -and (-not $CudaWheelDir -or $SkipAI)) {
+    throw "-CheckCudaWheels 需要指定 -CudaWheelDir，且不能与 -SkipAI 同用。"
 }
 
-$CorePyMeta = Test-PythonSpec -Exe $PythonExe -ExpectedMajor 3 -ExpectedMinor 12
-if (-not $CorePyMeta.Matches) {
-    $msg = "检测到 Core/AI Python 为 $($CorePyMeta.Version) ($($CorePyMeta.Arch))；实测基线为 Python 3.12 x64 (cu128 + onnxruntime-gpu 1.26.0)。"
-    if (-not $AllowUntestedPython) {
-        throw "$msg 请使用 `-PythonExe <Python3.12路径>`（例如 `-PythonExe C:\Python312\python.exe`），或显式加 `-AllowUntestedPython` 跳过版本校验。"
+$ExpectedPyTag = "cp312"
+if (-not $CheckCudaWheels) {
+    if (-not $PythonExe) {
+        $Auto312 = Resolve-LauncherPython -SpecVersion "3.12"
+        if ($Auto312) {
+            $PythonExe = $Auto312
+            Write-Host "自动检测到 Python 3.12 x64: $PythonExe" -ForegroundColor Gray
+        } else {
+            $PythonExe = "python"
+        }
     }
-    Write-Warning $msg
+
+    $CorePyMeta = Test-PythonSpec -Exe $PythonExe -ExpectedMajor 3 -ExpectedMinor 12
+    if (-not $CorePyMeta.Matches) {
+        $msg = "检测到 Core/AI Python 为 $($CorePyMeta.Version) ($($CorePyMeta.Arch))；实测基线为 Python 3.12 x64 (cu128 + onnxruntime-gpu 1.26.0)。"
+        if (-not $AllowUntestedPython) {
+            throw "$msg 请使用 `-PythonExe <Python3.12路径>`（例如 `-PythonExe C:\Python312\python.exe`），或显式加 `-AllowUntestedPython` 跳过版本校验。"
+        }
+        Write-Warning $msg
+    }
+    $ExpectedPyTag = "cp$($CorePyMeta.Major)$($CorePyMeta.Minor)"
+}
+
+$ExpectedCudaTag = "cu128"
+if ($CudaIndexUrl -and ($CudaIndexUrl -match "(cu[0-9]+)$")) {
+    $ExpectedCudaTag = $Matches[1].ToLowerInvariant()
+}
+$ExpectedPlatTag = "win_amd64"
+$ResolvedCudaWheelDir = ""
+$LocalWheels = @()
+$MissingOnlineSpecs = @()
+if (-not $SkipAI -and $CudaWheelDir) {
+    if (-not (Test-Path -LiteralPath $CudaWheelDir -PathType Container)) {
+        throw "指定的 -CudaWheelDir 目录不存在: $CudaWheelDir"
+    }
+    $ResolvedCudaWheelDir = (Resolve-Path -LiteralPath $CudaWheelDir).Path
+    $PackageJobs = @(
+        @{ Name = "torch"; Spec = $TorchSpec },
+        @{ Name = "torchaudio"; Spec = $TorchaudioSpec },
+        @{ Name = "torchvision"; Spec = $TorchvisionSpec }
+    )
+    foreach ($Item in $PackageJobs) {
+        if (-not $Item.Spec) {
+            if ($CheckCudaWheels) { throw "CUDA wheel 预检要求完整三件套，$($Item.Name) 的版本或路径为空。" }
+            continue
+        }
+        $MatchedWhl = Resolve-LocalCudaWheel `
+            -WheelDir $ResolvedCudaWheelDir `
+            -PkgName $Item.Name `
+            -RequestedSpec $Item.Spec `
+            -ExpectedCudaTag $ExpectedCudaTag `
+            -ExpectedPyTag $ExpectedPyTag `
+            -ExpectedPlatTag $ExpectedPlatTag `
+            -SkipAbiStrict:$AllowUntestedPython `
+            -CheckBaseline:$CheckCudaWheels
+        if ($MatchedWhl) {
+            $LocalWheels += $MatchedWhl
+        } else {
+            $MissingOnlineSpecs += $Item.Spec
+        }
+    }
+    if ($LocalWheels.Count -eq 0) {
+        throw "在 -CudaWheelDir '$ResolvedCudaWheelDir' 中未找到匹配的本地 wheel。缺少: $($MissingOnlineSpecs -join ', ')。"
+    }
+}
+if ($CheckCudaWheels) {
+    if ($AllowUntestedPython) {
+        Write-Warning "已按 -AllowUntestedPython 跳过 Python、ABI 与平台标签匹配。"
+    }
+    foreach ($WhlPath in $LocalWheels) {
+        Write-Host "匹配: $([System.IO.Path]::GetFileName($WhlPath))"
+    }
+    if ($MissingOnlineSpecs.Count -gt 0) {
+        throw "CUDA wheel 预检未通过。缺少本地 wheel: $($MissingOnlineSpecs -join ', ')。"
+    }
+    Write-Host "CUDA wheel 文件名预检通过。此步骤未检查文件内容或传递依赖。" -ForegroundColor Green
+    return
 }
 
 Write-Host "=== [1/3] 初始化 Core 桌面环境 (.venv-core) [$($CorePyMeta.Version) $($CorePyMeta.Arch)] ===" -ForegroundColor Green
@@ -208,13 +286,6 @@ Invoke-Checked $CorePy @("-m", "pip", "check")
 Invoke-Checked $CorePy @("scripts\check_env.py", "--write-report", "SYSTEM_REPORT.md")
 
 if (-not $SkipAI) {
-    $ExpectedCudaTag = "cu128"
-    if ($CudaIndexUrl -and ($CudaIndexUrl -match "(cu[0-9]+)$")) {
-        $ExpectedCudaTag = $Matches[1].ToLowerInvariant()
-    }
-    $ExpectedPyTag = "cp$($CorePyMeta.Major)$($CorePyMeta.Minor)"
-    $ExpectedPlatTag = "win_amd64"
-
     $AiVenv = Join-Path $RepoRoot ".venv-ai"
     $AiPy = Join-Path $AiVenv "Scripts\python.exe"
     if (-not (Test-Path $AiPy)) {
@@ -222,47 +293,8 @@ if (-not $SkipAI) {
     }
     Invoke-Checked $AiPy @("-m", "pip", "install", "--upgrade", "pip")
 
-    $ResolvedCudaWheelDir = ""
-    if ($CudaWheelDir) {
-        if (-not (Test-Path $CudaWheelDir -PathType Container)) {
-            throw "指定的 -CudaWheelDir 目录不存在: $CudaWheelDir"
-        }
-        $ResolvedCudaWheelDir = (Resolve-Path $CudaWheelDir).Path
-    }
-
-    $PackageJobs = @(
-        @{ Name = "torch"; Spec = $TorchSpec },
-        @{ Name = "torchaudio"; Spec = $TorchaudioSpec },
-        @{ Name = "torchvision"; Spec = $TorchvisionSpec }
-    )
-
     if ($ResolvedCudaWheelDir) {
         Write-Host "=== [2/3] 初始化隔离 RTX 5060 Ti AI Worker 环境 (.venv-ai) [优先本地 wheel: $ResolvedCudaWheelDir] ===" -ForegroundColor Green
-        $LocalWheels = @()
-        $MissingOnlineSpecs = @()
-        foreach ($Item in $PackageJobs) {
-            if (-not $Item.Spec) {
-                continue
-            }
-            $MatchedWhl = Resolve-LocalCudaWheel `
-                -WheelDir $ResolvedCudaWheelDir `
-                -PkgName $Item.Name `
-                -RequestedSpec $Item.Spec `
-                -ExpectedCudaTag $ExpectedCudaTag `
-                -ExpectedPyTag $ExpectedPyTag `
-                -ExpectedPlatTag $ExpectedPlatTag `
-                -SkipAbiStrict:$AllowUntestedPython
-            if ($MatchedWhl) {
-                $LocalWheels += $MatchedWhl
-            } else {
-                $MissingOnlineSpecs += $Item.Spec
-            }
-        }
-
-        if ($LocalWheels.Count -eq 0) {
-            throw "在 -CudaWheelDir '$ResolvedCudaWheelDir' 中未找到任何匹配的 $ExpectedCudaTag wheel（需要 $TorchSpec / $TorchaudioSpec / $TorchvisionSpec 的 +$ExpectedCudaTag, $ExpectedPyTag, $ExpectedPlatTag 文件）。如仅需在线安装，请移除 -CudaWheelDir。"
-        }
-
         Write-Host "[cu128 本地 wheel 优先] 命中 $($LocalWheels.Count) 个本地 wheel:" -ForegroundColor Green
         foreach ($WhlPath in $LocalWheels) {
             Write-Host "  - $WhlPath" -ForegroundColor Green

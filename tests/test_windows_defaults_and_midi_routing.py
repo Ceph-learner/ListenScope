@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -143,6 +144,94 @@ def test_p0_installer_requirements_and_scripts() -> None:
     assert "LongPathsEnabled" in packaging_doc
     assert "-MidiVenvPath" in packaging_doc
     assert "-CudaWheelDir" in packaging_doc
+
+
+@pytest.fixture
+def cuda_wheel_setup(tmp_path: Path):
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell 7 is required to exercise setup_windows.ps1")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "setup_windows.ps1"
+    shutil.copyfile(ROOT / "scripts" / script.name, script)
+    wheels = tmp_path / "local wheels [official]"
+    wheels.mkdir()
+    stub = tmp_path / "python stub.ps1"
+    stub.write_text(
+        'if ($args[0] -eq "-c") { "3.12.16|64bit"; exit 0 }\n'
+        'throw "Unexpected installation call"\n',
+        encoding="utf-8",
+    )
+
+    def run(wheel_dir: Path, *flags: str, python: Path = stub):
+        result = subprocess.run(
+            [pwsh, "-NoProfile", "-NonInteractive", "-File", str(script),
+             "-CudaWheelDir", str(wheel_dir), "-PythonExe", str(python), *flags],
+            capture_output=True, text=True, encoding="utf-8", timeout=20,
+        )
+        assert not list(tmp_path.glob(".venv-*"))
+        return result
+
+    return wheels, run
+
+
+def _write_fake_cuda_wheels(wheel_dir: Path, *, torch_tag: str = "cp312-cp312-win_amd64") -> list[str]:
+    names = [
+        f"torch-2.11.0+cu128-{torch_tag}.whl",
+        "torchaudio-2.11.0+cu128-cp312-cp312-win_amd64.whl",
+        "torchvision-0.26.0+cu128-cp312-cp312-win_amd64.whl",
+    ]
+    for name in names:
+        (wheel_dir / name).touch()
+    return names
+
+
+def test_cuda_wheel_preflight_checks_complete_local_names_without_python(cuda_wheel_setup, tmp_path) -> None:
+    wheels, run = cuda_wheel_setup
+    names = _write_fake_cuda_wheels(wheels)
+    (wheels / names[0].replace("+", "%2B")).touch()
+    result = run(wheels, "-CheckCudaWheels", python=tmp_path / "python does not exist.exe")
+    assert result.returncode == 0, result.stderr
+    assert all(name in result.stdout for name in names)
+
+
+def test_cuda_wheel_preflight_identifies_missing_package(cuda_wheel_setup) -> None:
+    wheels, run = cuda_wheel_setup
+    names = _write_fake_cuda_wheels(wheels)
+    (wheels / names[-1]).unlink()
+    result = run(wheels, "-CheckCudaWheels")
+    assert result.returncode != 0 and "torchvision==0.26.0" in result.stderr
+
+    # Normal setup still admits a partial set and reaches Core installation.
+    normal = run(wheels)
+    assert normal.returncode != 0 and "Unexpected installation call" in normal.stderr
+
+
+@pytest.mark.parametrize("bad_tag", ["cp312-cp311-win_amd64", "cp312-cp312-win_arm64"])
+def test_cuda_wheel_preflight_rejects_incompatible_filename_tags(cuda_wheel_setup, bad_tag: str) -> None:
+    wheels, run = cuda_wheel_setup
+    names = _write_fake_cuda_wheels(wheels, torch_tag=bad_tag)
+    result = run(wheels, "-CheckCudaWheels")
+    assert result.returncode != 0 and names[0] in result.stderr
+
+
+def test_cuda_wheel_preflight_validates_explicit_file_and_version(cuda_wheel_setup) -> None:
+    wheels, run = cuda_wheel_setup
+    names = _write_fake_cuda_wheels(wheels)
+    invalid = wheels / names[0].replace("+cu128", "+cu124")
+    invalid.touch()
+    result = run(wheels, "-CheckCudaWheels", "-TorchSpec", str(invalid))
+    assert result.returncode != 0 and "+cu124" in result.stderr
+    result = run(wheels, "-CheckCudaWheels", "-TorchSpec", "torch>=2.10")
+    assert result.returncode != 0 and "torch>=2.10" in result.stderr
+
+
+def test_cuda_wheel_validation_precedes_normal_environment_install(cuda_wheel_setup) -> None:
+    wheels, run = cuda_wheel_setup
+    result = run(wheels / "missing directory")
+    assert result.returncode != 0
+    assert "missing directory" in result.stderr and "Unexpected installation call" not in result.stderr
 
 
 def test_p0_check_env_json_and_gpu_readiness_without_basic_pitch() -> None:
