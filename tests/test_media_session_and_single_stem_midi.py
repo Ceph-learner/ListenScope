@@ -99,9 +99,11 @@ def _make_chord_snapshot(chord: str) -> AnalysisSnapshot:
     )
 
 
+@pytest.mark.parametrize("historical_job", [False, True], ids=["external", "historical-job"])
 def test_single_stem_wav_direct_midi_export_and_guards(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    historical_job: bool,
 ) -> None:
     app = _get_app()
 
@@ -113,10 +115,15 @@ def test_single_stem_wav_direct_midi_export_and_guards(
     assert main_mod.ListenScopeController._infer_single_stem_name(Path("full_mix.wav")) == "mix"
     assert main_mod.ListenScopeController._infer_single_stem_name(Path("mix.wav")) == "mix"
 
-    # External directory completely outside work_dir (e.g., last round's saved bass.wav)
-    ext_dir = tmp_path / "previous_round_outputs"
-    ext_bass = _write_bass_wav(ext_dir / "ListenScope-873db544-bass.wav", duration_sec=1.5, freq_hz=110.0)
-    ext_mix = _write_bass_wav(ext_dir / "full_mix.wav", duration_sec=1.0, freq_hz=220.0)
+    work_dir = tmp_path / "work"
+    src_dir = work_dir / "stems" / "old_job" if historical_job else tmp_path / "previous_round_outputs"
+    src_bass = _write_bass_wav(src_dir / "ListenScope-873db544-bass.wav", duration_sec=1.5, freq_hz=110.0)
+    src_mix = _write_bass_wav(src_dir / "full_mix.wav", duration_sec=1.0, freq_hz=220.0)
+    previous_midi = src_bass.with_suffix(".mid")
+    original = mido.MidiFile()
+    original.add_track().append(mido.Message("note_on", note=64))
+    original.save(str(previous_midi))
+    previous_bytes = previous_midi.read_bytes()
 
     invoked_log = tmp_path / "single_stem_midi_calls.jsonl"
     stub_midi_py = tmp_path / "stub_midi311.py"
@@ -172,17 +179,17 @@ def test_single_stem_wav_direct_midi_export_and_guards(
 
     monkeypatch.setattr(subprocess, "run", run_midi_stub)
 
-    work_dir = tmp_path / "work"
+    monkeypatch.chdir(tmp_path)
     ctrl = main_mod.ListenScopeController(
         use_mock_ai_for_demo=False,
         ai_python_executable="",
         midi_python_executable=str(stub_midi_py),
-        work_dir=work_dir,
+        work_dir=work_dir.relative_to(tmp_path),
         settings_path=tmp_path / "settings.json",
     )
     try:
         ctrl._timer.stop()
-        # Start synthetic live capture and fill ring buffer before opening external bass.wav
+        # Start synthetic live capture and fill the ring before opening the WAV.
         ctrl.start_capture({"kind": "synthetic", "pattern": "switching"})
         pre_t = np.arange(24000, dtype=np.float32) / 48000.0
         tone = 0.2 * np.sin(2.0 * np.pi * 220.0 * pre_t)
@@ -195,8 +202,7 @@ def test_single_stem_wav_direct_midi_export_and_guards(
         assert ctrl.window.mixer_widget.open_stem_midi_btn.isEnabled() is True
         assert ctrl.window.mixer_widget.midi_open_stem_btn.isEnabled() is True
 
-        # Open external bass.wav directly for MIDI transcription
-        ctrl._on_open_single_stem_midi(str(ext_bass))
+        ctrl._on_open_single_stem_midi(str(src_bass))
         _wait_until(app, lambda: not ctrl._ui_midi_result_q.empty() or ctrl._latest_midi_result is not None)
         ctrl._on_ui_tick()
         app.processEvents()
@@ -205,9 +211,8 @@ def test_single_stem_wav_direct_midi_export_and_guards(
         assert ctrl._capture_backend is not None and ctrl._capture_backend.is_running
         assert ctrl.ring_buffer.total_written_frames >= pre_written
 
-        # External source directory must NOT be polluted by intermediate .mid files
-        ext_files = sorted(p.name for p in ext_dir.iterdir())
-        assert ext_files == ["ListenScope-873db544-bass.wav", "full_mix.wav"]
+        assert previous_midi.read_bytes() == previous_bytes
+        assert set(src_dir.iterdir()) == {src_bass, src_mix, previous_midi}
 
         # Intermediate MIDI placed inside work_dir/midi/
         res = ctrl._latest_midi_result
@@ -222,7 +227,8 @@ def test_single_stem_wav_direct_midi_export_and_guards(
         # Routed through configured external midi_python with canonical stem_name='bass'
         recs = [json.loads(ln) for ln in invoked_log.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(recs) == 1
-        assert Path(recs[0]["audio"]) == ext_bass
+        assert Path(recs[0]["audio"]) == src_bass
+        assert Path(recs[0]["out"]) == res.output_midi_path
         assert recs[0]["stem"] == "bass"
 
         # UI updated: Tab 3 -> MIDI sub-tab, explicit Basic Pitch badge, Piano Roll & Save MIDI enabled
@@ -241,8 +247,21 @@ def test_single_stem_wav_direct_midi_export_and_guards(
         note_ons = [msg for tr in mf_read.tracks for msg in tr if msg.type == "note_on" and msg.velocity > 0]
         assert len(note_ons) == 2
 
+        # A second conversion through the loaded-stem action gets its own file.
+        first_output_bytes = res.output_midi_path.read_bytes()
+        ctrl._on_transcribe_stem_midi("bass", str(src_bass.relative_to(tmp_path)))
+        _wait_until(app, lambda: not ctrl._ui_midi_result_q.empty())
+        ctrl._on_ui_tick()
+        second = ctrl._latest_midi_result
+        assert second is not None and second.output_midi_path is not None
+        assert second.output_midi_path.parent == res.output_midi_path.parent
+        assert second.output_midi_path != res.output_midi_path
+        assert second.output_midi_path.exists()
+        assert res.output_midi_path.read_bytes() == first_output_bytes
+        assert previous_midi.read_bytes() == previous_bytes
+
         # Reject explicit full-mix filenames gracefully without crashing or clearing ring buffer
-        ctrl._on_open_single_stem_midi(str(ext_mix))
+        ctrl._on_open_single_stem_midi(str(src_mix))
         app.processEvents()
         assert "拒绝直接对完整混音" in ctrl.window.mixer_widget.midi_info_lbl.text()
         assert ctrl._capture_backend is not None and ctrl._capture_backend.is_running
