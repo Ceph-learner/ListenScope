@@ -12,7 +12,7 @@ import zipfile
 
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
 from core.logging import BoundedMemoryLogHandler, PerformanceLogger
-from core.models import ResourceSnapshot, SystemHardwareReport
+from core.models import LiveSeparationMetrics, ResourceSnapshot, SystemHardwareReport
 from core.paths import find_ffmpeg_executable
 from core.system_probe import generate_system_report_markdown
 
@@ -61,6 +61,7 @@ def export_diagnostic_bundle(
     perf_logger: Optional[PerformanceLogger] = None,
     log_handler: Optional[BoundedMemoryLogHandler] = None,
     settings_path: Optional[Path] = None,
+    live_separation_metrics: Optional[LiveSeparationMetrics] = None,
     max_jsonl_bytes: int = 262144,
 ) -> Path:
     """Bundle hardware report, bounded logs, perf records, and sanitized settings into a compact ZIP."""
@@ -93,6 +94,18 @@ def export_diagnostic_bundle(
         "midi_python_executable": _sanitize_text(str(midi_python_executable or "")),
         "ffmpeg_executable": _sanitize_text(find_ffmpeg_executable() or ""),
     }
+    if live_separation_metrics is not None:
+        live = live_separation_metrics
+        summary_payload["live_separation"] = {
+            "active": live.active,
+            "rtf": live.rtf,
+            "latency_ms": live.latency_ms,
+            "buffer_seconds": live.buffer_seconds,
+            "max_buffer_seconds": live.max_buffer_seconds,
+            "input_drop_events": live.dropped_chunks,
+            "playback_rebuffers": live.playback_rebuffers,
+            "device_underflows": live.device_underflows,
+        }
     summary_json = _sanitize_text(json.dumps(summary_payload, ensure_ascii=False, indent=2, default=str))
 
     recent_logs = _sanitize_text("\n".join(log_handler.recent())) if log_handler is not None else ""

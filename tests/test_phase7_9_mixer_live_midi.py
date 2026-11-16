@@ -69,6 +69,9 @@ def test_experimental_live_separator_bounded_drop_and_auto_stop_on_resource_warn
     assert live.is_active is False  # Strictly disabled by default
 
     try:
+        live._output_primed = True
+        live._pull_playback_block(4, device_underflow=True)
+        live._latest_rtf = 0.8
         ok, _ = live.start(
             model_id="mdx_low_vram_2stem",
             use_gpu=False,
@@ -77,6 +80,8 @@ def test_experimental_live_separator_bounded_drop_and_auto_stop_on_resource_warn
         )
         assert ok is True
         assert live.is_active is True
+        metrics = live.latest_metrics()
+        assert (metrics.playback_rebuffers, metrics.device_underflows, metrics.rtf) == (0, 0, 0.0)
 
         # Push > max_buffer_seconds immediately to force bounded drop protection
         t = np.arange(48000 * 5, dtype=np.float32) / 48000.0
@@ -152,12 +157,16 @@ def test_live_playback_primes_again_after_underrun(live_output_ring) -> None:
     pcm = np.full((3, 2), 0.25, dtype=np.float32)
     silent = np.zeros((4, 2), dtype=np.float32)
     live._append_output(pcm, pcm)
-    np.testing.assert_array_equal(live._pull_playback_block(4), silent)
+    np.testing.assert_array_equal(live._pull_playback_block(4, device_underflow=True), silent)
+    metrics = live.latest_metrics()
+    assert (metrics.playback_rebuffers, metrics.device_underflows) == (0, 1)
     live._append_output(pcm, pcm)
     np.testing.assert_array_equal(live._pull_playback_block(4), np.full((4, 2), 0.5))
     np.testing.assert_array_equal(live._pull_playback_block(4), np.array([[0.5, 0.5]] * 2 + [[0, 0]] * 2))
     live._append_output(pcm, pcm)
     np.testing.assert_array_equal(live._pull_playback_block(4), silent)
+    np.testing.assert_array_equal(live._pull_playback_block(4), silent)
+    assert live.latest_metrics().playback_rebuffers == 1
     live._append_output(pcm, pcm)
     np.testing.assert_array_equal(live._pull_playback_block(4), np.full((4, 2), 0.5))
 
@@ -175,6 +184,7 @@ def test_live_output_open_mutes_and_discards_if_capture_changes(live_output_ring
     live._active = True
     source_current = True
     calls = []
+    initial = np.empty((4, 2), dtype=np.float32)
     rendered = np.empty((4, 2), dtype=np.float32)
 
     class FakeStream:
@@ -183,8 +193,9 @@ def test_live_output_open_mutes_and_discards_if_capture_changes(live_output_ring
 
         def start(self):
             nonlocal source_current
+            self.callback(initial, len(initial), None, SimpleNamespace(output_underflow=True))
             source_current = False
-            self.callback(rendered, len(rendered), None, None)
+            self.callback(rendered, len(rendered), None, SimpleNamespace(output_underflow=True))
 
         def stop(self):
             calls.append("stop")
@@ -196,9 +207,11 @@ def test_live_output_open_mutes_and_discards_if_capture_changes(live_output_ring
     live._append_output(pcm, pcm)
     monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=FakeStream))
     live._ensure_output_stream(lambda: source_current)
+    np.testing.assert_array_equal(initial, np.full((4, 2), 0.5))
     np.testing.assert_array_equal(rendered, np.zeros_like(rendered))
     assert calls == ["stop", "close"] and live._stream is None
-    assert live._out_available == 8
+    assert live._out_available == 4
+    assert live.latest_metrics().device_underflows == 1
 
 
 def test_live_ignores_duplicate_results_and_drops_overlap_across_gap(live_output_ring, monkeypatch) -> None:

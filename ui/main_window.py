@@ -166,13 +166,17 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         self.lbl_rtf = QtWidgets.QLabel("RTF: 0.000")
         self.lbl_mem = QtWidgets.QLabel("RAM (主/Worker): -")
         self.lbl_vram = QtWidgets.QLabel("空闲 VRAM / GPU%: -")
-        self.lbl_buf = QtWidgets.QLabel("实时缓冲 / 丢弃块: 0.0 / 6.0 s (Dropped=0)")
+        self.lbl_buf = QtWidgets.QLabel("输出缓冲: 0.00 s")
+        self.lbl_playback_health = QtWidgets.QLabel("输入跳段 0 次 | 输出重缓冲 0 次 | 声卡报告欠载 0 次")
+        self.lbl_playback_health.setWordWrap(True)
+        self.lbl_playback_health.setToolTip("同一次分轨内累计。启动预缓冲不计入输出重缓冲。声卡欠载按驱动报告统计。")
         met_grid.addWidget(self.lbl_state, 0, 0, 1, 2)
         met_grid.addWidget(self.lbl_latency, 1, 0)
         met_grid.addWidget(self.lbl_rtf, 1, 1)
         met_grid.addWidget(self.lbl_mem, 2, 0)
         met_grid.addWidget(self.lbl_vram, 2, 1)
         met_grid.addWidget(self.lbl_buf, 3, 0, 1, 2)
+        met_grid.addWidget(self.lbl_playback_health, 4, 0, 1, 2)
         root.addWidget(met_box)
         root.addStretch(1)
 
@@ -227,7 +231,10 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         util_txt = f"{m.gpu_util_pct:.0f}%" if m.gpu_util_pct is not None else "N/A"
         self.lbl_vram.setText(f"空闲 VRAM={vram_txt} | GPU={util_txt}")
         self.lbl_buf.setText(
-            f"缓冲: {m.buffer_seconds:.2f} / {m.max_buffer_seconds:.1f} s | 丢弃块(Bounded Drop): {m.dropped_chunks}"
+            f"输出缓冲: {m.buffer_seconds:.2f} / {m.max_buffer_seconds:.1f} s"
+        )
+        self.lbl_playback_health.setText(
+            f"输入跳段 {m.dropped_chunks} 次 | 输出重缓冲 {m.playback_rebuffers} 次 | 声卡报告欠载 {m.device_underflows} 次"
         )
 
 
