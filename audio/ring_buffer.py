@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from math import gcd
 from operator import index
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -267,102 +268,86 @@ class FixedRingBuffer:
         cap_sec = float(self.audio_config.ring_buffer_seconds)
         limit_sec = cap_sec if max_seconds is None else min(cap_sec, max(0.5, float(max_seconds)))
 
-        total_dst_frames = 0
-        max_dst_frames = int(round(limit_sec * self.sample_rate))
-        truncated = False
-        cleared = False
+        max_dst_frames = min(self.capacity_frames, int(round(limit_sec * self.sample_rate)))
+
+        def import_frames(
+            read: Callable[[int], np.ndarray], rate: int, channels: int, total: int,
+        ) -> tuple[float, bool]:
+            if rate <= 0:
+                raise ValueError(f"无效音频采样率: {rate}")
+            if total <= 0:
+                raise ValueError(f"音频文件不包含有效帧: {src.name}")
+
+            divisor = gcd(rate, self.sample_rate)
+            up, down = self.sample_rate // divisor, rate // divisor
+            # resample_poly's default FIR extends 10 * max(up, down) samples
+            # to either side on the upsampled grid.
+            halo = (10 * max(up, down) + up - 1) // up + 1 if rate != self.sample_rate else 0
+            step = max(256, int(round(chunk_seconds * rate)))
+            source_limit = min(total, (max_dst_frames * down + up - 1) // up)
+            full_output = (total * up + down - 1) // down
+            written = 0
+            window = np.empty((0, channels), dtype=np.float32)
+            start = window_start = available_end = 0
+            eof = False
+            while start < source_limit:
+                stop = min(source_limit, start + step)
+                # Put the read origin on the same output phase as the start of the file.
+                left = max(0, (start - halo) // down * down)
+                right = min(total, stop + halo)
+                # Keep the overlap and read only new samples, including for compressed audio.
+                tail = window[left - window_start:]
+                parts = [tail] if len(tail) else []
+                while not eof and available_end < right:
+                    incoming = read(right - available_end)
+                    if not len(incoming):
+                        eof = True
+                        break
+                    parts.append(incoming)
+                    available_end += len(incoming)
+                    if not halo:
+                        # Same-rate reads can emit partial blocks without any right context.
+                        break
+                if available_end <= start:
+                    break
+                window = parts[0] if len(parts) == 1 else np.concatenate(parts)
+                window_start = left
+                converted = normalize_to_canonical_pcm(
+                    window, src_rate=rate, src_channels=channels,
+                    dst_rate=self.sample_rate, dst_channels=self.channels,
+                )
+                origin = left * up // down
+                first_frame = (start * up + down - 1) // down
+                start_next = min(stop, available_end)
+                last_frame = min(max_dst_frames, (start_next * up + down - 1) // down)
+                block = converted[first_frame - origin:last_frame - origin]
+                if len(block):
+                    if written == 0:
+                        self.clear()
+                    written += self.write(block)
+                start = start_next
+            if written == 0:
+                raise ValueError(f"音频文件未能解码出有效帧: {src.name}")
+            return written / float(self.sample_rate), full_output > max_dst_frames
 
         try:
             import soundfile as sf  # type: ignore[import-untyped]
 
             with sf.SoundFile(str(src), "r") as sf_file:
-                src_sr = int(sf_file.samplerate)
-                src_ch = max(1, int(sf_file.channels))
-                src_total = int(sf_file.frames)
-                if src_sr <= 0:
-                    raise ValueError(f"无效音频采样率: {src_sr}")
-                if src_total <= 0:
-                    raise ValueError(f"音频文件不包含有效帧: {src.name}")
-                max_src_frames = int(round(limit_sec * src_sr))
-                truncated = src_total > max_src_frames
-                step = max(256, int(round(chunk_seconds * src_sr)))
+                def read_soundfile(count: int) -> np.ndarray:
+                    return sf_file.read(count, dtype="float32", always_2d=True)
 
-                read_so_far = 0
-                while read_so_far < min(src_total, max_src_frames) and total_dst_frames < max_dst_frames:
-                    take = min(step, max_src_frames - read_so_far)
-                    arr = np.asarray(sf_file.read(take, dtype="float32", always_2d=True), dtype=np.float32)
-                    if arr.ndim == 1:
-                        arr = arr.reshape(-1, 1)
-                    if arr.size == 0:
-                        break
-                    read_so_far += int(arr.shape[0])
-                    canon = normalize_to_canonical_pcm(
-                        arr,
-                        src_rate=src_sr,
-                        src_channels=src_ch,
-                        dst_rate=self.sample_rate,
-                        dst_channels=self.channels,
-                    )
-                    remain = max_dst_frames - total_dst_frames
-                    if canon.shape[0] > remain:
-                        canon = canon[:remain]
-                        truncated = True
-                    if canon.shape[0] > 0:
-                        if not cleared:
-                            self.clear()
-                            cleared = True
-                        self.write(canon)
-                        total_dst_frames += int(canon.shape[0])
-                if total_dst_frames <= 0:
-                    raise ValueError(f"音频文件未能解码出有效帧: {src.name}")
-                return total_dst_frames / float(self.sample_rate), truncated
+                return import_frames(read_soundfile, sf_file.samplerate, sf_file.channels, sf_file.frames)
         except Exception as sf_exc:
             if src.suffix.lower() not in (".wav", ".wave") or isinstance(sf_exc, ValueError):
                 raise RuntimeError(f"无法读取音频文件 {src.name}: {sf_exc}") from sf_exc
 
         with wave.open(str(src), "rb") as wf:
-            src_sr = int(wf.getframerate())
-            src_ch = max(1, int(wf.getnchannels()))
-            sw = int(wf.getsampwidth())
-            src_total = int(wf.getnframes())
-            if src_sr <= 0:
-                raise ValueError(f"无效 WAV 采样率: {src_sr}")
-            if src_total <= 0:
-                raise ValueError(f"WAV 文件不包含有效帧: {src.name}")
-            if sw not in (1, 2, 3, 4):
-                raise ValueError(f"Unsupported WAV sample width: {sw}")
-            max_src_frames = int(round(limit_sec * src_sr))
-            truncated = src_total > max_src_frames
-            step = max(256, int(round(chunk_seconds * src_sr)))
-            read_so_far = 0
-            while read_so_far < min(src_total, max_src_frames) and total_dst_frames < max_dst_frames:
-                take = min(step, max_src_frames - read_so_far)
-                raw = wf.readframes(take)
-                if not raw:
-                    break
-                arr = decode_wave_bytes(raw, sw, src_ch)
-                if arr.shape[0] <= 0:
-                    break
-                read_so_far += int(arr.shape[0])
-                canon = normalize_to_canonical_pcm(
-                    arr,
-                    src_rate=src_sr,
-                    src_channels=src_ch,
-                    dst_rate=self.sample_rate,
-                    dst_channels=self.channels,
-                )
-                remain = max_dst_frames - total_dst_frames
-                if canon.shape[0] > remain:
-                    canon = canon[:remain]
-                    truncated = True
-                if canon.shape[0] > 0:
-                    if not cleared:
-                        self.clear()
-                        cleared = True
-                    self.write(canon)
-                    total_dst_frames += int(canon.shape[0])
-        if total_dst_frames <= 0:
-            raise ValueError(f"WAV 文件未能解码出有效帧: {src.name}")
-        return total_dst_frames / float(self.sample_rate), truncated
+            channels, width = wf.getnchannels(), wf.getsampwidth()
+            if width not in (1, 2, 3, 4):
+                raise ValueError(f"Unsupported WAV sample width: {width}")
 
+            def read_wave(count: int) -> np.ndarray:
+                return decode_wave_bytes(wf.readframes(count), width, channels)
 
+            return import_frames(read_wave, wf.getframerate(), channels, wf.getnframes())
