@@ -31,27 +31,34 @@ class TempoEstimator:
         self._lock = threading.Lock()
         self._onsets: deque[float] = deque(maxlen=max_frames)
         self._prev_log_spec: Optional[np.ndarray] = None
+        self._previous_silence = False
 
     def reset(self) -> None:
         with self._lock:
             self._onsets.clear()
             self._prev_log_spec = None
+            self._previous_silence = False
 
     def update(self, log_spectrum_db: np.ndarray, *, is_silent: bool) -> TempoEstimate:
         with self._lock:
             if is_silent or log_spectrum_db.size == 0 or not np.all(np.isfinite(log_spectrum_db)):
                 self._onsets.append(0.0)
                 self._prev_log_spec = None
+                self._previous_silence = is_silent
             else:
                 # Positive spectral flux across log bands (clipped dB avoids 10**x overflow)
                 clipped_db = np.clip(log_spectrum_db, -120.0, 20.0)
                 mag_like = np.power(10.0, clipped_db / 20.0)
-                if self._prev_log_spec is None or self._prev_log_spec.shape != mag_like.shape:
+                if self._previous_silence:
+                    # A beat can follow a genuinely silent frame. Compare to the dB floor.
+                    flux = float(np.sum(mag_like - 1e-6))
+                elif self._prev_log_spec is None or self._prev_log_spec.shape != mag_like.shape:
                     flux = 0.0
                 else:
                     diff = mag_like - self._prev_log_spec
                     flux = float(np.sum(np.maximum(0.0, diff)))
                 self._prev_log_spec = mag_like.astype(np.float32, copy=True)
+                self._previous_silence = False
                 self._onsets.append(flux)
 
             env = np.asarray(self._onsets, dtype=np.float32)

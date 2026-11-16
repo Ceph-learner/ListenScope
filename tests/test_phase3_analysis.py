@@ -74,6 +74,15 @@ def test_fft_chroma_chords_and_silence_gating() -> None:
     assert chroma_ext.recent_chroma_matrix().shape[0] <= chroma_ext.history_maxlen
 
 
+def test_pitch_refines_both_search_edges_without_half_bin_bias():
+    estimator = PitchEstimator(sample_rate=40960, fft_size=4096)
+    for peak_bin in (4, 160):
+        magnitude = np.zeros(2049, dtype=np.float32)
+        magnitude[peak_bin - 1:peak_bin + 2] = [0.6, 1.0, 0.6]
+        estimate = estimator.estimate_from_magnitude(magnitude, is_silent=False)
+        assert estimate.frequency_hz == peak_bin * 10.0
+
+
 def test_krumhansl_schmuckler_key_detection_and_modulation() -> None:
     spec = SpectrumAnalyzer(sample_rate=48000)
     chroma_ext = ChromaExtractor(sample_rate=48000)
@@ -140,3 +149,16 @@ def test_tempo_estimator_tracks_120_bpm_pulses() -> None:
     sil = tempo.update(np.zeros(cfg.log_freq_bins, dtype=np.float32), is_silent=True)
     assert sil.bpm is None
     assert sil.stability == "Unknown"
+
+
+def test_tempo_detects_beats_with_silent_gaps():
+    config = AnalysisConfig(analysis_rate_hz=16.0, tempo_window_seconds=12)
+    estimator = TempoEstimator(config=config)
+    silent = np.full(config.log_freq_bins, -120.0, dtype=np.float32)
+    attack = np.full_like(silent, -15.0)
+    for frame in range(160):
+        beat = frame % 8 == 0
+        estimate = estimator.update(attack if beat else silent, is_silent=not beat)
+    assert estimate.bpm is not None
+    assert 118.0 <= estimate.bpm <= 122.0
+    assert estimate.stability == "High"

@@ -41,25 +41,27 @@ class PitchEstimator:
             return PitchEstimate(frequency_hz=None, note_name="-", cents_offset=0.0, confidence=0.0)
 
         # Harmonic sum across 1st, 2nd, and 3rd harmonics to prefer f0 over overtones
-        cand_bins = np.arange(min_bin, max_bin + 1)
+        # Keep one real neighbor on each side for interpolation. Only search the interior.
+        cand_bins = np.arange(min_bin - 1, max_bin + 2)
         h1 = fft_mag[cand_bins]
         h2_idx = np.minimum(cand_bins * 2, fft_mag.shape[0] - 1)
         h3_idx = np.minimum(cand_bins * 3, fft_mag.shape[0] - 1)
         score = h1 + 0.5 * fft_mag[h2_idx] + 0.25 * fft_mag[h3_idx]
 
-        rel_idx = int(np.argmax(score))
-        peak_bin = min_bin + rel_idx
+        candidates = score[1:-1]
+        rel_idx = int(np.argmax(candidates)) + 1
+        peak_bin = min_bin + rel_idx - 1
         peak_val = float(score[rel_idx])
-        median_val = float(np.median(score)) + 1e-9
+        median_val = float(np.median(candidates)) + 1e-9
         prominence = min(1.0, max(0.0, (peak_val / median_val - 1.0) / 15.0))
 
         if prominence < 0.15:
             return PitchEstimate(frequency_hz=None, note_name="Unknown", cents_offset=0.0, confidence=prominence)
 
         # Parabolic interpolation around peak bin (clamped strictly to +/- 0.5 bin)
-        alpha = float(score[rel_idx - 1]) if rel_idx > 0 else peak_val
+        alpha = float(score[rel_idx - 1])
         beta = peak_val
-        gamma = float(score[rel_idx + 1]) if rel_idx + 1 < score.shape[0] else peak_val
+        gamma = float(score[rel_idx + 1])
         denom = alpha - 2.0 * beta + gamma
         raw_delta = 0.5 * (alpha - gamma) / denom if abs(denom) > 1e-9 else 0.0
         delta = max(-0.5, min(0.5, raw_delta))

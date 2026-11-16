@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from operator import index
 from pathlib import Path
 import threading
 from typing import Any, Optional
@@ -15,7 +16,7 @@ from core.config import AudioConfig
 
 from .metronome import PracticeMetronome
 from .pcm_utils import decode_wave_bytes, normalize_to_canonical_pcm
-from .ring_buffer import FixedRingBuffer
+from .ring_buffer import FixedRingBuffer, atomic_pcm16_wav
 from .time_stretch import StreamingTimeStretcher
 
 logger = logging.getLogger(__name__)
@@ -273,22 +274,21 @@ class HistoryABPlayer:
         chunk_frames: int = 8192,
     ) -> tuple[Path, float]:
         """Export A/B excerpt in small chunks with optional WSOLA speed stretch & metronome overlay."""
+        chunk_frames = index(chunk_frames)
+        if chunk_frames <= 0:
+            raise ValueError("chunk_frames must be positive")
+        chunk_frames = min(chunk_frames, self.ring_buffer.sample_rate)
         eff_speed = max(0.5, min(1.5, float(speed)))
         if abs(eff_speed - 1.0) < 1e-3 and not include_metronome:
-            return self.ring_buffer.export_wav_streaming(out_path, start_abs_frame, end_abs_frame)
+            return self.ring_buffer.export_wav_streaming(
+                out_path, start_abs_frame, end_abs_frame, chunk_frames=chunk_frames
+            )
 
         path = Path(out_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
         sr = self.ring_buffer.sample_rate
         ch = self.ring_buffer.channels
-
-        oldest = self.ring_buffer.oldest_abs_frame
-        newest = self.ring_buffer.total_written_frames
-        a = max(oldest, int(start_abs_frame))
-        b = min(newest, int(end_abs_frame))
+        a, b, read = self.ring_buffer.prepare_export(start_abs_frame, end_abs_frame)
         span = b - a
-        if span <= 0:
-            raise ValueError("所选 A/B 区间没有可导出的有效音频。")
 
         stretcher = StreamingTimeStretcher(sample_rate=sr, channels=ch)
         local_met: Optional[PracticeMetronome] = None
@@ -305,59 +305,47 @@ class HistoryABPlayer:
             e_abs = min(b, s_abs + max(0, int(count)))
             if e_abs <= s_abs:
                 return np.empty((0, ch), dtype=np.float32)
-            return self.ring_buffer.read_range(s_abs, e_abs)
+            return read(s_abs, e_abs)
 
-        tmp_path = path.with_name(path.name + ".tmp")
         written_frames = 0
-        try:
-            with wave.open(str(tmp_path), "wb") as wf:
-                wf.setnchannels(ch)
-                wf.setsampwidth(2)
-                wf.setframerate(sr)
-
-                if abs(eff_speed - 1.0) >= 1e-3:
-                    expected_out_frames = max(1, int(round(span / eff_speed)))
-                    rel_cursor = 0
-                    while written_frames < expected_out_frames:
-                        blk, _new_rel, hit_eof = stretcher.render_block(
-                            chunk_frames,
-                            speed=eff_speed,
-                            span_frames=span,
-                            rel_cursor=rel_cursor,
-                            loop_enabled=False,
-                            read_rel_fn=_read_ab_rel,
-                        )
-                        take = min(int(blk.shape[0]), expected_out_frames - written_frames)
-                        if take > 0:
-                            out_blk = blk[:take].copy()
-                            if local_met is not None:
-                                local_met.overlay_into(out_blk, rate_scale=eff_speed)
-                            i16 = (np.clip(out_blk, -1.0, 1.0) * 32767.0).astype(np.int16)
-                            wf.writeframes(i16.tobytes())
-                            written_frames += take
-                        if hit_eof:
-                            break
-                        rel_cursor = _new_rel
-                else:
-                    cursor = a
-                    while cursor < b:
-                        stop = min(b, cursor + chunk_frames)
-                        chunk = self.ring_buffer.read_range(cursor, stop)
-                        if chunk.shape[0] == 0:
-                            break
-                        out_blk = chunk.copy()
+        with atomic_pcm16_wav(path, sr, ch) as wf:
+            if abs(eff_speed - 1.0) >= 1e-3:
+                expected_out_frames = max(1, int(round(span / eff_speed)))
+                rel_cursor = 0
+                while written_frames < expected_out_frames:
+                    blk, _new_rel, hit_eof = stretcher.render_block(
+                        chunk_frames,
+                        speed=eff_speed,
+                        span_frames=span,
+                        rel_cursor=rel_cursor,
+                        loop_enabled=False,
+                        read_rel_fn=_read_ab_rel,
+                    )
+                    take = min(int(blk.shape[0]), expected_out_frames - written_frames)
+                    if take > 0:
+                        out_blk = blk[:take].copy()
                         if local_met is not None:
-                            local_met.overlay_into(out_blk, rate_scale=1.0)
-                        i16 = (np.clip(out_blk, -1.0, 1.0) * 32767.0).astype(np.int16)
-                        wf.writeframes(i16.tobytes())
-                        written_frames += int(out_blk.shape[0])
-                        cursor = stop
-            tmp_path.replace(path)
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
+                            local_met.overlay_into(out_blk, rate_scale=eff_speed)
+                        i16 = (np.clip(out_blk, -1.0, 1.0) * 32767.0).astype("<i2")
+                        wf.writeframesraw(i16.tobytes())
+                        written_frames += take
+                    if hit_eof:
+                        break
+                    rel_cursor = _new_rel
+            else:
+                cursor = a
+                while cursor < b:
+                    stop = min(b, cursor + chunk_frames)
+                    chunk = read(cursor, stop)
+                    out_blk = chunk.copy()
+                    if local_met is not None:
+                        local_met.overlay_into(out_blk, rate_scale=1.0)
+                    i16 = (np.clip(out_blk, -1.0, 1.0) * 32767.0).astype("<i2")
+                    wf.writeframesraw(i16.tobytes())
+                    written_frames += int(out_blk.shape[0])
+                    cursor = stop
 
-        return path, written_frames / float(max(1, sr))
+        return path, written_frames / float(sr)
 
     def render_block(self, num_frames: int) -> np.ndarray:
         """Pull exact PCM block of shape (num_frames, 2) float32 with optional pitch-preserved speed & A/B wrap."""
@@ -437,7 +425,7 @@ class HistoryABPlayer:
                             break
 
                     take = min(rem_frames - written, b - self._cursor_frame)
-                    seg = self.ring_buffer.read_range(self._cursor_frame, self._cursor_frame + take)
+                    seg, first = self.ring_buffer.read_positioned(self._cursor_frame, self._cursor_frame + take)
                     if seg.shape[0] == 0:
                         if self._loop_enabled:
                             self._cursor_frame = a
@@ -447,7 +435,7 @@ class HistoryABPlayer:
                     actual = int(seg.shape[0])
                     out[music_offset + written : music_offset + written + actual] = seg
                     written += actual
-                    self._cursor_frame += actual
+                    self._cursor_frame = first + actual
                     if self._cursor_frame >= b and not self._loop_enabled:
                         self._is_playing = False
                         break

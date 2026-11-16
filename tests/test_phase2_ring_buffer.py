@@ -6,7 +6,9 @@ import json
 import wave
 
 import numpy as np
+import pytest
 
+from audio.playback import HistoryABPlayer
 from audio.ring_buffer import FixedRingBuffer
 from core.config import AudioConfig
 from core.logging import PerformanceLogger
@@ -55,6 +57,60 @@ def test_ring_buffer_preallocates_46mb_and_wraps_cleanly(tmp_path) -> None:
         assert wf.getframerate() == 100
         assert wf.getnchannels() == 2
         assert wf.getnframes() == 150
+
+
+@pytest.mark.parametrize("route", ["raw", "metronome", "slow"])
+@pytest.mark.parametrize("mutation", ["overwrite", "reset"])
+def test_export_rejects_window_changed_mid_export(tmp_path, monkeypatch, route, mutation):
+    config = AudioConfig(sample_rate=8000, channels=2, ring_buffer_seconds=1)
+    ring = FixedRingBuffer(config)
+    ring.write(np.full((8000, 2), 0.25, dtype=np.float32))
+    path = tmp_path / "existing.wav"
+    path.write_bytes(b"previous export")
+    original = wave.Wave_write.writeframesraw
+    writes = 0
+
+    def write_and_change(writer, data):
+        nonlocal writes
+        original(writer, data)
+        if writes == 0:
+            if mutation == "reset":
+                ring.clear()
+            ring.write(np.full((8000, 2), -0.25, dtype=np.float32))
+        writes += 1
+
+    monkeypatch.setattr(wave.Wave_write, "writeframesraw", write_and_change)
+    with pytest.raises(ValueError, match="导出"):
+        if route == "raw":
+            ring.export_wav_streaming(path, 0, 8000, chunk_frames=800)
+        else:
+            player = HistoryABPlayer(ring, audio_config=config)
+            player.export_ab_practice_wav_streaming(
+                path, 0, 8000, chunk_frames=800,
+                include_metronome=route == "metronome",
+                speed=0.75 if route == "slow" else 1.0,
+            )
+    assert path.read_bytes() == b"previous export"
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_ab_playback_does_not_repeat_partially_overwritten_read(monkeypatch):
+    config = AudioConfig(sample_rate=8000, channels=2, ring_buffer_seconds=0.001)
+    ring = FixedRingBuffer(config)
+    frames = np.arange(10, dtype=np.float32) / 10.0
+    ring.write(np.column_stack((frames[:8], frames[:8])))
+    player = HistoryABPlayer(ring)
+    player.set_ab_range(0, 8)
+    player.start_playback(open_audio_device=False)
+    read_positioned = ring.read_positioned
+
+    def overwrite_once(*args, **kwargs):
+        monkeypatch.setattr(ring, "read_positioned", read_positioned)
+        ring.write(np.column_stack((frames[8:], frames[8:])))
+        return read_positioned(*args, **kwargs)
+
+    monkeypatch.setattr(ring, "read_positioned", overwrite_once)
+    np.testing.assert_allclose(player.render_block(4)[:, 0], frames[2:6])
 
 
 def test_performance_logger_writes_bounded_jsonl(tmp_path) -> None:

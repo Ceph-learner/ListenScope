@@ -107,13 +107,15 @@ class AnalysisWorker:
             mono = np.zeros(self.config.fft_size, dtype=np.float32)
             rms_db = -120.0
             peak_db = -120.0
+            audio_silent = True
             is_silent = True
         else:
             mono = np.mean(pcm, axis=1, dtype=np.float32)
             _, rms_db, _, peak_db = compute_rms_and_peak(pcm)
             with self._analysis_lock:
                 prev_abs = self._last_analyzed_frame
-            is_silent = (end_abs == prev_abs) or (rms_db < self.config.silence_threshold_dbfs)
+            audio_silent = rms_db < self.config.silence_threshold_dbfs
+            is_silent = (end_abs == prev_abs) or audio_silent
 
         wf_min, wf_max = self.spectrum.compute_waveform_envelope(mono)
         fft_mag, fft_db, log_db = self.spectrum.analyze_frame(mono)
@@ -135,7 +137,8 @@ class AnalysisWorker:
             else:
                 key_est = prev_snap.key
 
-            tempo_est = self.tempo.update(log_db, is_silent=is_silent)
+            # A repeated non-silent snapshot has zero flux, not a new silent-to-sound edge.
+            tempo_est = self.tempo.update(log_db, is_silent=audio_silent)
 
         # Decimate display bins cleanly for UI transmission (avoid huge list allocations)
         fft_freqs = self.spectrum.fft_freqs
