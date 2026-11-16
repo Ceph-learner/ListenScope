@@ -19,17 +19,17 @@ GPU 分轨和 CPU MIDI 各用独立环境。实验性近实时分轨位于 [stre
   - Windows pytest 115 项通过。
   - 打包、短段离线 MDX、直接打开 WAV 转 MIDI 已验证。
   - QQ Music 暂停、恢复、切歌时捕获基本正常。自动清理是否重复触发，尚无充分的事件记录。
-  - 之后的提交只改文档、AI 指令和 CI，没有改软件代码，目标机未重测。
+  - 目标机尚未复测后续的近实时输出环修复。
 - **云端 Linux**：2026-11-15 在 `6d9ade0` 上运行 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`，115 passed。环境为 Debian 12、Python 3.11.2。仅安装 [requirements-core.txt](../requirements-core.txt) 和 pytest 的全新 venv 结果相同。
 - 该报告与 [README](../README.md) 的历史说明写于不同时间，有出入时以对应 SHA 和证据为准。
-- **GitHub**（2026-11-15 查询）：没有 Issue、PR、Release，也没有版本标签。`*-backup` 标签和 `backup/*` 分支是早期阶段的快照。CI 见 [DEVELOPMENT](DEVELOPMENT.md)。
+- **GitHub**：2026-11-16，项目交接文档经 [PR #1](https://github.com/Ceph-learner/ListenScope/pull/1) 合入 `main`（`e4e91b0`）。合并前最终一次 [CI](https://github.com/Ceph-learner/ListenScope/actions/runs/43783454485) 通过 115 项测试。`*-backup` 标签和 `backup/*` 分支是早期阶段的快照。
 
 ## 已知问题与下一步
 
 1. **近实时**：在目标机上启动即触发内存保护，没有听到首段，真实延迟和长期是否累积未知。
-   - 代码已确认：[`pull_mixed_block`](../streaming/live_separator.py#L810-L835) 每次都返回最新的 `take` 帧，不推进读游标，也不减少 `_out_available`，所以会反复读出尾帧。
+   - 修复分支 `fix/live-output-ring` 的 `bb3e588` 已修复 [`pull_mixed_block`](../streaming/live_separator.py#L810-L836)。输出按未读顺序消费，欠载时在末尾补静音，溢出时保留缓冲容量内最新的帧。UI 的输出缓冲时长按剩余未读帧计算。
    - 推断（待目标机确认）：主循环在资源状态为 WARNING 时就会自动停止（[live_separator.py](../streaming/live_separator.py#L843-L850)），WARNING 包括可用内存低于 5120 MiB（[resource_manager.py](../core/resource_manager.py)）。这可能是 16 GB 机器上触发保护的原因。
-   - 建议：先为跨回调的顺序消费和游标推进补回归测试，再验证输出与资源保护。
+   - 下一步按 [HANDOFF](HANDOFF.md) 复测实际输出和资源保护。
 2. **单轨 MIDI 覆盖同名文件**：直接打开的 WAV 位于 `work_dir`（历史分轨作业目录）内时，[`_resolve_intermediate_midi_path`](../main.py) 返回 `src.with_suffix(".mid")`，会覆盖同名 MIDI（代码已确认）。需要补该路径的隔离测试。
 3. 为 SMTC 自动重置补事件计数。Chroma 纵轴拥挤、和弦级数显示待后续处理。
 4. 在线下载 torch wheel 停滞，根因未定位；本地 wheel 路线可用。
