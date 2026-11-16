@@ -191,11 +191,13 @@ def stream_chunked_separation(
         total_chunks = max(1, (total_frames + chunk_frames - 1) // chunk_frames)
 
         out_paths = {name: out_root / f"{src_path.stem}_{name}.wav" for name in stem_names}
+        out_ch = 2 if ch >= 2 else 1
+        right_context: dict[str, np.ndarray] = {}
         out_wfs = {}
         try:
             for name, p in out_paths.items():
                 wf = wave.open(str(p), "wb")
-                wf.setnchannels(2 if ch >= 2 else 1)
+                wf.setnchannels(out_ch)
                 wf.setsampwidth(2)
                 wf.setframerate(sr)
                 out_wfs[name] = wf
@@ -234,24 +236,34 @@ def stream_chunked_separation(
 
                 stems = separate_chunk_fn(pcm, sr)
                 core_len = core_end - core_start
-                out_ch = 2 if ch >= 2 else 1
                 for name in stem_names:
                     stem_arr = np.asarray(stems[name], dtype=np.float32)
                     if stem_arr.ndim == 1:
                         stem_arr = stem_arr.reshape(-1, 1)
-                    trimmed = stem_arr[pad_left : pad_left + core_len]
-                    if trimmed.shape[0] < core_len:
-                        pad = np.zeros((core_len - trimmed.shape[0], trimmed.shape[1]), dtype=np.float32)
-                        trimmed = np.vstack([trimmed, pad]) if trimmed.shape[0] > 0 else pad
-                    if not np.all(np.isfinite(trimmed)):
-                        trimmed = np.nan_to_num(trimmed, nan=0.0, posinf=1.0, neginf=-1.0)
-                    if trimmed.shape[1] == 1 and out_ch == 2:
-                        trimmed = np.repeat(trimmed, 2, axis=1)
-                    elif trimmed.shape[1] == 2 and out_ch == 1:
-                        trimmed = np.mean(trimmed, axis=1, keepdims=True)
-                    elif trimmed.shape[1] > out_ch:
-                        trimmed = trimmed[:, :out_ch] if out_ch == 2 else np.mean(trimmed[:, :2], axis=1, keepdims=True)
-                    pcm_i16 = (np.clip(trimmed, -1.0, 1.0) * 32767.0).astype(np.int16)
+                    region = stem_arr[pad_left : pad_left + core_len + pad_right]
+                    if not np.all(np.isfinite(region)):
+                        region = np.nan_to_num(region, nan=0.0, posinf=1.0, neginf=-1.0)
+                    if region.shape[1] == 1 and out_ch == 2:
+                        region = np.repeat(region, 2, axis=1)
+                    elif region.shape[1] > out_ch:
+                        region = region[:, :2] if out_ch == 2 else np.mean(region[:, :2], axis=1, keepdims=True)
+
+                    core = region[:core_len]
+                    previous = right_context.get(name)
+                    if previous is not None:
+                        blend_len = min(len(previous), len(core))
+                        if blend_len:
+                            # Both predictions cover the same source frames at this boundary.
+                            start_weight = 0.5 if blend_len == 1 else 0.0
+                            fade = np.linspace(start_weight, 1.0, blend_len, dtype=np.float32)[:, None]
+                            core = core.copy()
+                            core[:blend_len] = previous[:blend_len] * (1.0 - fade) + core[:blend_len] * fade
+                    # A copy keeps only the small right margin alive between chunks.
+                    right_context[name] = region[core_len:].copy()
+                    if len(core) < core_len:
+                        pad = np.zeros((core_len - len(core), out_ch), dtype=np.float32)
+                        core = np.concatenate((core, pad))
+                    pcm_i16 = (np.clip(core, -1.0, 1.0) * 32767.0).astype(np.int16)
                     out_wfs[name].writeframes(pcm_i16.tobytes())
 
                 if progress_cb is not None:
