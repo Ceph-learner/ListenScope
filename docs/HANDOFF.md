@@ -1,5 +1,51 @@
 # 最新交接
 
+## 分轨深度分析与练习功能待办（2026-11-16）
+
+记录于 2026-11-16。证据基线：`main` 上的 `aa1054af5a5c890d26c0dd4626bbebbd1f86137b`（贝斯独听与界面修订）。Windows 11，RTX 5060 Ti 8 GB，16 GB RAM。本轮只做只读复现及文档交接；未改源码、未重打包，未重跑全量 pytest。
+
+### 已复现与接手起点
+
+在同一台 Windows 机对现场 10 秒四轨的原始 WAV 调用 analyze_stems_offline。返回和声源 other + bass、调性 Unknown、和弦只有一段 N（静音）、Bass 音符 0；鼓检测返回 Kick 32 / Snare 38 / Hi-Hat 9 个候选。此前确认原贝斯轨约 −45.0 dBFS RMS 且能听到。这个最小复现不用再捕获或跑 GPU，适合下一轮先定位分析门槛；鼓候选数量未做人工标注对照。
+
+---
+name: project-continuity
+description: Recover development context from repository instructions, Git, and handoff notes before beginning or resuming software work.
+---
+
+1. Read root and applicable nested AGENTS.md. Check git status --short --branch, git rev-parse HEAD, and recent commits. Identify the caller's branch, local edits and their relation to the requested work.
+2. Read the project overview, current state and latest handoff using the links in AGENTS.md. Follow architecture, requirements, decisions and development links when relevant.
+3. Treat handoff claims as leads. Verify the recorded baseline, changed paths, tests and constraints against the current tree, history and available CI evidence. Inspect commits since the recorded baseline. Label checkout, remote and historical release state separately.
+4. Identify implemented scope, unresolved work and known risks. Preserve existing edits and respect the current request when choosing the next action. Continue with the requested work.
+
+公司电脑没有原 WAV 时，可以先用任意合法测试素材完成四轨，保留原混音和各轨 WAV；然后在 Windows Core 环境对这些 WAV 调用 [`analysis/stem_analyzer.py`](../analysis/stem_analyzer.py) 的 `analyze_stems_offline`。同一组输入对照原增益、诊断性增益及真正的全零信号。记录 RMS、每帧门限判定、有效帧、调性、和弦段与 Bass 音符；优先区分真实静音与有声但无法识别的片段。现场 WAV 不入库。修复后按 [开发文档](DEVELOPMENT.md) 跑专项回归与 Windows 全量测试，再用 GUI 复测。
+
+### 按顺序处理
+
+| 顺序 | 反馈 | 第一轮验证及完成条件 |
+| --- | --- | --- |
+| 1 | 深度分析的和弦候选显示静音，调性未知，Bass 无结果；MIDI 页空 | 用现场同一组 WAV 直接调用分析器，记录分析源、原混音及各轨的窗口电平、静音判定、有效帧和音符数。现有四轨和声分析使用 65% other + 35% bass；检查弱信号是否被判为静音、调性是否因有效帧不足。对比原音量与诊断性增益的同一输入，再补弱音及真静音回归。输出区分“缺轨”“确实静音”“信号弱或置信度不足”“尚未转录”，并显示分析源。 |
+| 2 | MIDI 提示缺 Python，深度分析和 MIDI 的关系不清楚 | MIDI 转录需单独点轨道的「转 MIDI」。本机已存在独立 Python 3.11 环境，在正在使用的 exe 中选该解释器并验证。复测 Bass 的 MIDI 钢琴卷帘、有效音符与重启恢复。应用提示应能直接带用户到设置。鼓点 MIDI 与有音高单轨转录应分开实现。 |
+| 3 | 底部 A/B 有时按播放无声 | 分别复现暂停后选进纯静音、书签被 120 秒环形缓冲覆盖、正在捕获时回放旧区间、输出设备切换。记录实际 A/B 时间、绝对帧范围、选区电平、播放游标、设备及错误。预期有音有声，无法播放则明确提示原因。 |
+| 4 | 分轨后缺少清除结果 | 加「清除分轨结果」的设计。清除本次轨道、分析、MIDI 预览和播放状态，阻止旧后台任务结果回填；保留原 WAV、已导出文件和 120 秒捕获缓冲。 |
+| 5 | A/B 横轴需要精确缩放 | 当前历史波形关闭了鼠标缩放。用 pyqtgraph 的 ViewBox 做横轴缩放和平移、回到 120 秒总览，缩放时按可见范围重采样峰谷包络，保留 A/B 拖选。支持时间标签、A/B 标记和小步进。极近时再考虑波形采样点、峰谷或零交叉吸附。附查普通窗口 Chroma 热图音名重叠。 |
+| 6 | 最近和弦进行可用级数显示 | 设置选择「和弦名 / 罗马数字 / 两者」。沿用已有级数计算，明确按当前有效调性显示，遇到未知调性保留和弦名；检验切歌、调性候选和 Capo 移调。 |
+| 7 | 鼓的展示再直观些，吉他轨和节奏推荐 | 把已有 Kick / Snare / Hi-Hat 事件画成 16 步三行网格，支持按需试听和导出独立鼓 MIDI。将吉他分轨、从吉他轨估计节奏、按 BPM/拍号推荐扫弦或分解节奏拆为独立任务。现有四轨的「其他」可能含吉他，不能当成独立吉他。仅把六轨 htdemucs_6s 做候选，先测目标机内存/显存、串音与音色。 |
+| 8 | 推荐常见和弦进行，或给出与片段搭配的几个候选 | 先做随软件分发的本地罗马数字模板库，从调性、已识别和弦前缀、拍号与节奏筛选，再转成当前调的和弦、试听和导出 MIDI。区分「原曲检测」「可能的延续」「练习推荐」，不确定时显示依据。可借鉴公开统计接口的排序思路；仅将来源与可再分发授权明确的数据纳入内置库。 |
+
+### 已核对的说明
+
+- Demucs seg 是四轨模型单次推理使用的时间窗口，默认 6 秒，不是 A/B 长度或最后导出时长。更短通常有助于降低显存负担，暂保留已实测默认值。
+- 两条 proctap INFO 是两次捕获初始化时确认音频已是 48 kHz / float32，因此跳过格式转换。它们没有报错，也不足以判定选区播放或深度分析是否正常。
+- MIDI 使用独立的 Python 3.11 环境，按 [安装说明](PACKAGING.md) 准备后，在「设置 / 系统状态 → 资源安全阈值与 AI 配置 → 独立 CPU MIDI Python 路径」选择 `.venv-midi\Scripts\python.exe`，再点「验证 MIDI 环境」。
+
+### 初步参考
+
+- [Demucs 官方仓库](https://github.com/facebookresearch/demucs) 与 [六轨发布说明](https://github.com/facebookresearch/demucs/blob/main/docs/release.md)
+- [Spotify Basic Pitch](https://basicpitch.spotify.com/about)
+- [pyqtgraph ViewBox](https://pyqtgraph.readthedocs.io/en/latest/api_reference/graphicsItems/viewbox.html)
+- [Hooktheory 的和弦转移 API](https://www.hooktheory.com/api/trends/docs)
+
 ## 贝斯独听和界面复测（2026-11-16）
 
 - 基线为 `218e2c9e03702a944476551a1bf158e7d2e04a7b`。`audio/playback.py` 只在贝斯独自出声时给监听 +12 dB，并平滑限制接近满幅的峰值。`ui/mixer_widget.py` 提供开关，缺轨时禁用相应独听。`ui/main_window.py` 强化复选框选中态，提示 GPU 是否就绪。
