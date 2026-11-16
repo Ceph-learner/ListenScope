@@ -22,7 +22,7 @@ GPU 分轨和 CPU MIDI 各用独立环境。实验性近实时分轨位于 [stre
   - 目标机尚未复测后续的分轨接缝、近实时播放、和弦级数与历史目录 MIDI 输出修复。
 - **云端 Linux**：2026-11-15 在 `6d9ade0` 上运行 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`，115 passed。环境为 Debian 12、Python 3.11.2。仅安装 [requirements-core.txt](../requirements-core.txt) 和 pytest 的全新 venv 结果相同。
 - 该报告与 [README](../README.md) 的历史说明写于不同时间，有出入时以对应 SHA 和证据为准。
-- **GitHub**：2026-11-16，双轨对齐和输出溢出统计经 [PR #8](https://github.com/Ceph-learner/ListenScope/pull/8) 合入 `main`（`70682d9`），合并后 [CI](https://github.com/Ceph-learner/ListenScope/actions/runs/43796513629) 通过。`*-backup` 标签和 `backup/*` 分支是早期阶段的快照。
+- **GitHub**：2026-11-16，近实时声卡回调优化经 [PR #9](https://github.com/Ceph-learner/ListenScope/pull/9) 合入 `main`（`ac093fd`），PR 的 [CI](https://github.com/Ceph-learner/ListenScope/actions/runs/43798846678) 通过 133 项。`*-backup` 标签和 `backup/*` 分支是早期阶段的快照。
 
 ## 已知问题与下一步
 
@@ -36,7 +36,7 @@ GPU 分轨和 CPU MIDI 各用独立环境。实验性近实时分轨位于 [stre
    - 下一步按 [HANDOFF](HANDOFF.md) 复测实际输出和资源保护。
 2. **单轨 MIDI 输出隔离**：`607d4aa` 修复了从历史分轨作业目录打开 WAV 时覆盖同名 MIDI 的问题。直接打开和混音器内转录均经 [`_on_transcribe_stem_midi`](../main.py#L1298) 写入 `work_dir/midi/`，每次生成独立中间文件。专项测试验证重复转换与手动另存，目标机独立 MIDI 环境待复测。
 3. **和弦级数与 SMTC**：Chroma 页显示当前和弦相对检测调性的罗马数字级数，Capo 同时移调后级数不变。热图纵轴使用较小的音名标签。SMTC 每次实际自动重置写一条含累计次数的日志，可在诊断包中排查同一切歌是否重复触发。
-4. 在线下载 torch wheel 停滞，根因未定位；本地 wheel 路线可用。
+4. 在线下载 Torch wheel 停滞的根因未定位。本地 wheel 路线可用，`804a2a7` 增加 `-CheckCudaWheels` 文件名预检及安装前验证。见 [PACKAGING](PACKAGING.md)。
 5. **离线分轨接缝**：`35add3c` 将相邻推理窗口在同一源帧位置的预测淡入淡出，输出帧数和既有分块参数保持。合成信号验证帧序和短尾块，真实模型听感待目标机复测。
 
 ## 测试

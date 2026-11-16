@@ -54,6 +54,7 @@ pwsh -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -Clean
 > [!WARNING]
 > **在线下载停滞切换说明 & 仍需联网范围**：
 > - 第四轮 Windows 验收记录中，在线默认路径在下载 2753.2 MB `torch` wheel 时约 6 分钟仍停留在 0 字节（主动停止前 pip 未给出原始异常，网络卡顿具体根因待查）。如遇同样停滞，可用浏览器/独立下载工具将上述 3 个官方 `+cu128` (`cp312-win_amd64`) wheel 预先放到同一本地目录后改传 `-CudaWheelDir <目录>`。
+> - **安装前预检**可运行 `pwsh -NoProfile -File scripts\setup_windows.ps1 -CheckCudaWheels -CudaWheelDir E:\cuda_wheels`。默认按 Python 3.12 x64 与 `+cu128` 检查三个已配置包的文件名、版本和标签，显示匹配文件并在缺少或不匹配时退出。这个模式无需 Python、无需联网，也不创建或更新虚拟环境。它只校验文件名，文件完整性、依赖和 GPU 可用性仍需正式安装验证。普通 `-CudaWheelDir` 安装现在也会先检查目录和已有 wheel，再创建或更新环境。只缺部分 wheel 的正常安装仍会回退到在线索引。
 > - **哪些步骤仍需联网（即使传入 `-CudaWheelDir`）**：
 >   1. 升级 `pip` 与安装 Core 环境 [`requirements-windows.txt`](../requirements-windows.txt)（含 `PySide6`、`proc-tap`、`winrt-Windows.Media.Control` 等）。
 >   2. 若 `-CudaWheelDir` 只放了 `torch` / `torchaudio` / `torchvision` 其中 1–2 个，缺项会自动回退到 `$CudaIndexUrl` (`https://download.pytorch.org/whl/cu128`) 在线安装；`torch` 家族的纯 Python 传递依赖（如 `sympy`、`networkx`、`filelock`、`fsspec`、`jinja2`、`typing-extensions`、`numpy`、`pillow`）也会优先复用 `-CudaWheelDir`，本地未提供时按需联网获取。

@@ -1,14 +1,14 @@
 # 最新交接
 
-- **结果**：近实时监听直接填充声卡回调缓冲。回绕分段混音，非默认增益复用最多 4096 帧的工作区，避免在回调内分配整块输出或拼接双轨。FIFO、限幅、欠载静音、预缓冲、源失效保护和诊断计数保持。
-- **基线与分支**：PR #8 的合并提交 `70682d98c8b229328d7fe588fca95f13a8622265`。代码与测试提交 `c7d37b4e79914b0dfee8b035cb1f245e8c86426a`，分支 `perf/live-output-callback`。
-- **协作**：Command Code GOAT V4.1 Flash 先交完整文本方案，OpenCode Go V4 Pro 依赖其结果做并发复审。两项完成，无重试。采纳固定工作区和保留停止保护。详见 [AI 协同报告](AI_COLLABORATION.md)。
-- **验证**：Windows Python 3.11.17，Core 环境位于 ASCII 路径，设置 `QT_QPA_PLATFORM=offscreen`。`python -m pytest -q --tb=short` 通过 133 项。最终 `python -m pytest -q --tb=short tests/test_phase7_9_mixer_live_midi.py tests/test_phase14_practice_tools_and_diag.py` 通过 20 项。
-- **基准**：在本机用模拟 OutputStream、同一目的数组、48 kHz 立体声、非默认增益和固定 1024 帧回绕比较。每版测 5 组各 8000 次回调，耗时中位数 10.50→9.78 微秒。另对 40 次回调测 `tracemalloc` 峰值，50,208→1,364 字节，工作区在回调前分配。
-- **待验证**：目标机真实 WASAPI、GPU 模型耗时和持续监听音质。在线 Torch wheel 停滞仍可用 `-CudaWheelDir` 绕开，根因待查。
+- **结果**：[`setup_windows.ps1`](../scripts/setup_windows.ps1) 新增 `-CheckCudaWheels`。默认按 Py3.12 x64、cu128 和配置版本检查本地三件套的文件名标签，成功时列出匹配文件。该命令不启动 Python 或 pip。普通模式也会先检查给定目录和本地 wheel，再创建或更新环境，缺少部分文件时保留在线回退。
+- **基线与分支**：PR #9 的合并提交 `ac093fd34373b4bef7a762178e58fb395767f0b6`。预检代码与测试提交 `804a2a7681dcac618d565e27ce025aa32f123bb3`，分支 `fix/cuda-wheel-preflight`。
+- **约束**：预检只检查文件名及参数匹配，文件完整性、传递依赖、驱动和 GPU 仍需正式安装验证。原有三环境隔离、cu128 约束和在线索引沿用。参见 [安装步骤](PACKAGING.md)。
+- **协作**：Command Code GOAT 负责完整文本脚本方案。OpenCode Go V4 Pro 独立设计兼容和异常路径验证。各一次成功，无重试。详见 [协同报告](AI_COLLABORATION.md)。
+- **验证**：Windows，Python 3.11.17，Core 环境位于 ASCII 路径，`QT_QPA_PLATFORM=offscreen`。PowerShell 合成复现旧脚本在坏目录前调用安装。修复后 `python -m pytest -q --tb=short tests/test_windows_defaults_and_midi_routing.py -k cuda_wheel` 通过 6 项，全量 `python -m pytest -q --tb=short` 通过 139 项。
+- **待验证**：目标机实际 cu128 三件套、GPU 推理、原生声卡持续监听。在线下载停滞的根因仍待查。
 
 ## Windows 目标机复测
 
-1. 用包含 `c7d37b4` 的提交按 [PACKAGING](PACKAGING.md) 配置 Core、AI 和 MIDI 环境。
-2. 在 QQ 音乐按进程环回监听至少 60 秒，试默认和非默认增益，暂停、恢复并切换捕获。停止后导出诊断，在 `live_separation` 下记录 RTF、缓冲、输入跳段、输出溢出帧、重缓冲和设备欠载。系统环回应提示换回按进程捕获。
-3. 用稳定背景的 18 秒以上 WAV 测离线分轨，试听 6 秒和 12 秒附近。按需并测 MIDI 隔离、Chroma 级数和 SMTC 自动重置，将实际证据追加到 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。
+1. 检出包含 `804a2a7` 的提交，运行 `pwsh -NoProfile -File scripts\setup_windows.ps1 -CheckCudaWheels -CudaWheelDir E:\cuda_wheels`。确认三条匹配。用另一份缺项目录运行，应列出缺少的 wheel 并返回非零。
+2. 按 [PACKAGING](PACKAGING.md) 在目标机用真实 wheel 执行正常安装，检查 `pip check`、安装版本和 GPU 基准。在线停滞时记录实际命令进度与原始错误。
+3. 启动应用，在 QQ 音乐以按进程环回监听 60 秒，尝试默认和非默认增益、暂停恢复及切换捕获。导出诊断包，记录 RTF、缓冲、输入跳段、输出溢出帧、重缓冲和设备欠载。离线分轨试听 6 秒及 12 秒接缝。把实际提交和结果写入 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。
