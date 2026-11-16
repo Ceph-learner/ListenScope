@@ -18,10 +18,10 @@
 | GPU 二轨分离（MDX-ONNX）和四轨分离（HTDemucs），6 秒默认 | 已实测（第二至五轮） | 30 秒音频：二轨约 9.5–10.7 秒，四轨约 4.3–4.9 秒；Worker 退出后显存回落。 |
 | 内存保护（5120 / 3072 / 2048 MiB）和单 Worker | 已实测（第二轮未误触发），代码锁定 | [config.py](../core/config.py)。 |
 | 打包版经独立 Py 3.11 调用 Basic Pitch 转 MIDI | 已实测（第三至五轮） | bass 导出 120 个音符；重启后设置保留。 |
-| 直接打开已有单轨 WAV 转 MIDI | 部分通过（第五轮） | 可以导出可解析的 MIDI。但源文件位于历史作业目录（`work_dir` 内）时，会覆盖同名 `.mid`，见 [main.py](../main.py) `_resolve_intermediate_midi_path`。 |
+| 直接打开已有单轨 WAV 转 MIDI | 部分通过（第五轮） | 可以导出可解析的 MIDI。历史作业目录内的同名 `.mid` 覆盖问题已修复并通过自动化测试，待目标机复测。 |
 | 一键安装 `setup_windows.ps1`，含 cu128 约束、`-CudaWheelDir` 和短路径 MIDI 环境 | 已实测（第五轮本地 wheel 路线） | 在线下载停滞的根因未定位。 |
 | PyInstaller 打包 Core | 已实测（第二至五轮） | [build_windows.ps1](../scripts/build_windows.ps1)、[listenscope_core.spec](../packaging/listenscope_core.spec)。 |
 | 脱敏诊断 ZIP 导出 | 仅自动化 | [diagnostics.py](../core/diagnostics.py)。 |
-| 近实时二轨分离（实验，默认关闭） | 未通过目标机验收 | 第五轮启动即触发内存保护，没有听到输出。修复分支已修复输出环重复读取，待目标机复测（见 [CURRENT_STATE](CURRENT_STATE.md)）。 |
+| 近实时二轨分离（实验，默认关闭） | 未通过目标机验收 | 第五轮启动即触发内存保护，没有听到输出。输出环重复读取已修复，待目标机复测（见 [CURRENT_STATE](CURRENT_STATE.md)）。 |
 | Chroma 纵轴拥挤优化、相对调性的和弦级数显示 | 未实现 | 第五轮 UI 待办。 |
 | 自动化 CI | 已提供 Linux offscreen pytest 工作流 | 见 [DEVELOPMENT](DEVELOPMENT.md)；Windows 实测仍需手动执行。 |
