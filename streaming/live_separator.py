@@ -50,7 +50,7 @@ from core.system_probe import (
     evaluate_gpu_ai_readiness,
 )
 
-from .benchmark import LiveBenchmarkResult, benchmark_live_model, benchmark_live_model_isolated
+from .benchmark import LiveBenchmarkResult, benchmark_live_model, benchmark_live_model_isolated, live_frame_sizes
 from .overlap_add import OverlapAddAccumulator
 
 logger = logging.getLogger(__name__)
@@ -251,9 +251,7 @@ class ExperimentalLiveSeparator:
 
         sr = self.audio_config.sample_rate
         ch = self.audio_config.channels
-        self._chunk_frames = max(sr // 2, int(round(self.ai_config.live_chunk_seconds * sr)))
-        self._overlap_frames = min(self._chunk_frames // 2, max(0, int(round(self.ai_config.live_overlap_seconds * sr))))
-        self._hop_frames = self._chunk_frames - self._overlap_frames
+        self._chunk_frames, self._overlap_frames, self._hop_frames = live_frame_sizes(self.ai_config, sr)
 
         # Bounded output circular storage for assembled vocals & instrumental
         self._out_cap_frames = max(sr * 2, int(round(self.ai_config.live_max_buffer_seconds * sr)))
@@ -895,7 +893,7 @@ class ExperimentalLiveSeparator:
 
     def _run_loop(self) -> None:
         sr = self.audio_config.sample_rate
-        chunk_duration = self._chunk_frames / float(sr)
+        hop_duration = self._hop_frames / sr
         seq = 0
         first_valid_seq = 0
         last_result_seq = -1
@@ -1010,7 +1008,7 @@ class ExperimentalLiveSeparator:
                         assembled = self._overlap_add.process_chunk({"vocals": voc, "instrumental": inst})
                         last_result_seq = result_seq
                         self._append_output(assembled["vocals"], assembled["instrumental"])
-                        rtf = infer_sec / max(0.01, chunk_duration)
+                        rtf = infer_sec / hop_duration
                         with self._lock:
                             self._latest_rtf = rtf
                             self._latest_latency_ms = infer_sec * 1000.0 + (self._overlap_frames / float(sr)) * 1000.0

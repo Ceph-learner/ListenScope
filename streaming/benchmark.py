@@ -40,6 +40,13 @@ class LiveBenchmarkResult:
     message: str
 
 
+def live_frame_sizes(ai_config: AIConfig, sample_rate: int) -> tuple[int, int, int]:
+    """Return input chunk, overlap and newly playable frames per live inference."""
+    chunk = max(1, sample_rate // 2, int(round(ai_config.live_chunk_seconds * sample_rate)))
+    overlap = min(chunk // 2, max(0, int(round(ai_config.live_overlap_seconds * sample_rate))))
+    return chunk, overlap, chunk - overlap
+
+
 def benchmark_live_model(
     model_id: str = "mdx_low_vram_2stem",
     *,
@@ -50,7 +57,7 @@ def benchmark_live_model(
     ai_config: Optional[AIConfig] = None,
     audio_config: Optional[AudioConfig] = None,
 ) -> LiveBenchmarkResult:
-    """Measure Real-Time Factor (RTF = inference_time / audio_duration) for 2-stem live mode.
+    """Measure inference time per second of newly playable audio for 2-stem live mode.
 
     Explicitly warns and blocks if RTF >= 1.0 ("当前模型无法实时运行").
     """
@@ -63,10 +70,10 @@ def benchmark_live_model(
     ai_cfg = ai_config or AIConfig()
     aud_cfg = audio_config or AudioConfig()
     sr = aud_cfg.sample_rate
-    chunk_sec = min(ai_cfg.live_chunk_seconds, max(1.0, test_duration_sec))
-    chunk_frames = int(round(chunk_sec * sr))
-    n_chunks = max(1, int(round(test_duration_sec / chunk_sec)))
-    actual_dur = (n_chunks * chunk_frames) / float(sr)
+    chunk_frames, _, hop_frames = live_frame_sizes(ai_cfg, sr)
+    # The requested duration sizes the test work, never the production chunk.
+    n_chunks = max(1, int(round(test_duration_sec * sr / chunk_frames)))
+    playable_duration = n_chunks * hop_frames / sr
 
     if use_gpu and not use_mock_backend:
         gpus, _, _ = _probe_gpus_nvml()
@@ -83,7 +90,7 @@ def benchmark_live_model(
 
     t = np.arange(chunk_frames, dtype=np.float32) / float(sr)
     wave_sig = (0.25 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
-    chunk = np.column_stack([wave_sig, wave_sig]).astype(np.float32, copy=False)
+    chunk = np.repeat(wave_sig[:, None], aud_cfg.channels, axis=1)
 
     backend = build_separation_backend(
         model_id,
@@ -102,19 +109,19 @@ def benchmark_live_model(
         for _ in range(n_chunks):
             _ = backend.separate_chunk(chunk, sr)
         elapsed = max(0.0001, time.monotonic() - t0)
-        rtf = elapsed / max(0.001, actual_dur)
+        rtf = elapsed / playable_duration
         can_rt = rtf < 1.0
         if can_rt:
-            msg = f"✅ 基准通过: {spec.display_name} ({device_label}) RTF={rtf:.2f} < 1.0 (耗时 {elapsed:.2f}s / 音频 {actual_dur:.1f}s)"
+            msg = f"✅ 基准通过: {spec.display_name} ({device_label}) RTF={rtf:.2f} < 1.0 (耗时 {elapsed:.2f}s / 可播放音频 {playable_duration:.2f}s)"
         else:
             msg = (
                 f"⚠️ 当前模型无法实时运行: {spec.display_name} RTF={rtf:.2f} >= 1.0 "
-                f"(耗时 {elapsed:.2f}s / 音频 {actual_dur:.1f}s)，请改用历史片段离线分轨。"
+                f"(耗时 {elapsed:.2f}s / 可播放音频 {playable_duration:.2f}s)，请改用历史片段离线分轨。"
             )
         return LiveBenchmarkResult(
             model_id=model_id,
             device_used=device_label,
-            test_duration_sec=actual_dur,
+            test_duration_sec=playable_duration,
             elapsed_sec=elapsed,
             rtf=rtf,
             can_run_realtime=can_rt,
