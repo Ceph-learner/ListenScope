@@ -1,39 +1,18 @@
 # 最新交接
 
-- **目标和结果**：按 ai-dev-kit 协议审计 AI 接手记忆并做最小补全。未改软件代码。
-  - 新增 [REQUIREMENTS](REQUIREMENTS.md)、[ARCHITECTURE](ARCHITECTURE.md)、[DECISIONS](DECISIONS.md)、[DEVELOPMENT](DEVELOPMENT.md)。
-  - [AGENTS.md](../AGENTS.md) 增加项目规则段落。
-  - 更新 [CURRENT_STATE](CURRENT_STATE.md)，并修正 [README](../README.md) 中过期的待验收段落。
-  - 新增仅测试用的 CI：[.github/workflows/tests.yml](../.github/workflows/tests.yml)。
-  - 没有单独建 PROJECT_CONTEXT，项目背景由 README 和 CURRENT_STATE 承担。
-- **Evidence commit**：6d9ade0d362ba3355f911e4c5022c3e784fd388b（本次改动前的 `main`）
-- **分支**：`docs/ai-memory-audit`，经 PR 合并到 `main`。远端状态见本文件末尾。
-- **Skills**：`.agents/skills/` 锁定 ai-dev-kit `150782a`。与中央仓库 `93c1d0c` 比较，四个 SKILL.md 完全相同。`scripts/install.ps1 -Project` 预演没有需要更新的文件，所以未重新安装。
-- **验证**：
-  - 中央仓库 `scripts/audit.ps1 -Project`：Structural checks passed。在 Linux 上用 PowerShell 7.4.6 运行。
-  - 云端 Linux（Debian 12，Python 3.11.2）运行 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`：115 passed。只装 requirements-core 和 pytest 的全新 venv 结果相同。
-  - 本次没有在目标机复测。GitHub Actions 的首次运行结果见远端状态。
-- **独立接手验证（静态模拟，不是隔离的实时 Agent 会话）**：只读仓库文件就能回答以下 8 个问题：
-  - 目标：README
-  - 已实现功能：REQUIREMENTS
-  - 代码位置：README 模块树和 ARCHITECTURE
-  - 稳定基线：CURRENT_STATE，目标机为 `f03dbf1`
-  - 风险：CURRENT_STATE
-  - 运行和构建：DEVELOPMENT、PACKAGING
-  - 不可改的决策：DECISIONS
-  - 下一步：本文件
+- **目标和结果**：修复实验性近实时分轨的输出回调重复播放尾帧。输出按未读顺序消费，欠载时在块尾补静音，溢出时保留最新帧。输出缓冲时长随消费下降。内存阈值、自动停止和 Worker 生命周期沿用原逻辑。
+- **基线与分支**：`main` 在 PR #1 合并后为 `e4e91b05e8b63e8c99c508b80ce21a58283b50bd`。代码与测试证据提交为 `bb3e58836a10e1b74edafe7d29e4a2804d667c51`，分支 `fix/live-output-ring`。可用 `git ls-remote --heads origin refs/heads/fix/live-output-ring` 核对远端分支。
+- **改动**：[live_separator.py](../streaming/live_separator.py#L810-L836) 用写入位置和未读帧数定位最早未读帧。[专项测试](../tests/test_phase7_9_mixer_live_midi.py) 覆盖顺序消费、回绕、欠载、重新写入、增益、限幅和容量边界。
+- **协作**：OpenCode Go 提出 FIFO 修复和用例。Command Code GOAT 独立审查读写和溢出。采用现有写入位置与未读帧数，省去额外状态。两项委派各执行一次。
+- **验证**：Windows，Python 3.11.17，Core 依赖及 pytest，`QT_QPA_PLATFORM=offscreen`。
+  - `python -m pytest -q --tb=short tests/test_phase7_9_mixer_live_midi.py -k live_output` 在旧实现上出现 4 项预期失败。
+  - `python -m pytest -q --tb=short tests/test_phase7_9_mixer_live_midi.py` 在修复后 7 项通过，含资源 WARNING 自动停止用例。
+  - `python -m pytest -q --tb=short` 从纯 ASCII 路径下的 Core 虚拟环境运行，119 项通过。仓库内中文路径下的虚拟环境在基线和修复后均出现两项外部解释器测试找不到 NumPy，换用 ASCII 路径后通过。
+- **待验证**：Windows 目标机的真实声卡输出、持续播放和启动时内存保护。历史目标机结果见 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。单轨 MIDI 同名覆盖、SMTC 重复重置和 torch 下载停滞见 [CURRENT_STATE](CURRENT_STATE.md)。
 
-  待确认：在线 torch 下载停滞的根因；近实时触发内存保护的具体原因（目前只是推断）；SMTC 是否会重复重置。真实双客户端验收方法见 ai-dev-kit `docs/CROSS_AI_CHECK.md`，尚未执行。
-- **下一步**：
-  1. 为 [`pull_mixed_block`](../streaming/live_separator.py#L810-L835) 补跨回调顺序消费和游标推进的回归测试，再修复。修复时保留内存保护。
-  2. 为单轨 MIDI 在 `work_dir` 内覆盖同名文件的问题补隔离测试并修复。
-  3. 为 SMTC 自动重置补事件计数，再交给目标机复测。
+## Windows 目标机复测
 
-## 远端状态
-
-2026-11-16 UTC 观察：
-
-- 分支 `docs/ai-memory-audit` 已推送到 origin，文档提交为 `3c0bb3e290768ca8f0ab9a8f56604c3f90a06f7c`。
-- 已开 [PR #1](https://github.com/Ceph-learner/ListenScope/pull/1)，等待维护者审核合并。合并前 `origin/main` 仍为 `6d9ade0`。
-- GitHub Actions `tests` 首次运行 [43783221345](https://github.com/Ceph-learner/ListenScope/actions/runs/43783221345)（pull_request）通过：115 passed，用时 45.27s。
-- 没有创建标签或 Release。
+1. 在 `fix/live-output-ring` 分支按 [PACKAGING](PACKAGING.md) 配置 Core 和 AI 解释器，运行 `.\.venv-core\Scripts\python.exe main.py`。
+2. 正常播放一段音频并启动捕获。在「5. 实验功能」选择「开启实验性近实时分轨」，记录启动时可用内存和状态消息。
+3. 若有非静音输出，记录首段延迟，听取多个输出块，确认尾段没有循环重播。可短暂停止音源并恢复，记录欠载、恢复和缓冲时长。若保护先触发，记录停止原因，并确认基础频谱继续运行。
+4. 将对应提交、事件时间、结果追加至 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。随后处理历史作业目录内单轨 MIDI 的同名覆盖。

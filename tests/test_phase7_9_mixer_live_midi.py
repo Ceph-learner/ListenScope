@@ -99,6 +99,51 @@ def test_experimental_live_separator_bounded_drop_and_auto_stop_on_resource_warn
         rm.close()
 
 
+@pytest.fixture
+def live_output_ring():
+    audio = AudioConfig(sample_rate=4, channels=2, ring_buffer_seconds=2)
+    ai = AIConfig(live_chunk_seconds=1.0, live_overlap_seconds=0.2, live_max_buffer_seconds=2.0)
+    resources = ResourceManager()
+    try:
+        yield ExperimentalLiveSeparator(FixedRingBuffer(audio), resources, ai_config=ai)
+    finally:
+        resources.close()
+
+
+def test_live_output_consumes_fifo_across_callbacks(live_output_ring) -> None:
+    frames = np.arange(1, 14, dtype=np.float32) / 16
+    stereo = np.column_stack((frames, -frames))
+    live = live_output_ring
+    live._append_output(stereo[:6], stereo[:6] / 2)
+    np.testing.assert_array_equal(live.pull_mixed_block(4), stereo[:4] * 1.5)
+    assert live.latest_metrics().buffer_seconds == 0.5
+
+    # With an eight-frame ring, this makes both the next write and read wrap.
+    live._append_output(stereo[6:11], stereo[6:11] / 2)
+    np.testing.assert_array_equal(live.pull_mixed_block(5), stereo[4:9] * 1.5)
+    tail_audio = np.clip(stereo[9:11] * 1.5, -1.0, 1.0)
+    expected_tail = np.vstack((tail_audio, np.zeros((2, 2), dtype=np.float32)))
+    np.testing.assert_array_equal(live.pull_mixed_block(4), expected_tail)
+    np.testing.assert_array_equal(live.pull_mixed_block(4), np.zeros((4, 2), dtype=np.float32))
+    assert live.latest_metrics().buffer_seconds == 0.0
+
+    live._append_output(stereo[11:], stereo[11:])
+    mixed = live.pull_mixed_block(2, vocals_gain=0.5, inst_gain=1.0)
+    np.testing.assert_array_equal(mixed, np.clip(stereo[11:] * 1.5, -1.0, 1.0))
+
+
+@pytest.mark.parametrize("second_length", [4, 8, 10])
+def test_live_output_overflow_retains_newest_unread_frames(live_output_ring, second_length) -> None:
+    frames = np.arange(1, 7 + second_length, dtype=np.float32) / 32
+    stereo = np.column_stack((frames, -frames))
+    live = live_output_ring
+    live._append_output(stereo[:6], np.zeros_like(stereo[:6]))
+    live._append_output(stereo[6:], np.zeros_like(stereo[6:]))
+    np.testing.assert_array_equal(live.pull_mixed_block(3), stereo[-8:-5])
+    np.testing.assert_array_equal(live.pull_mixed_block(5), stereo[-5:])
+    assert live.latest_metrics().buffer_seconds == 0.0
+
+
 def test_midi_transcription_refuses_full_mix_and_writes_valid_midi_for_stem(tmp_path) -> None:
     mix_wav = tmp_path / "full_mix.wav"
     bass_wav = tmp_path / "song_bass.wav"

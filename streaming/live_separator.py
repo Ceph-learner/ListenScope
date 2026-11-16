@@ -814,7 +814,7 @@ class ExperimentalLiveSeparator:
         vocals_gain: Optional[float] = None,
         inst_gain: Optional[float] = None,
     ) -> np.ndarray:
-        """Read latest assembled 2-stem block from fixed live ring buffer."""
+        """Consume the oldest unread frames and pad the tail with silence if needed."""
         with self._lock:
             vg = self._vocals_gain if vocals_gain is None else float(vocals_gain)
             ig = self._inst_gain if inst_gain is None else float(inst_gain)
@@ -822,7 +822,7 @@ class ExperimentalLiveSeparator:
             out = np.zeros((num_frames, self.audio_config.channels), dtype=np.float32)
             if take <= 0:
                 return out
-            start = (self._out_write_pos - take) % self._out_cap_frames
+            start = (self._out_write_pos - self._out_available) % self._out_cap_frames
             if start + take <= self._out_cap_frames:
                 voc = self._out_vocals[start : start + take]
                 inst = self._out_inst[start : start + take]
@@ -831,7 +831,8 @@ class ExperimentalLiveSeparator:
                 voc = np.vstack([self._out_vocals[start:], self._out_vocals[: take - first]])
                 inst = np.vstack([self._out_inst[start:], self._out_inst[: take - first]])
             mixed = np.clip(voc * vg + inst * ig, -1.0, 1.0)
-            out[-take:] = mixed
+            out[:take] = mixed
+            self._out_available -= take
             return out
 
     def _run_loop(self) -> None:

@@ -22,6 +22,6 @@
 | 一键安装 `setup_windows.ps1`，含 cu128 约束、`-CudaWheelDir` 和短路径 MIDI 环境 | 已实测（第五轮本地 wheel 路线） | 在线下载停滞的根因未定位。 |
 | PyInstaller 打包 Core | 已实测（第二至五轮） | [build_windows.ps1](../scripts/build_windows.ps1)、[listenscope_core.spec](../packaging/listenscope_core.spec)。 |
 | 脱敏诊断 ZIP 导出 | 仅自动化 | [diagnostics.py](../core/diagnostics.py)。 |
-| 近实时二轨分离（实验，默认关闭） | 未通过 | 第五轮启动即触发内存保护，没有听到输出。输出环读取不推进游标（见 [CURRENT_STATE](CURRENT_STATE.md)）。 |
+| 近实时二轨分离（实验，默认关闭） | 未通过目标机验收 | 第五轮启动即触发内存保护，没有听到输出。修复分支已修复输出环重复读取，待目标机复测（见 [CURRENT_STATE](CURRENT_STATE.md)）。 |
 | Chroma 纵轴拥挤优化、相对调性的和弦级数显示 | 未实现 | 第五轮 UI 待办。 |
 | 自动化 CI | 已提供 Linux offscreen pytest 工作流 | 见 [DEVELOPMENT](DEVELOPMENT.md)；Windows 实测仍需手动执行。 |
