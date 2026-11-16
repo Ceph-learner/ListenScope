@@ -22,7 +22,7 @@ GPU 分轨和 CPU MIDI 各用独立环境。实验性近实时分轨位于 [stre
   - 目标机尚未复测后续的分轨接缝、近实时播放、和弦级数与历史目录 MIDI 输出修复。
 - **云端 Linux**：2026-11-15 在 `6d9ade0` 上运行 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`，115 passed。环境为 Debian 12、Python 3.11.2。仅安装 [requirements-core.txt](../requirements-core.txt) 和 pytest 的全新 venv 结果相同。
 - 该报告与 [README](../README.md) 的历史说明写于不同时间，有出入时以对应 SHA 和证据为准。
-- **GitHub**：2026-11-16，近实时声卡回调优化经 [PR #9](https://github.com/Ceph-learner/ListenScope/pull/9) 合入 `main`（`ac093fd`），PR 的 [CI](https://github.com/Ceph-learner/ListenScope/actions/runs/43798846678) 通过 133 项。`*-backup` 标签和 `backup/*` 分支是早期阶段的快照。
+- **GitHub**：2026-11-16，CUDA wheel 预检经 [PR #10](https://github.com/Ceph-learner/ListenScope/pull/10) 合入 `main`（`29be3d4`）。前两次 CI 在 checkout 失败，第三次 [CI](https://github.com/Ceph-learner/ListenScope/actions/runs/43799776097/attempts/3) 通过 139 项。`*-backup` 标签和 `backup/*` 分支是早期阶段的快照。
 
 ## 已知问题与下一步
 
@@ -32,6 +32,7 @@ GPU 分轨和 CPU MIDI 各用独立环境。实验性近实时分轨位于 [stre
    - `f1bd25f` 按捕获实际模式拒绝系统环回下的近实时监听，包括进程捕获退回系统环回。停止或切换捕获时自动关闭监听，基础捕获及分析仍可用。
    - 实验页与诊断摘要分别提供输入跳段、输出重缓冲和声卡报告欠载的次数，以及输出缓冲溢出丢弃的帧数。已播放的帧与捕获源失效时的主动清空不计入输出溢出。超长批次按两条轨的共同帧位置取尾段，避免错位。
    - `c7d37b4` 在声卡回调中直接写输出缓冲，回绕时分段读取。非默认增益复用至多 32 KiB 的工作区。本机合成回调验证了帧序、补静音和临时分配改善，真实设备听感待复测。
+   - 速度基准和运行 RTF 都按新增可播放音频时长计算，重叠部分不会重复计入。短基准沿用生产块长。旧报告的 RTF 数值采用旧口径，需在目标机重跑才能直接对照。
    - 推断（待目标机确认）：主循环在资源状态为 WARNING 时就会自动停止（[live_separator.py](../streaming/live_separator.py#L843-L850)），WARNING 包括可用内存低于 5120 MiB（[resource_manager.py](../core/resource_manager.py)）。这可能是 16 GB 机器上触发保护的原因。
    - 下一步按 [HANDOFF](HANDOFF.md) 复测实际输出和资源保护。
 2. **单轨 MIDI 输出隔离**：`607d4aa` 修复了从历史分轨作业目录打开 WAV 时覆盖同名 MIDI 的问题。直接打开和混音器内转录均经 [`_on_transcribe_stem_midi`](../main.py#L1298) 写入 `work_dir/midi/`，每次生成独立中间文件。专项测试验证重复转换与手动另存，目标机独立 MIDI 环境待复测。
