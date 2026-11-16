@@ -34,3 +34,4 @@ Windows 上执行 `pwsh -File scripts\setup_windows.ps1`（可选 `-CudaWheelDir
 5. 只为真实的 Bug 或需求开 Issue，不建空 Issue、空 PR 或空分支。
 6. 发布：只有在目标机验收通过的提交上，才能由维护者打 `vX.Y.Z` 标签或创建 Release。版本号与 [pyproject.toml](../pyproject.toml) 保持一致。截至本文件，仓库还没有版本标签或 Release。未经用户授权，不得创建 Release 或触发发布。
 7. 结束前按 [AGENTS.md](../AGENTS.md) 更新 [CURRENT_STATE](CURRENT_STATE.md) 和 [HANDOFF](HANDOFF.md)，然后推送，并核对远端 ref。
+8. 每轮外观预览交付，将源码快照和使用合成数据的截图打包，更新 Google Drive 的预览文件并核对远端文件大小与修改时间。压缩包排除本地配置、音频、模型和开发环境。

@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ai.models import MODEL_REGISTRY, list_models
 from audio.playback import StemMixerEngine
+from core.appearance import Appearance
 from core.config import AIConfig, ResourceLimits
 from core.logging import PerformanceRecord
 from core.paths import default_export_dir
@@ -28,6 +29,7 @@ from core.models import (
     SystemHardwareReport,
 )
 
+from .appearance import AppearanceDialog, appearance_stylesheet, apply_plot_appearance
 from .chroma_widget import ChromaAndHarmonyWidget
 from .mixer_widget import StemMixerWidget
 from .resource_widget import ResourceMonitorBar, ResourceStatusPanel
@@ -254,6 +256,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ai_separate_requested = QtCore.Signal(str, str, int, bool)  # (stem_mode, model_id, segment, use_gpu)
     emergency_stop_requested = QtCore.Signal()
     settings_applied = QtCore.Signal(object, object, str)
+    appearance_applied = QtCore.Signal()
     import_audio_requested = QtCore.Signal(str)
     toggle_playback_requested = QtCore.Signal()
     ab_bookmark_save_requested = QtCore.Signal(str)
@@ -270,11 +273,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         ai_python_executable: str = "",
         midi_python_executable: str = "",
         parent: QtWidgets.QWidget | None = None,
+        appearance: Appearance = Appearance(),
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope — 本地音乐分析 · A/B 循环 · 安全资源防护 AI 分轨")
         self.resize(1360, 870)
-        self.setStyleSheet(DARK_STYLESHEET)
 
         self._hardware_report = hardware_report
         self._resource_limits = resource_limits
@@ -311,7 +314,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.clicked.connect(self._on_capture_clicked)
 
         self.capture_status_lbl = QtWidgets.QLabel("未捕获")
-        self.capture_status_lbl.setStyleSheet("padding: 3px 8px; background: #1C2026; border-radius: 4px;")
 
         self.resource_bar = ResourceMonitorBar()
 
@@ -542,6 +544,24 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         bottom_l.addLayout(row_b)
 
         main_layout.addWidget(bottom_box)
+        self.apply_appearance(appearance)
+
+    def apply_appearance(self, appearance: Appearance) -> None:
+        if appearance == getattr(self, "appearance", None):
+            return
+        self.appearance = appearance
+        self.setStyleSheet(appearance_stylesheet(DARK_STYLESHEET, appearance))
+        self.mixer_widget.plot_appearance = appearance
+        for plot in self.findChildren(pg.PlotWidget):
+            apply_plot_appearance(plot, appearance)
+
+    def open_appearance_dialog(self, parent: QtWidgets.QWidget | None = None) -> None:
+        dialog = AppearanceDialog(self.appearance, DARK_STYLESHEET, parent or self)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            appearance = dialog.values()
+            if appearance != self.appearance:
+                self.apply_appearance(appearance)
+                self.appearance_applied.emit()
 
     @property
     def last_verified_ai_probe(self) -> Optional[dict[str, Any]]:
@@ -797,7 +817,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.blockSignals(False)
         if not active:
             self._last_capture_banner = None
-            self.capture_status_lbl.setStyleSheet("padding: 3px 8px; background: #1C2026; border-radius: 4px;")
+            self.capture_status_lbl.setStyleSheet("")
+            self.capture_status_lbl.setText("未捕获")
+            self.capture_status_lbl.setToolTip("")
 
     def show_banner_message(self, text: str) -> None:
         if not text:
@@ -808,17 +830,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.notice_banner.setVisible(True)
 
     def update_capture_stats(self, stats: CaptureStats, ring_available_sec: float) -> None:
-        self.set_capture_active_ui(stats.is_running)
+        if self.capture_btn.isChecked() != stats.is_running:
+            self.set_capture_active_ui(stats.is_running)
         silence = "静音" if stats.is_silent else "有信号"
         if stats.mode == CaptureMode.SYSTEM_LOOPBACK:
-            self.capture_status_lbl.setStyleSheet(
-                "padding: 3px 8px; background: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 4px;"
-            )
+            style = "padding: 3px 8px; background: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 4px;"
             prefix = "[混入警告] "
         else:
-            self.capture_status_lbl.setStyleSheet("padding: 3px 8px; background: #1C2026; border-radius: 4px;")
+            style = ""
             prefix = ""
-        self.capture_status_lbl.setText(
+        if self.capture_status_lbl.styleSheet() != style:
+            self.capture_status_lbl.setStyleSheet(style)
+        self.capture_status_lbl.setText(f"{prefix}{silence} · {stats.rms_dbfs:.1f} dBFS" if stats.is_running else "未捕获")
+        self.capture_status_lbl.setToolTip(
             f"{prefix}{stats.mode.value} | {stats.process_name} | RMS {stats.rms_dbfs:.1f} dBFS [{silence}] | "
             f"Drop(Over)={stats.buffer_overruns} Under={stats.buffer_underruns}"
         )
@@ -884,6 +908,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             midi_python_executable=self._midi_python_executable,
             parent=self,
         )
+        dlg.appearance_requested.connect(self.open_appearance_dialog)
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             if dlg.updated_limits is not None and dlg.updated_ai_config is not None:
                 self._resource_limits = dlg.updated_limits

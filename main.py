@@ -294,6 +294,7 @@ class ListenScopeController:
             mixer_engine=self.mixer_engine,
             ai_python_executable=ai_python_executable or "",
             midi_python_executable=self._midi_python_executable,
+            appearance=saved_settings.appearance,
         )
         self.metronome.set_bpm(saved_settings.metronome_bpm)
         self.metronome.set_beats_per_bar(saved_settings.metronome_beats_per_bar)
@@ -412,6 +413,7 @@ class ListenScopeController:
         w.live_widget.stop_requested.connect(self._on_live_stop)
         w.live_widget.balance_changed.connect(self.live_separator.set_gains)
         w.settings_applied.connect(self._on_settings_applied)
+        w.appearance_applied.connect(self._on_appearance_applied)
         w.ab_bookmark_save_requested.connect(self._on_ab_bookmark_save)
         w.ab_bookmark_select_requested.connect(self._on_ab_bookmark_select)
         w.ab_bookmark_delete_requested.connect(self._on_ab_bookmark_delete)
@@ -1515,7 +1517,16 @@ class ListenScopeController:
             metronome_count_in=self.metronome.count_in_enabled,
             transpose_semitones=self.window.chroma_widget.transpose_semitones,
             auto_reset_on_track_change=self._auto_reset_on_track_change,
+            appearance=self.window.appearance,
         )
+
+    def _on_appearance_applied(self) -> None:
+        try:
+            save_settings(self._build_persisted_settings(), self._settings_path)
+            self._practice_dirty = False
+        except OSError as exc:
+            self._practice_dirty = True
+            self.window.show_banner_message(f"⚠️ 外观已生效，但写入本地设置失败: {exc}")
 
     def _on_settings_applied(
         self,

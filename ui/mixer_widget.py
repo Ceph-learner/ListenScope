@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtWidgets
 
 from analysis.chroma import PITCH_CLASSES
 from audio.playback import StemMixerEngine
+from core.appearance import Appearance
 from core.models import (
     AIJobProgress,
     AIJobResult,
@@ -21,6 +22,7 @@ from core.models import (
     OOMRecoveryAction,
     StemDeepAnalysisReport,
 )
+from ui.appearance import apply_plot_appearance
 from ui.chroma_widget import (
     spell_chord_tones,
     transpose_chord_symbol,
@@ -50,7 +52,7 @@ class _StemTrackRow(QtWidgets.QFrame):
         self.stem_name = stem_name
         self.stem_path = stem_path
         self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        self.setStyleSheet("QFrame { background: #1C2026; border: 1px solid #2C323C; border-radius: 6px; }")
+        self.setProperty("trackCard", True)
 
         row = QtWidgets.QHBoxLayout(self)
         row.setContentsMargins(8, 6, 8, 6)
@@ -144,6 +146,7 @@ class StemMixerWidget(QtWidgets.QWidget):
     def __init__(self, mixer_engine: StemMixerEngine, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.mixer_engine = mixer_engine
+        self.plot_appearance = Appearance()
         self._rows: dict[str, _StemTrackRow] = {}
         self._stem_paths: dict[str, str] = {}
         self._piano_roll_item: Optional[pg.BarGraphItem] = None
@@ -718,6 +721,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         for name, state in tracks.items():
             row = _StemTrackRow(name, str(state.path), state.duration_sec)
+            apply_plot_appearance(row.wave_plot, self.plot_appearance)
             mins, maxs = self.mixer_engine.get_stem_waveform_envelope(name)
             row.set_waveform(mins, maxs)
             row.mute_changed.connect(self.mixer_engine.set_mute)

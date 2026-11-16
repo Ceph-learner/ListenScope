@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .config import AIConfig, ResourceLimits
+from .appearance import Appearance
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class PersistedSettings:
     transpose_semitones: int = 0
     auto_reset_on_track_change: bool = True
     schema_version: int = 2
+    appearance: Appearance = Appearance()
 
 
 def default_settings_path() -> Path:
@@ -164,6 +166,7 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
         ai_config=ai_cfg,
         ai_python_executable=ai_python,
         midi_python_executable=midi_python,
+        appearance=Appearance.from_mapping(payload.get("appearance")),
         **practice,
     )
 
@@ -186,6 +189,7 @@ def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None
         "ai_config": asdict(settings.ai_config),
         "ai_python_executable": str(settings.ai_python_executable or "").strip(),
         "midi_python_executable": str(settings.midi_python_executable or "").strip(),
+        "appearance": asdict(settings.appearance),
         **practice,
     }
     tmp = target.with_suffix(".json.tmp")
