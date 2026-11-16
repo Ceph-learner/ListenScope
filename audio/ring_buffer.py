@@ -288,37 +288,44 @@ class FixedRingBuffer:
             full_output = (total * up + down - 1) // down
             written = 0
             window = np.empty((0, channels), dtype=np.float32)
-            window_start = available_end = 0
-            for start in range(0, source_limit, step):
+            start = window_start = available_end = 0
+            eof = False
+            while start < source_limit:
                 stop = min(source_limit, start + step)
                 # Put the read origin on the same output phase as the start of the file.
                 left = max(0, (start - halo) // down * down)
                 right = min(total, stop + halo)
                 # Keep the overlap and read only new samples, including for compressed audio.
                 tail = window[left - window_start:]
-                if right > available_end:
+                parts = [tail] if len(tail) else []
+                while not eof and available_end < right:
                     incoming = read(right - available_end)
-                    window = np.concatenate((tail, incoming)) if len(tail) else incoming
-                else:
-                    window = tail
-                window_start = left
-                available_end = left + len(window)
+                    if not len(incoming):
+                        eof = True
+                        break
+                    parts.append(incoming)
+                    available_end += len(incoming)
+                    if not halo:
+                        # Same-rate reads can emit partial blocks without any right context.
+                        break
                 if available_end <= start:
                     break
+                window = parts[0] if len(parts) == 1 else np.concatenate(parts)
+                window_start = left
                 converted = normalize_to_canonical_pcm(
                     window, src_rate=rate, src_channels=channels,
                     dst_rate=self.sample_rate, dst_channels=self.channels,
                 )
                 origin = left * up // down
                 first_frame = (start * up + down - 1) // down
-                last_frame = min(max_dst_frames, (min(stop, available_end) * up + down - 1) // down)
+                start_next = min(stop, available_end)
+                last_frame = min(max_dst_frames, (start_next * up + down - 1) // down)
                 block = converted[first_frame - origin:last_frame - origin]
                 if len(block):
                     if written == 0:
                         self.clear()
                     written += self.write(block)
-                if available_end < stop:
-                    break
+                start = start_next
             if written == 0:
                 raise ValueError(f"音频文件未能解码出有效帧: {src.name}")
             return written / float(self.sample_rate), full_output > max_dst_frames

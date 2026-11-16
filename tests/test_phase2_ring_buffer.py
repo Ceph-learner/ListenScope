@@ -114,7 +114,7 @@ def test_ab_playback_does_not_repeat_partially_overwritten_read(monkeypatch):
     np.testing.assert_allclose(player.render_block(4)[:, 0], frames[2:6])
 
 
-@pytest.mark.parametrize("decoder", ["soundfile", "wave", "partial-fallback"])
+@pytest.mark.parametrize("decoder", ["soundfile", "wave", "partial-fallback", "short-reads"])
 @pytest.mark.parametrize("source_rate,channels,cap", [(44100, 1, None), (96000, 2, 0.5), (48000, 2, None)])
 def test_audio_import_matches_continuous_resampling(tmp_path, monkeypatch, decoder, source_rate, channels, cap):
     import soundfile as sf
@@ -138,6 +138,12 @@ def test_audio_import_matches_continuous_resampling(tmp_path, monkeypatch, decod
                 return super().read(*args, **kwargs)
 
         monkeypatch.setattr(sf, "SoundFile", InterruptedReader)
+    elif decoder == "short-reads":
+        class ShortReader(sf.SoundFile):
+            def read(self, frames, **kwargs):
+                return super().read(max(1, frames // 2), **kwargs)
+
+        monkeypatch.setattr(sf, "SoundFile", ShortReader)
 
     ring = FixedRingBuffer(AudioConfig(ring_buffer_seconds=1))
     seconds, truncated = ring.import_audio_file_streaming(path, max_seconds=cap, chunk_seconds=0.011)
