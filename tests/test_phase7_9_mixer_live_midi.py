@@ -69,6 +69,7 @@ def test_experimental_live_separator_bounded_drop_and_auto_stop_on_resource_warn
     assert live.is_active is False  # Strictly disabled by default
 
     try:
+        live._output_overwritten_frames = 12
         live._output_primed = True
         live._pull_playback_block(4, device_underflow=True)
         live._latest_rtf = 0.8
@@ -82,6 +83,7 @@ def test_experimental_live_separator_bounded_drop_and_auto_stop_on_resource_warn
         assert live.is_active is True
         metrics = live.latest_metrics()
         assert (metrics.playback_rebuffers, metrics.device_underflows, metrics.rtf) == (0, 0, 0.0)
+        assert metrics.output_overwritten_frames == 0
 
         # Push > max_buffer_seconds immediately to force bounded drop protection
         t = np.arange(48000 * 5, dtype=np.float32) / 48000.0
@@ -149,7 +151,32 @@ def test_live_output_overflow_retains_newest_unread_frames(live_output_ring, sec
     live._append_output(stereo[6:], np.zeros_like(stereo[6:]))
     np.testing.assert_array_equal(live.pull_mixed_block(3), stereo[-8:-5])
     np.testing.assert_array_equal(live.pull_mixed_block(5), stereo[-5:])
-    assert live.latest_metrics().buffer_seconds == 0.0
+    metrics = live.latest_metrics()
+    assert metrics.buffer_seconds == 0.0
+    assert metrics.output_overwritten_frames == 6 + second_length - 8
+
+
+def test_live_output_oversized_stems_keep_the_same_frame_offsets(live_output_ring) -> None:
+    live = live_output_ring
+    vocals = np.repeat((np.arange(10, dtype=np.float32) / 32)[:, None], 2, axis=1)
+    inst = np.repeat((np.arange(12, dtype=np.float32) / 64)[:, None], 2, axis=1)
+    live._append_output(vocals, inst)
+
+    np.testing.assert_array_equal(live.pull_mixed_block(8), vocals[2:10] + inst[2:10])
+    assert live.latest_metrics().output_overwritten_frames == 2
+
+
+def test_live_output_does_not_count_consumed_frames_as_overwritten(live_output_ring) -> None:
+    live = live_output_ring
+    pcm = np.arange(14, dtype=np.float32)[:, None] / 16
+    stereo = np.repeat(pcm, 2, axis=1)
+    live._append_output(stereo[:6], np.zeros_like(stereo[:6]))
+    np.testing.assert_array_equal(live.pull_mixed_block(4), stereo[:4])
+    live._append_output(stereo[6:12], np.zeros_like(stereo[6:12]))
+    assert live.latest_metrics().output_overwritten_frames == 0
+    live._append_output(stereo[12:], np.zeros_like(stereo[12:]))
+    np.testing.assert_array_equal(live.pull_mixed_block(8), stereo[6:14])
+    assert live.latest_metrics().output_overwritten_frames == 2
 
 
 def test_live_playback_primes_again_after_underrun(live_output_ring) -> None:

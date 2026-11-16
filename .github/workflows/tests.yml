@@ -34,4 +34,4 @@ jobs:
       - name: Install core dependencies
         run: python -m pip install -r requirements-core.txt pytest
       - name: Run pytest
-        run: python -m pytest -q --tb=short
+        run: python -m pytest -v --tb=short -o faulthandler_timeout=60

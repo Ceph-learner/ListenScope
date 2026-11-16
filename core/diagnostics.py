@@ -103,6 +103,7 @@ def export_diagnostic_bundle(
             "buffer_seconds": live.buffer_seconds,
             "max_buffer_seconds": live.max_buffer_seconds,
             "input_drop_events": live.dropped_chunks,
+            "output_overwritten_frames": live.output_overwritten_frames,
             "playback_rebuffers": live.playback_rebuffers,
             "device_underflows": live.device_underflows,
         }
