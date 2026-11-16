@@ -274,6 +274,7 @@ class ListenScopeController:
         self._stem_generation = 0
         self._practice_dirty = False
         self._auto_reset_on_track_change = bool(saved_settings.auto_reset_on_track_change)
+        self._auto_track_reset_count = 0
         self._track_tracker = TrackChangeTracker(confirm_polls=2)
         self._track_monitor_stop = threading.Event()
         self._track_monitor_thread: Optional[threading.Thread] = None
@@ -606,6 +607,8 @@ class ListenScopeController:
             if self._auto_reset_on_track_change:
                 self.analysis_worker.reset_harmony()
                 self.window.chroma_widget.clear_progression()
+                self._auto_track_reset_count += 1
+                logging.getLogger(__name__).info("SMTC automatic harmony resets: %d", self._auto_track_reset_count)
                 self.window.chroma_widget.sync_auto_reset_ui(
                     track_status_text=f"曲目监测 (SMTC): {track_label} [已自动重置旧曲 {prev_label}]"
                 )

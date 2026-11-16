@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from queue import Queue
 import time
 import wave
 
@@ -142,6 +143,40 @@ def test_live_output_overflow_retains_newest_unread_frames(live_output_ring, sec
     np.testing.assert_array_equal(live.pull_mixed_block(3), stereo[-8:-5])
     np.testing.assert_array_equal(live.pull_mixed_block(5), stereo[-5:])
     assert live.latest_metrics().buffer_seconds == 0.0
+
+
+def test_live_playback_primes_again_after_underrun(live_output_ring) -> None:
+    live = live_output_ring
+    pcm = np.full((3, 2), 0.25, dtype=np.float32)
+    silent = np.zeros((4, 2), dtype=np.float32)
+    live._append_output(pcm, pcm)
+    np.testing.assert_array_equal(live._pull_playback_block(4), silent)
+    live._append_output(pcm, pcm)
+    np.testing.assert_array_equal(live._pull_playback_block(4), np.full((4, 2), 0.5))
+    np.testing.assert_array_equal(live._pull_playback_block(4), np.array([[0.5, 0.5]] * 2 + [[0, 0]] * 2))
+    live._append_output(pcm, pcm)
+    np.testing.assert_array_equal(live._pull_playback_block(4), silent)
+    live._append_output(pcm, pcm)
+    np.testing.assert_array_equal(live._pull_playback_block(4), np.full((4, 2), 0.5))
+
+
+def test_live_ignores_duplicate_results_and_drops_overlap_across_gap(live_output_ring, monkeypatch) -> None:
+    live = live_output_ring
+    live.resource_manager.set_simulation_overrides(SimulationOverrides(system_ram_available_mb=12000.0))
+    responses = Queue()
+    for seq, sample in ((0, 0.125), (0, 0.25), (2, 0.375), (1, 0.5)):
+        pcm = np.full((live._chunk_frames, 2), sample, dtype=np.float32)
+        responses.put({"type": "chunk", "seq": seq, "shape": pcm.shape,
+                       "vocals": pcm.tobytes(), "instrumental": bytes(pcm.nbytes)})
+    live._res_q = responses
+    monkeypatch.setattr(live, "_is_worker_alive", lambda: True)
+    monkeypatch.setattr(live._stop_event, "wait", lambda timeout: live._stop_event.set())
+
+    live._run_loop()
+
+    np.testing.assert_array_equal(live.pull_mixed_block(8), np.repeat(
+        np.array([0.125] * 3 + [0.375] * 3 + [0.0] * 2)[:, None], 2, axis=1
+    ))
 
 
 def test_midi_transcription_refuses_full_mix_and_writes_valid_midi_for_stem(tmp_path) -> None:

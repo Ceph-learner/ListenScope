@@ -41,6 +41,11 @@ _EXTRA_CHORD_SUFFIXES = {"6", "m6", "min6", "9", "m9", "maj9", "add9", "5", "dim
 _CHORD_RE = re.compile(r"^([A-Ga-g])([#b♯♭]?)(.*)$")
 _NOTE_RE = re.compile(r"^([A-Ga-g])([#b♯♭]?)(-?\d+)?$")
 _KEY_RE = re.compile(r"^([A-Ga-g][#b♯♭]?)\s+(major|minor|大调|小调)$", re.IGNORECASE)
+_MAJOR_DEGREES = ("I", "♭II", "II", "♭III", "III", "IV", "♯IV", "V", "♭VI", "VI", "♭VII", "VII")
+_MINOR_DEGREES = ("I", "♭II", "II", "III", "♯III", "IV", "♯IV", "V", "VI", "♯VI", "VII", "♯VII")
+_MINOR_QUALITIES = {"m", "min", "m6", "min6", "m7", "min7", "m9", "dim", "dim7", "m7b5"}
+_DEGREE_SUFFIXES = {"maj": "", "m": "", "min": "", "m6": "6", "min6": "6", "m7": "7", "min7": "7",
+                    "m9": "9", "dim": "°", "dim7": "°7", "m7b5": "ø7", "aug": "+"}
 
 
 def _normalize_pitch_token(token: str) -> str | None:
@@ -49,6 +54,25 @@ def _normalize_pitch_token(token: str) -> str | None:
         return None
     norm = _FLAT_TO_SHARP.get(clean.upper(), clean[0].upper() + clean[1:])
     return norm if norm in PITCH_CLASSES else None
+
+
+def chord_scale_degree(chord_name: str, key_label: str) -> str:
+    """Label the root relative to the detected major or natural minor scale."""
+    key = _KEY_RE.fullmatch(key_label.strip())
+    chord = _CHORD_RE.fullmatch(chord_name.split("/", 1)[0].strip())
+    if key is None or chord is None:
+        return "-"
+    tonic = _normalize_pitch_token(key[1])
+    root = _normalize_pitch_token(chord[1] + chord[2])
+    suffix = chord[3].strip()
+    quality = "maj" if suffix == "M" else suffix.lower()
+    if tonic is None or root is None or (quality not in _CHORD_INTERVALS and quality not in _EXTRA_CHORD_SUFFIXES):
+        return "-"
+    degrees = _MINOR_DEGREES if key[2].lower() in ("minor", "小调") else _MAJOR_DEGREES
+    degree = degrees[(PITCH_CLASSES.index(root) - PITCH_CLASSES.index(tonic)) % 12]
+    if quality in _MINOR_QUALITIES:
+        degree = degree.lower()
+    return degree + _DEGREE_SUFFIXES.get(quality, quality)
 
 
 def transpose_note_name(note_name: str, semitones: int) -> str:

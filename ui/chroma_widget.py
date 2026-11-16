@@ -10,6 +10,7 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from analysis.chords import (
+    chord_scale_degree,
     spell_chord_tones,
     transpose_chord_symbol,
     transpose_key_label,
@@ -162,11 +163,14 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chord_primary_lbl = QtWidgets.QLabel("N (静音)")
         self.chord_primary_lbl.setStyleSheet("font-size: 24px; font-weight: 700; color: #7EE2B8;")
         self.chord_tones_lbl = QtWidgets.QLabel("构成音: -")
+        self.chord_degree_lbl = QtWidgets.QLabel("相对级数: -")
+        self.chord_degree_lbl.setToolTip("相对当前检测调性的和弦级数。小调以自然小调音阶为基准。")
         self.chord_tones_lbl.setStyleSheet("color: #B8C2D0; font-weight: 600;")
         self.chord_secondary_lbl = QtWidgets.QLabel("第二候选: -")
         self.chord_stability_lbl = QtWidgets.QLabel("稳定度: Silent | 相关度: 0.00")
         chord_l.addWidget(self.chord_primary_lbl)
         chord_l.addWidget(self.chord_tones_lbl)
+        chord_l.addWidget(self.chord_degree_lbl)
         chord_l.addWidget(self.chord_secondary_lbl)
         chord_l.addWidget(self.chord_stability_lbl)
         cards.addWidget(chord_box, 1)
@@ -332,6 +336,9 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chroma_hist_plot = pg.PlotWidget(title="有界 Chroma 时序热图 (最多保留 120s)")
         self.chroma_hist_plot.setBackground("#14161A")
         ay = self.chroma_hist_plot.getAxis("left")
+        note_font = QtGui.QFont(self.font())
+        note_font.setPixelSize(10)
+        ay.setStyle(tickFont=note_font, tickTextOffset=3)
         ay.setTicks([[(i + 0.5, name) for i, name in enumerate(PITCH_CLASSES)]])
         self._chroma_img = pg.ImageItem()
         try:
@@ -465,6 +472,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chord_progression_lbl.setText("最近和弦进行 (最多 12 步): -")
         self.chord_primary_lbl.setText("N (静音)")
         self.chord_tones_lbl.setText("构成音: -")
+        self.chord_degree_lbl.setText("相对级数: -")
         self.chord_secondary_lbl.setText("第二候选: -")
         self.chord_stability_lbl.setText("稳定度: Silent | 相关度: 0.00")
         self.key_primary_lbl.setText("Unknown")
@@ -500,6 +508,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         )
 
         ky = snap.key
+        degree = "-" if ch.is_silent else chord_scale_degree(ch.primary, ky.primary)
+        self.chord_degree_lbl.setText(f"相对级数: {degree}")
         if semi == 0:
             self.key_primary_lbl.setText(ky.primary)
             self.key_secondary_lbl.setText(f"第二候选: {ky.secondary}")
