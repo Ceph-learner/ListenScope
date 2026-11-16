@@ -79,3 +79,7 @@ pwsh -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
 .\.venv-core\Scripts\python.exe capture_test.py --name QQMusic.exe --fallback-system
 .\.venv-core\Scripts\python.exe main.py --ai-python .\.venv-ai\Scripts\python.exe --midi-python .\.venv-midi\Scripts\python.exe
 ```
+
+## 致谢
+
+这个项目能做起来，离不开很多人已经做好的模型、音频工具和研究。我只是站在巨人的肩膀上，把这些成果串成一个能在本机听歌、扒谱和练习的工具。感谢上游作者、模型训练者和维护者。各项目的具体贡献和原始出处见 [致谢与来源](ACKNOWLEDGMENTS.md)。
