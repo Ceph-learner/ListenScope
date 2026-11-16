@@ -36,7 +36,7 @@ ListenScope/
 ├── ui/                 # PySide6 + PyQtGraph GUI (防重叠对数频谱刻度, Chroma/Capo/节拍器/自动切歌开关, 120s 拖拽时间轴, 分轨混音+打开单轨 WAV 转 MIDI+钢琴卷帘, AI & MIDI 独立验证设置页)
 ├── packaging/          # PyInstaller Core 规范 (排除 CUDA/PyTorch/TF 臃肿依赖, 附带 requirements-ai.txt / constraints-ai-cu128.txt / requirements-midi.txt、winrt 绑定与 Worker/Probe 模块)
 ├── scripts/            # check_env.py, probe_media_session.py (只读 SMTC 切歌信号探针), setup_windows.ps1 (支持 -CudaWheelDir 与 cu128 约束/短路径) & build_windows.ps1
-├── docs/               # PACKAGING.md 与 WINDOWS_TEST_REPORT.md (Windows 11 + RTX 5060 Ti 真机四轮验收记录)
+├── docs/               # CURRENT_STATE/HANDOFF (AI 接手入口), REQUIREMENTS/ARCHITECTURE/DECISIONS/DEVELOPMENT, PACKAGING.md 与 WINDOWS_TEST_REPORT.md (Windows 11 + RTX 5060 Ti 真机五轮验收记录)
 ├── capture_test.py     # Phase 1 CLI 捕获 + ResourceManager PoC
 └── main.py             # 桌面主程序入口 (单轨 WAV 转 MIDI、SMTC 监测、--ai-python 与 --midi-python 路由与偏好持久化)
 ```
@@ -49,7 +49,7 @@ ListenScope/
 > 以下区分 **云端 Linux 自动化验证**、**Windows 真机实测已通过项** 与 **待真机补验项**（详情见 [docs/WINDOWS_TEST_REPORT.md](docs/WINDOWS_TEST_REPORT.md)）：
 > - **Windows 11 + RTX 5060 Ti (8GB VRAM, 16GB RAM) 已实测通过（含第四轮 `873db544`）**：Core / GPU AI / CPU MIDI 三环境 `pip check` 与 Windows `pytest` 112/112；**30 分钟 `QQMusic.exe` `process_loopback` 连续捕获**（主进程 `289–362 MiB`、队列 `0/64`、累计溢出/欠载 `0/0`）与**手动点击「换歌重置」**立即清空 12 步历史；打包版默认 `6.0s` 分块下真实 30s GPU 二轨 (`9.469s`，2,670 个 CUDA 节点事件) 与四轨 (`4.344s`) 分离及显存/子树完全回落；打包版调用独立 Python 3.11 CPU 环境导出 `bass` 的 **Spotify Basic Pitch CPU (`basic-pitch`)** `.mid`（`120` 音符，与 CLI 逐字节同源 SHA-256），且重启 `exe` 后保留设置。第四轮报告同步确认：默认在线下载 2.75 GB `torch` wheel 时曾出现 0 字节停滞（未获原始 pip 异常，根因待定位），使用本地官方 wheel + `cu128` 约束路径通过。
 > - **云端 Linux 沙箱已验证（无 Windows 声卡 / 无 WinRT SMTC / 无 NVIDIA GPU）**：`setup_windows.ps1 -CudaWheelDir` 参数与错误校验、`打开单轨 WAV...` 直转 MIDI 流程（不中断捕获、不清空 120s 缓冲、不污染源目录）、SMTC `TrackChangeTracker` 防抖状态机与只读探针 `--self-test-mock`（模拟播放/暂停/恢复/拖动进度/闪烁/无关应用无误重置 & 连续两次新曲确认后触发 `reset_harmony()` + 设置开关持久化）、以及完整 headless PySide6 + pytest 自动化回归。
-> - **仍待 Windows 本机复测/验收**：1) `-CudaWheelDir` 优先使用本地官方 `cu128` wheel 安装与缺项回退验证；2) 新打包 GUI 通过「打开单轨 WAV 转 MIDI...」直接打开上轮 `bass.wav` 并导出可被 `mido` 解析的 `.mid`；3) 在目标 Windows 11 运行 `scripts\probe_media_session.py --process QQMusic.exe --duration 30` 确认 QQ 音乐实际 SMTC 元数据与自动切歌重置表现（同曲暂停/恢复/拖动进度条不误清历史，真切歌触发自动重置）；4) **持续近实时分轨播放**继续留待单独验证延迟、掉块与资源占用。
+> - **最新状态（第五轮 `f03dbf1` 及之后）以 [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) 为准**：`-CudaWheelDir` 本地 wheel 安装与单轨 WAV 直转 MIDI 已在目标机通过，但单轨 WAV 位于历史作业目录时会覆盖同名 `.mid`；QQ 音乐 SMTC 自动重置已出现但未排除重复触发；持续近实时分轨在目标机触发内存保护、尚未通过。
 
 ---
 
