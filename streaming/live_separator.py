@@ -262,6 +262,8 @@ class ExperimentalLiveSeparator:
         self._out_write_pos = 0
         self._out_available = 0
         self._output_primed = False
+        self._playback_rebuffers = 0
+        self._device_underflows = 0
 
         self._lock = threading.RLock()
         self._active = False
@@ -339,6 +341,8 @@ class ExperimentalLiveSeparator:
                 max_buffer_seconds=self.ai_config.live_max_buffer_seconds,
                 dropped_chunks=self._dropped_chunks,
                 status_message=status,
+                playback_rebuffers=self._playback_rebuffers,
+                device_underflows=self._device_underflows,
             )
 
     def run_benchmark(
@@ -653,12 +657,15 @@ class ExperimentalLiveSeparator:
 
                 self._model_id = model_id
                 self._dropped_chunks = 0
+                self._latest_rtf = 0.0
                 self._latest_latency_ms = 0.0
                 self._out_vocals.fill(0.0)
                 self._out_inst.fill(0.0)
                 self._out_write_pos = 0
                 self._out_available = 0
                 self._output_primed = False
+                self._playback_rebuffers = 0
+                self._device_underflows = 0
                 self._overlap_add.reset()
                 self._last_read_abs_frame = self.ring_buffer.total_written_frames
 
@@ -840,13 +847,17 @@ class ExperimentalLiveSeparator:
             self._out_available -= take
             return out
 
-    def _pull_playback_block(self, frames: int) -> np.ndarray:
+    def _pull_playback_block(self, frames: int, *, device_underflow: bool = False) -> np.ndarray:
         """Let the playback queue recover between bursts of inference output."""
         with self._lock:
+            if device_underflow:
+                self._device_underflows += 1
             if not self._output_primed:
                 target = min(self._out_cap_frames, max(frames, self._hop_frames * 2))
                 if self._out_available < target:
                     return np.zeros((frames, self.audio_config.channels), dtype=np.float32)
+            elif self._out_available < frames:
+                self._playback_rebuffers += 1
             self._output_primed = self._out_available >= frames
             return self.pull_mixed_block(frames)
 
@@ -1059,7 +1070,7 @@ class ExperimentalLiveSeparator:
             if self._stop_event.is_set() or (source_is_current is not None and not source_is_current()):
                 outdata.fill(0.0)
                 return
-            outdata[:] = self._pull_playback_block(frames)
+            outdata[:] = self._pull_playback_block(frames, device_underflow=getattr(_status, "output_underflow", False))
 
         stream = None
         try:

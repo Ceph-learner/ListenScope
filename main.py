@@ -872,6 +872,7 @@ class ListenScopeController:
         perf_logger = self.perf_logger
         log_handler = self.log_handler
         settings_path = self._settings_path
+        live_metrics = self.live_separator.latest_metrics()
 
         def _run() -> None:
             try:
@@ -886,6 +887,7 @@ class ListenScopeController:
                     perf_logger=perf_logger,
                     log_handler=log_handler,
                     settings_path=settings_path,
+                    live_separation_metrics=live_metrics,
                 )
                 msg = f"✅ 已生成离线排障诊断包 (.zip): {saved}"
             except Exception as exc:

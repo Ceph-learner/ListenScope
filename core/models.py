@@ -294,6 +294,8 @@ class LiveSeparationMetrics:
     max_buffer_seconds: float
     dropped_chunks: int
     status_message: str
+    playback_rebuffers: int = 0
+    device_underflows: int = 0
 
 
 @dataclass

@@ -255,6 +255,7 @@ def test_diagnostic_bundle_export_sanitized_and_bounded(tmp_path: Path) -> None:
             assert summary["target_hardware"]["gpu_name"] == "NVIDIA GeForce RTX 5060 Ti"
             assert summary["target_hardware"]["vram_gb"] == 8
             assert summary["target_hardware"]["ram_gb"] == 16
+            assert "live_separation" not in summary
             if len(home_str) >= 3:
                 assert home_str not in zf.read("diagnostic_summary.json").decode("utf-8")
                 assert home_str not in zf.read("recent_logs.txt").decode("utf-8")
@@ -345,6 +346,13 @@ def test_controller_phase14_integration_bookmarks_metronome_and_diag(tmp_path: P
         ctrl.ab_player.stop()
 
         # 3. Diagnostic ZIP bundle export from controller
+        live = ctrl.live_separator
+        live._dropped_chunks = 2
+        live._output_primed = True
+        live._pull_playback_block(4, device_underflow=True)
+        live._status_message = "private test track and path"
+        ctrl.window.update_live_metrics(live.latest_metrics())
+        assert "输出重缓冲 1" in ctrl.window.live_widget.lbl_playback_health.text()
         diag_zip = tmp_path / "diag" / "test_bundle.zip"
         ctrl._on_export_diagnostic_bundle(str(diag_zip))
         deadline = time.monotonic() + 5.0
@@ -352,6 +360,13 @@ def test_controller_phase14_integration_bookmarks_metronome_and_diag(tmp_path: P
             time.sleep(0.05)
             app.processEvents()
         assert diag_zip.exists()
+        with zipfile.ZipFile(diag_zip) as bundle:
+            summary = bundle.read("diagnostic_summary.json").decode("utf-8")
+            telemetry = json.loads(summary)["live_separation"]
+            assert telemetry["input_drop_events"] == 2
+            assert telemetry["playback_rebuffers"] == 1
+            assert telemetry["device_underflows"] == 1
+            assert "private test track and path" not in summary
         ctrl._on_ui_tick()
         assert "离线排障诊断包" in ctrl.window.notice_banner.text()
     finally:
