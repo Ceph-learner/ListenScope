@@ -7,7 +7,11 @@ history retention.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from operator import index
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 import threading
 import wave
 from typing import Optional
@@ -15,6 +19,24 @@ from typing import Optional
 import numpy as np
 
 from core.config import AudioConfig
+
+
+@contextmanager
+def atomic_pcm16_wav(path: Path, sample_rate: int, channels: int) -> Iterator[wave.Wave_write]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False) as file:
+            tmp_path = Path(file.name)
+            with wave.open(file, "wb") as writer:
+                writer.setnchannels(channels)
+                writer.setsampwidth(2)
+                writer.setframerate(sample_rate)
+                yield writer
+        tmp_path.replace(path)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 class FixedRingBuffer:
@@ -30,6 +52,7 @@ class FixedRingBuffer:
         self._buffer = np.zeros((self.capacity_frames, self.channels), dtype=np.float32)
         self._write_pos = 0
         self._total_written_frames = 0
+        self._generation = 0
         self._lock = threading.RLock()
 
     @property
@@ -60,6 +83,7 @@ class FixedRingBuffer:
             self._buffer.fill(0.0)
             self._write_pos = 0
             self._total_written_frames = 0
+            self._generation += 1
 
     def write(self, chunk: np.ndarray) -> int:
         """Write a (frames, channels) float32 chunk into the preallocated ring buffer."""
@@ -115,6 +139,12 @@ class FixedRingBuffer:
         with self._lock:
             return self._read_range_locked(start_abs_frame, end_abs_frame)
 
+    def read_positioned(self, start_abs_frame: int, end_abs_frame: int) -> tuple[np.ndarray, int]:
+        """Read a range and report where the retained samples actually begin."""
+        with self._lock:
+            start = max(0, self._total_written_frames - self.capacity_frames, start_abs_frame)
+            return self._read_range_locked(start, end_abs_frame), start
+
     def _read_range_locked(self, start_abs_frame: int, end_abs_frame: int) -> np.ndarray:
         oldest = max(0, self._total_written_frames - self.capacity_frames)
         newest = self._total_written_frames
@@ -168,6 +198,29 @@ class FixedRingBuffer:
                 maxs[i] = float(np.max(mono))
             return mins, maxs, avail_sec
 
+    def prepare_export(
+        self, start_abs_frame: int, end_abs_frame: int
+    ) -> tuple[int, int, Callable[[int, int], np.ndarray]]:
+        """Clip the requested interval once and return a bounded exact reader for that capture."""
+        with self._lock:
+            generation = self._generation
+            newest = self._total_written_frames
+            start = max(0, newest - self.capacity_frames, int(start_abs_frame))
+            end = min(newest, int(end_abs_frame))
+        if end <= start:
+            raise ValueError("导出区间为空，或已被历史缓冲覆盖。")
+
+        def read(first: int, stop: int) -> np.ndarray:
+            with self._lock:
+                if generation != self._generation:
+                    raise ValueError("导出期间音频历史已重置，请重新选择 A/B 区间。")
+                chunk = self._read_range_locked(first, stop)
+                if chunk.shape[0] != stop - first:
+                    raise ValueError("导出期间部分音频已被历史缓冲覆盖，请重新选择 A/B 区间。")
+                return chunk
+
+        return start, end, read
+
     def export_wav_streaming(
         self,
         out_path: Path | str,
@@ -181,42 +234,18 @@ class FixedRingBuffer:
         Avoids holding duplicate full-excerpt arrays in RAM.
         Returns (output_path, exported_duration_seconds).
         """
+        chunk_frames = index(chunk_frames)
+        if chunk_frames <= 0:
+            raise ValueError("chunk_frames must be positive")
+        chunk_frames = min(chunk_frames, self.sample_rate)
+        start, end, read = self.prepare_export(start_abs_frame, end_abs_frame)
         path = Path(out_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        with self._lock:
-            oldest = max(0, self._total_written_frames - self.capacity_frames)
-            newest = self._total_written_frames
-            s = max(oldest, int(start_abs_frame))
-            e = min(newest, int(end_abs_frame))
-
-        if e <= s:
-            raise ValueError("Selected time range is empty or already overwritten in the 120s ring buffer.")
-
-        total_written = 0
-        tmp_path = path.with_name(path.name + ".tmp")
-        try:
-            with wave.open(str(tmp_path), "wb") as wf:
-                wf.setnchannels(self.channels)
-                wf.setsampwidth(2)  # 16-bit PCM WAV for broad audio-separator/Cubase compatibility
-                wf.setframerate(self.sample_rate)
-
-                cursor = s
-                while cursor < e:
-                    stop = min(e, cursor + chunk_frames)
-                    chunk = self.read_range(cursor, stop)
-                    if chunk.shape[0] == 0:
-                        break
-                    pcm_i16 = (np.clip(chunk, -1.0, 1.0) * 32767.0).astype(np.int16)
-                    wf.writeframes(pcm_i16.tobytes())
-                    total_written += int(chunk.shape[0])
-                    cursor = stop
-            tmp_path.replace(path)
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
-
-        return path, total_written / float(self.sample_rate)
+        with atomic_pcm16_wav(path, self.sample_rate, self.channels) as writer:
+            for cursor in range(start, end, chunk_frames):
+                chunk = read(cursor, min(end, cursor + chunk_frames))
+                pcm_i16 = (np.clip(chunk, -1.0, 1.0) * 32767.0).astype("<i2")
+                writer.writeframesraw(pcm_i16.tobytes())
+        return path, (end - start) / float(self.sample_rate)
 
     def import_audio_file_streaming(
         self,
