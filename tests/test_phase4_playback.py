@@ -79,3 +79,41 @@ def test_stem_mixer_engine_mute_solo_presets_and_streaming_export(tmp_path) -> N
     mins, maxs = mixer.get_stem_waveform_envelope("bass", num_points=40)
     assert mins.shape == (40,) and maxs.shape == (40,)
     mixer.clear()
+
+
+def test_missing_bass_preset_preserves_two_stem_mix(tmp_path) -> None:
+    from PySide6 import QtWidgets
+    from ui.mixer_widget import StemMixerWidget
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    paths = {name: tmp_path / f"{name}.wav" for name in ("vocals", "instrumental", "bass")}
+    for name, volume in (("vocals", 0.15), ("instrumental", 0.30), ("bass", 0.10)):
+        _write_const_wav(paths[name], volume)
+
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    widget = StemMixerWidget(mixer)
+    try:
+        widget.load_stem_paths({name: paths[name] for name in ("vocals", "instrumental")})
+        bass_button = next(b for b in widget.findChildren(QtWidgets.QPushButton) if b.text() == "仅贝斯")
+        assert not bass_button.isEnabled()
+        mixer.play(open_audio_device=False)
+        mixer.apply_preset("instrumental_mix")
+        mixer.apply_preset("bass_only")
+        assert np.allclose(mixer.render_block(256, advance=False), 0.30, atol=1e-3)
+
+        widget.load_stem_paths({"vocals": paths["vocals"], "bass": paths["bass"]})
+        assert bass_button.isEnabled()
+        bass_button.click()
+        mixer.play(open_audio_device=False)
+        assert np.allclose(mixer.render_block(256, advance=False), 0.10, atol=1e-3)
+        assert np.allclose(mixer.render_block(256), 0.10 * 10 ** (12 / 20), atol=1e-3)
+        out = tmp_path / "bass-only-export.wav"
+        mixer.export_mix_streaming(out)
+        with wave.open(str(out), "rb") as wav:
+            exported = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2")
+        assert np.allclose(exported / 32768.0, 0.10, atol=1e-3)
+        widget.bass_monitor_boost_chk.click()
+        assert np.allclose(mixer.render_block(256), 0.10, atol=1e-3)
+    finally:
+        mixer.clear()
+        widget.close()

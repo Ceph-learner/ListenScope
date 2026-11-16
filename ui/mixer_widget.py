@@ -10,7 +10,7 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
 from analysis.chroma import PITCH_CLASSES
-from audio.playback import StemMixerEngine
+from audio.playback import BASS_MONITOR_BOOST_DB, StemMixerEngine
 from core.appearance import Appearance
 from core.models import (
     AIJobProgress,
@@ -248,10 +248,18 @@ class StemMixerWidget(QtWidgets.QWidget):
             ("仅鼓组", "drums_only"),
             ("仅其他", "other_only"),
         ]
+        self._preset_buttons = {}
         for label, key in presets:
             b = QtWidgets.QPushButton(label)
             b.clicked.connect(lambda _=False, k=key: self._apply_preset(k))
             ctrl_bar.addWidget(b)
+            self._preset_buttons[key] = b
+        self.bass_monitor_boost_chk = QtWidgets.QCheckBox(f"贝斯独听 +{BASS_MONITOR_BOOST_DB} dB")
+        self.bass_monitor_boost_chk.setChecked(True)
+        self.bass_monitor_boost_chk.setToolTip("仅在播放且贝斯是唯一出声的轨道时生效。可关闭以回到原电平，导出不受影响。")
+        self.bass_monitor_boost_chk.toggled.connect(self.mixer_engine.set_bass_monitor_boost)
+        ctrl_bar.addWidget(self.bass_monitor_boost_chk)
+        self._sync_preset_availability(())
         ctrl_bar.addStretch(1)
         root.addLayout(ctrl_bar)
 
@@ -642,6 +650,19 @@ class StemMixerWidget(QtWidgets.QWidget):
         )
         self.midi_info_lbl.setText(f"❌ {message}")
 
+    def _sync_preset_availability(self, track_names) -> None:
+        names = {name.lower() for name in track_names}
+        self.bass_monitor_boost_chk.setEnabled("bass" in names)
+        for key, button in self._preset_buttons.items():
+            if key.endswith("_only"):
+                available = key.removesuffix("_only") in names
+            elif key == "instrumental_mix":
+                available = "instrumental" in names or ("vocals" in names and len(names) > 1)
+            else:
+                available = bool(names)
+            button.setEnabled(available)
+            button.setToolTip("" if available else "当前分轨结果没有此预设需要的音轨")
+
     def _apply_preset(self, preset: str) -> None:
         self.mixer_engine.apply_preset(preset)
         for name, track in self.mixer_engine.tracks.items():
@@ -709,6 +730,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.live_chord_hud_lbl.setText("实时和弦追踪: -")
 
         tracks = self.mixer_engine.load_stems(stem_paths)
+        self._sync_preset_availability(tracks)
         self.deep_analyze_btn.setEnabled(bool(tracks))
         self.export_sheet_btn.setEnabled(False)
         self.chord_timeline_table.setRowCount(0)

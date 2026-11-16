@@ -21,6 +21,8 @@ from .time_stretch import StreamingTimeStretcher
 
 logger = logging.getLogger(__name__)
 
+BASS_MONITOR_BOOST_DB = 12
+
 AB_PAUSE_PLAYER_HINT = "建议暂停原播放器（如 QQ 音乐），避免与 ListenScope A/B 回放重音叠加。"
 
 
@@ -518,6 +520,7 @@ class StemMixerEngine:
         self.metronome = metronome
         self._lock = threading.RLock()
         self._tracks: dict[str, StemTrackState] = {}
+        self._bass_monitor_boost_enabled = True
         self._wave_handles: dict[str, _StemHandle] = {}
         self._position_frame: int = 0
         self._max_frames: int = 0
@@ -701,6 +704,10 @@ class StemMixerEngine:
     def apply_preset(self, preset: str) -> None:
         """Apply quick listening presets: bass_only, drums_only, vocals_only, other_only, instrumental_mix, all."""
         with self._lock:
+            if preset.endswith("_only"):
+                target = preset.removesuffix("_only").lower()
+                if not any(name.lower() == target for name in self._tracks):
+                    return
             for t in self._tracks.values():
                 t.solo = False
                 t.muted = False
@@ -774,6 +781,10 @@ class StemMixerEngine:
             should_close = (not self._is_playing) and (self._stream is not None)
         if should_close:
             self._close_output_stream()
+
+    def set_bass_monitor_boost(self, enabled: bool) -> None:
+        with self._lock:
+            self._bass_monitor_boost_enabled = bool(enabled)
 
     def _effective_gain(self, track: StemTrackState, any_solo: bool) -> float:
         if any_solo:
@@ -878,6 +889,14 @@ class StemMixerEngine:
                     return mix
 
             speed_snapshot = self._speed
+            boost_bass = False
+            if self._bass_monitor_boost_enabled:
+                any_solo = any(t.solo for t in self._tracks.values())
+                audible = [
+                    name for name, track in self._tracks.items()
+                    if self._effective_gain(track, any_solo) > 1e-6
+                ]
+                boost_bass = len(audible) == 1 and audible[0].lower() == "bass"
             rem_frames = req_frames
             if self.metronome is not None and self.metronome.is_counting_in:
                 ci_block, ci_n = self.metronome.consume_count_in_block(rem_frames, rate_scale=speed_snapshot)
@@ -944,6 +963,14 @@ class StemMixerEngine:
                 rendered_frames = written
                 did_render = written > 0
 
+        if boost_bass and rendered_frames:
+            # Boost only the rendered bass, leaving the metronome and export untouched.
+            bass = mix[music_offset : music_offset + rendered_frames]
+            bass *= 10 ** (BASS_MONITOR_BOOST_DB / 20)
+            hot = np.abs(bass) > 0.8
+            if hot.any():
+                # Smoothly contain near-full-scale peaks without hard-clipping.
+                bass[hot] = np.sign(bass[hot]) * (0.8 + 0.2 * np.tanh((np.abs(bass[hot]) - 0.8) / 0.2))
         np.clip(mix, -1.0, 1.0, out=mix)
         if did_render and rendered_frames > 0 and self.metronome is not None:
             self.metronome.overlay_into(

@@ -16,6 +16,8 @@ GPU 分轨和 CPU MIDI 各用独立环境。实验性近实时分轨位于 [stre
 
 ## 当前验证基线
 
+- **四轨监听复测**：Windows 现场 10 秒 GPU 四轨完成。贝斯独听默认 +12 dB，可关闭，原始 WAV 和导出保持原音量。混音页禁用缺轨独听，复选框选中态更清楚。Windows pytest 165 项通过。见 [Windows 验收报告](WINDOWS_TEST_REPORT.md)。
+
 - **目标机第六轮**：`b58c758` 源码快照通过 164 项 Windows pytest。打包、44.1 kHz 导入与 A/B 导出、三档外观捕获、自然切歌和相对和弦级数已复测。普通窗口 Chroma 热图纵轴仍重叠，AI 分轨受 RAM 门槛限制未复测。详见 [Windows 验收报告](WINDOWS_TEST_REPORT.md)。
 
 - **目标机**：[Windows 验收](WINDOWS_TEST_REPORT.md) 第五轮对应 `f03dbf1`。

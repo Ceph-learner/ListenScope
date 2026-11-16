@@ -1,5 +1,13 @@
 # 最新交接
 
+## 贝斯独听和界面复测（2026-11-16）
+
+- 基线为 `218e2c9e03702a944476551a1bf158e7d2e04a7b`。`audio/playback.py` 只在贝斯独自出声时给监听 +12 dB，并平滑限制接近满幅的峰值。`ui/mixer_widget.py` 提供开关，缺轨时禁用相应独听。`ui/main_window.py` 强化复选框选中态，提示 GPU 是否就绪。
+- 在 Windows Core 设置 `QT_QPA_PLATFORM=offscreen`、`PYTHONUTF8=1`，运行 `python -m pytest -q --tb=short`，165 项通过。新 PyInstaller 包短时启动正常。现场 10 秒 HTDemucs GPU 四轨和贝斯原音量及 +12 dB 对照详见 [Windows 验收报告](WINDOWS_TEST_REPORT.md)。
+- 后续复测普通窗口 Chroma 纵轴、较长片段的离线分轨接缝和有足够 RAM 时的持续近实时播放。
+
+## 上一次交接
+
 ## 最新本机验收（2026-11-16）
 
 - 目标源码 `b58c758d38d13e6bb58504b3f6e874994cf6e3c4`。Git 直连超时，本机使用 `f03dbf1` 和逐项核对 Git blob SHA 的 51 个变更文件重建测试目录。

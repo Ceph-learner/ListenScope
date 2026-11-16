@@ -74,6 +74,20 @@ QPushButton:disabled {
     color: #6B7480;
     background-color: #1B1E24;
 }
+QCheckBox { spacing: 6px; }
+QCheckBox::indicator {
+    width: 13px;
+    height: 13px;
+    border: 1px solid #B4BECB;
+    border-radius: 3px;
+    background: #1A1E24;
+}
+QCheckBox::indicator:checked {
+    border: 1px solid #7EE2B8;
+    background: #7EE2B8;
+}
+QCheckBox::indicator:disabled { border-color: #6B7480; }
+QCheckBox::indicator:checked:disabled { background: #6B7480; }
 QComboBox, QDoubleSpinBox, QLineEdit, QPlainTextEdit, QTableWidget {
     background-color: #1A1E24;
     border: 1px solid #303742;
@@ -606,10 +620,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ) -> None:
         self._hardware_report = report
         if report.gpu_ai_ready:
+            self.ai_gpu_chk.setText("优先 GPU")
             dev_name = report.pytorch.device_name or (report.gpus[0].name if report.gpus else "NVIDIA GPU")
             self.ai_gpu_chk.setToolTip(f"GPU AI 已就绪：{dev_name} (CUDA={report.pytorch.cuda_build}, ONNX CUDA=OK)")
         else:
-            self.ai_gpu_chk.setToolTip(f"GPU AI 当前受阻：{report.gpu_ai_block_reason or '未通过 CUDA/ONNX 检查'}")
+            self.ai_gpu_chk.setText("优先 GPU（未就绪）")
+            reason = report.gpu_ai_block_reason or "未通过 CUDA/ONNX 检查"
+            self.ai_gpu_chk.setToolTip(
+                f"GPU AI 当前受阻：{reason}\n请在「设置 / 系统状态」中配置并验证独立 AI Worker 环境。"
+            )
         if auto_sync_gpu_chk:
             self.ai_gpu_chk.setChecked(bool(report.gpu_ai_ready))
 
