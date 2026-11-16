@@ -17,6 +17,7 @@ from audio.ring_buffer import FixedRingBuffer
 from core.config import AIConfig, AudioConfig, ResourceLimits
 from core.models import ResourceStatus
 from core.resource_manager import ResourceManager, SimulationOverrides
+from streaming import benchmark as benchmark_module
 from streaming.benchmark import benchmark_live_model
 from streaming.live_separator import ExperimentalLiveSeparator
 
@@ -56,6 +57,31 @@ def test_live_benchmark_gates_rtf_above_one() -> None:
     assert slow.can_run_realtime is False
     assert slow.rtf >= 1.0
     assert "无法实时运行" in slow.message
+
+
+@pytest.mark.parametrize("test_seconds", [1.0, 2.0])
+def test_live_benchmark_measures_new_output_frames(monkeypatch, test_seconds: float) -> None:
+    chunk_sizes = []
+    backend = SimpleNamespace(
+        load_model=lambda: None,
+        separate_chunk=lambda pcm, sr: chunk_sizes.append(pcm.shape[0]),
+        unload_model=lambda: None,
+    )
+    clock = iter((0.0, 1.8))
+    monkeypatch.setattr(benchmark_module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    monkeypatch.setattr(benchmark_module, "build_separation_backend", lambda *args, **kwargs: backend)
+    monkeypatch.setattr(benchmark_module, "release_torch_and_memory", lambda: None)
+
+    result = benchmark_live_model(
+        use_gpu=False, use_mock_backend=True, test_duration_sec=test_seconds,
+        audio_config=AudioConfig(sample_rate=8000),
+        ai_config=AIConfig(live_chunk_seconds=2.0, live_overlap_seconds=0.25),
+    )
+
+    assert chunk_sizes == [16000]
+    assert result.test_duration_sec == pytest.approx(1.75)
+    assert result.rtf == pytest.approx(1.8 / 1.75)
+    assert result.can_run_realtime is False
 
 
 def test_experimental_live_separator_bounded_drop_and_auto_stop_on_resource_warning() -> None:
@@ -247,7 +273,7 @@ def test_live_ignores_duplicate_results_and_drops_overlap_across_gap(live_output
     responses = Queue()
     for seq, sample in ((0, 0.125), (0, 0.25), (2, 0.375), (1, 0.5)):
         pcm = np.full((live._chunk_frames, 2), sample, dtype=np.float32)
-        responses.put({"type": "chunk", "seq": seq, "shape": pcm.shape,
+        responses.put({"type": "chunk", "seq": seq, "shape": pcm.shape, "infer_sec": 0.75,
                        "vocals": pcm.tobytes(), "instrumental": bytes(pcm.nbytes)})
     live._res_q = responses
     monkeypatch.setattr(live, "_is_worker_alive", lambda: True)
@@ -258,6 +284,7 @@ def test_live_ignores_duplicate_results_and_drops_overlap_across_gap(live_output
     np.testing.assert_array_equal(live.pull_mixed_block(8), np.repeat(
         np.array([0.125] * 3 + [0.375] * 3 + [0.0] * 2)[:, None], 2, axis=1
     ))
+    assert live.latest_metrics().rtf == 1.0
 
 
 def test_live_callback_mixes_wrapped_spans_in_place_and_silences_tail(live_output_ring, monkeypatch) -> None:
