@@ -260,6 +260,49 @@ def test_live_ignores_duplicate_results_and_drops_overlap_across_gap(live_output
     ))
 
 
+def test_live_callback_mixes_wrapped_spans_in_place_and_silences_tail(live_output_ring, monkeypatch) -> None:
+    live = live_output_ring
+    live._active = True
+    live._mix_scratch = live._mix_scratch[:2]
+    live.set_gains(0.75, 0.5)
+    frames = np.arange(1, 12, dtype=np.float32) / 16
+    pcm = np.column_stack((frames, -frames))
+    live._append_output(pcm[:6], pcm[:6] / 2)
+    live.pull_mixed_block(4)
+    live._append_output(pcm[6:], pcm[6:] / 2)
+
+    class FakeStream:
+        def __init__(self, *, callback, **kwargs):
+            self.callback = callback
+
+        def start(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=FakeStream))
+    live._ensure_output_stream()
+    out = np.full((5, 2), np.nan, dtype=np.float32)
+    tail = np.full((4, 2), np.nan, dtype=np.float32)
+    stopped = np.full((4, 2), np.nan, dtype=np.float32)
+
+    def unexpected_allocation(*args, **kwargs):
+        pytest.fail("callback allocated a new sample block")
+
+    with monkeypatch.context() as patch:
+        for name in ("empty", "zeros", "vstack"):
+            patch.setattr(np, name, unexpected_allocation)
+        live._stream.callback(out, len(out), None, None)
+        live._stream.callback(tail, len(tail), None, None)
+        live._stop_event.set()
+        live._stream.callback(stopped, len(stopped), None, SimpleNamespace(output_underflow=True))
+
+    np.testing.assert_array_equal(out, pcm[4:9])
+    np.testing.assert_array_equal(tail[:2], pcm[9:11])
+    np.testing.assert_array_equal(tail[2:], np.zeros((2, 2), dtype=np.float32))
+    np.testing.assert_array_equal(stopped, np.zeros((4, 2), dtype=np.float32))
+    metrics = live.latest_metrics()
+    assert metrics.playback_rebuffers == 1 and metrics.device_underflows == 0
+
+
 def test_midi_transcription_refuses_full_mix_and_writes_valid_midi_for_stem(tmp_path) -> None:
     mix_wav = tmp_path / "full_mix.wav"
     bass_wav = tmp_path / "song_bass.wav"

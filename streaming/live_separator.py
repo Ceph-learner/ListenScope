@@ -259,6 +259,7 @@ class ExperimentalLiveSeparator:
         self._out_cap_frames = max(sr * 2, int(round(self.ai_config.live_max_buffer_seconds * sr)))
         self._out_vocals = np.zeros((self._out_cap_frames, ch), dtype=np.float32)
         self._out_inst = np.zeros((self._out_cap_frames, ch), dtype=np.float32)
+        self._mix_scratch = np.empty((min(self._out_cap_frames, 4096), ch), dtype=np.float32)
         self._out_write_pos = 0
         self._out_available = 0
         self._output_primed = False
@@ -832,39 +833,65 @@ class ExperimentalLiveSeparator:
         inst_gain: Optional[float] = None,
     ) -> np.ndarray:
         """Consume the oldest unread frames and pad the tail with silence if needed."""
+        out = np.empty((num_frames, self.audio_config.channels), dtype=np.float32)
         with self._lock:
             vg = self._vocals_gain if vocals_gain is None else float(vocals_gain)
             ig = self._inst_gain if inst_gain is None else float(inst_gain)
-            take = min(num_frames, self._out_available)
-            out = np.zeros((num_frames, self.audio_config.channels), dtype=np.float32)
-            if take <= 0:
-                return out
-            start = (self._out_write_pos - self._out_available) % self._out_cap_frames
-            if start + take <= self._out_cap_frames:
-                voc = self._out_vocals[start : start + take]
-                inst = self._out_inst[start : start + take]
-            else:
-                first = self._out_cap_frames - start
-                voc = np.vstack([self._out_vocals[start:], self._out_vocals[: take - first]])
-                inst = np.vstack([self._out_inst[start:], self._out_inst[: take - first]])
-            mixed = np.clip(voc * vg + inst * ig, -1.0, 1.0)
-            out[:take] = mixed
+            self._fill_mixed_locked(out, vg, ig)
+        return out
+
+    def _mix_output_span(self, dest: np.ndarray, start: int, vg: float, ig: float) -> None:
+        """Mix one contiguous span using scratch shared under the output lock."""
+        end = start + len(dest)
+        vocals = self._out_vocals[start:end]
+        inst = self._out_inst[start:end]
+        if vg == 1.0 and ig == 1.0:
+            np.add(vocals, inst, out=dest)
+            return
+
+        scratch_frames = len(self._mix_scratch)
+        for offset in range(0, len(dest), scratch_frames):
+            stop = min(offset + scratch_frames, len(dest))
+            output = dest[offset:stop]
+            scratch = self._mix_scratch[: len(output)]
+            np.multiply(vocals[offset:stop], vg, out=output)
+            np.multiply(inst[offset:stop], ig, out=scratch)
+            np.add(output, scratch, out=output)
+
+    def _fill_mixed_locked(self, out: np.ndarray, vg: float, ig: float) -> None:
+        take = min(len(out), self._out_available)
+        if take:
+            capacity = self._out_cap_frames
+            start = (self._out_write_pos - self._out_available) % capacity
+            first = min(take, capacity - start)
+            self._mix_output_span(out[:first], start, vg, ig)
+            if first < take:
+                self._mix_output_span(out[first:take], 0, vg, ig)
+            valid = out[:take]
+            np.clip(valid, -1.0, 1.0, out=valid)
             self._out_available -= take
-            return out
+        out[take:].fill(0.0)
 
     def _pull_playback_block(self, frames: int, *, device_underflow: bool = False) -> np.ndarray:
+        out = np.empty((frames, self.audio_config.channels), dtype=np.float32)
+        self._fill_playback_block(out, device_underflow=device_underflow)
+        return out
+
+    def _fill_playback_block(self, out: np.ndarray, *, device_underflow: bool = False) -> None:
         """Let the playback queue recover between bursts of inference output."""
+        frames = len(out)
         with self._lock:
             if device_underflow:
                 self._device_underflows += 1
             if not self._output_primed:
                 target = min(self._out_cap_frames, max(frames, self._hop_frames * 2))
                 if self._out_available < target:
-                    return np.zeros((frames, self.audio_config.channels), dtype=np.float32)
+                    out.fill(0.0)
+                    return
             elif self._out_available < frames:
                 self._playback_rebuffers += 1
             self._output_primed = self._out_available >= frames
-            return self.pull_mixed_block(frames)
+            self._fill_mixed_locked(out, self._vocals_gain, self._inst_gain)
 
     def _run_loop(self) -> None:
         sr = self.audio_config.sample_rate
@@ -1071,11 +1098,11 @@ class ExperimentalLiveSeparator:
         except ImportError:
             return
 
-        def _callback(outdata, frames, _time_info, _status) -> None:
+        def _callback(outdata, _frames, _time_info, _status) -> None:
             if self._stop_event.is_set() or (source_is_current is not None and not source_is_current()):
                 outdata.fill(0.0)
                 return
-            outdata[:] = self._pull_playback_block(frames, device_underflow=getattr(_status, "output_underflow", False))
+            self._fill_playback_block(outdata, device_underflow=getattr(_status, "output_underflow", False))
 
         stream = None
         try:
