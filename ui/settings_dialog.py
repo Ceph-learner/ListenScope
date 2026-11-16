@@ -23,6 +23,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     _probe_finished = QtCore.Signal(object)
     _midi_probe_finished = QtCore.Signal(object)
+    appearance_requested = QtCore.Signal(object)
 
     def __init__(
         self,
@@ -49,6 +50,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._midi_probe_finished.connect(self._on_midi_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
 
         root = QtWidgets.QVBoxLayout(self)
+        appearance_btn = QtWidgets.QPushButton("外观主题…")
+        appearance_btn.setObjectName("appearanceEntry")
+        appearance_btn.clicked.connect(lambda: self.appearance_requested.emit(self))
+        root.addWidget(appearance_btn, alignment=QtCore.Qt.AlignmentFlag.AlignRight)
         tabs = QtWidgets.QTabWidget()
 
         # Tab 1: System Status (Prompt Section 3 explicit requirement)
