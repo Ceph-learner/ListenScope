@@ -1,19 +1,18 @@
 # 最新交接
 
-- **目标和结果**：合并近实时输出环修复，并修复历史分轨目录内自动转录覆盖同名 MIDI 的问题。直接打开和混音器内转录共享同一入口，每次在 `work_dir/midi/` 写独立中间文件。外部解释器收到绝对输入和输出路径，用户可另存到指定位置。
-- **基线与分支**：基线为 PR #2 合入 `main` 的 `42bc193fb006232c6b2a71216903e98ffd8ccfae`。MIDI 修复的代码与测试证据提交为 `607d4aa5eac99ff0e940f81cb539fdf4e5563ecb`，分支 `fix/single-stem-midi-output`。
-- **改动**：[`_on_transcribe_stem_midi`](../main.py#L1298) 使用独立 UUID 文件名。[MIDI 集成测试](../tests/test_media_session_and_single_stem_midi.py) 覆盖历史作业目录和外部目录、保留原文件、重复转录、相对路径、实时捕获与另存。
-- **协作**：OpenCode Go 提出统一中间路径和回归方案，Command Code GOAT 独立审查并指出外部解释器工作目录和并发写入风险。两项委派各执行一次。中间文件沿用工作区留存方式，由用户执行明确的另存操作。
-- **验证**：Windows，Python 3.11.17，Core 虚拟环境位于纯 ASCII 路径，`QT_QPA_PLATFORM=offscreen`。
-  - 合并前的近实时修复经 [PR #2 CI](https://github.com/Ceph-learner/ListenScope/actions/runs/43787946907) 验证，119 项通过。本地 `main` 已拉取合并提交。
-  - `python -m pytest -q --tb=short tests/test_media_session_and_single_stem_midi.py -k historical-job` 在旧实现上复现失败，原 MIDI 的字节被改写。
-  - `python -m pytest -q --tb=short tests/test_media_session_and_single_stem_midi.py tests/test_windows_defaults_and_midi_routing.py` 修复后 10 项通过。
-  - `python -m pytest -q --tb=short` 修复后 120 项通过。
-- **下一步**：为 QQ 音乐 SMTC 自动切歌重置补事件计数和测试，核实同一切歌是否重复触发。状态见 [CURRENT_STATE](CURRENT_STATE.md)。
+- **基线与分支**：`main` 的 `7a57139a5fc161b1a49907f3de4efe7917c7ccaf` 已合入历史目录 MIDI 输出修复。此轮代码和测试证据为 `ea85d23742d9cd0d5ffd20359423790a6209ae0a`，分支 `fix/live-practice-reliability`。
+- **近实时播放**：[`live_separator.py`](../streaming/live_separator.py) 丢弃重复或过期回包，仅对相邻结果做交叠。播放启动和欠载恢复时有界预缓冲。默认步长 1.75 秒，常规启动需要两批结果，因此首段和欠载恢复会晚约一个步长。保留既有 Worker、队列容量和内存保护。
+- **和声练习**：[`chords.py`](../analysis/chords.py) 按调性和和弦性质计算罗马数字。Chroma 页显示当前和弦级数，小调按自然小调，Capo 移调保持级数，热图纵轴音名改用较小字体。
+- **SMTC**：只有实际执行自动重置才会写一条 `SMTC automatic harmony resets: N`，从应用启动累计。消息只含计数，可在诊断包 `recent_logs.txt` 核对，手动重置不计数。
+- **仓库资料**：[致谢与来源](../ACKNOWLEDGMENTS.md) 列明上游工具、模型、论文和体验参考。README 有致谢入口，GitHub 仓库简介及六个主题已更新。
+- **协作**：OpenCode Go 分析分轨断续和重复输出，Command Code GOAT 提供级数与 SMTC 计数方案。各执行一次文本任务，零重试。代码保留既有 IPC 字段，通过跳号标记输入不相邻。
+- **验证**：Windows，Python 3.11.17，Core 环境位于纯 ASCII 路径，`QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short` 共 124 项通过。覆盖重复与乱序回包、跳段交叠、欠载恢复、级数与 Capo、SMTC 单次计数和原有资源停止行为。
+- **待验证**：真实 WAV/GPU/声卡链路的听感、首段与恢复延迟，实际 QQ 音乐 SMTC 事件以及 Chroma 的 Windows 显示效果。torch 在线下载停滞仍可用本地 wheel 路线绕开，根因待查。
 
 ## Windows 目标机复测
 
-1. 在包含 `607d4aa` 的提交按 [PACKAGING](PACKAGING.md) 配置 Core、AI、MIDI 解释器，运行 `.\.venv-core\Scripts\python.exe main.py`。
-2. 准备一份历史作业目录中的单轨 WAV 和同名 MIDI，先用 `Get-FileHash` 记录原 MIDI 的哈希。打开 WAV 连续转录两次，确认原 MIDI 的哈希一致，两次中间文件不同，再通过「另存 MIDI」导出并用 MIDI 编辑器打开。
-3. 播放音频并启动捕获。在「5. 实验功能」开启近实时分轨，记录可用内存、首段延迟、持续输出和暂停恢复。若内存保护触发，记录停止原因并确认基础频谱继续运行。
-4. 将提交、事件时间和实际结果追加至 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。
+1. 在含 `ea85d23` 的提交按 [PACKAGING](PACKAGING.md) 配置三个环境，运行 `.\.venv-core\Scripts\python.exe main.py`。
+2. 用明确有节拍的片段，选择按进程捕获，并在界面确认显示为进程环回。启动近实时分轨，记录首段与暂停恢复的等待、连续 60 秒内的断续或重播、RTF 和缓冲时长。若实际为系统环回，单列结果，因为系统环回可能将 ListenScope 播放的输出再次捕获。若触发保护，记录停止原因并确认基础频谱继续运行。
+3. 用 C 大调中含 Am 的片段核对 `vi`，切换 Capo 后核对级数保持不变。检查热图音名在常用窗口尺寸和缩放比例下是否清晰。
+4. 在 QQ 音乐中切歌、暂停、恢复和拖动进度，导出诊断包。核对每次实际切歌是否只有一条自动重置计数，其他操作和手动重置是否未增加计数。
+5. 对历史作业目录中的 WAV 重复转录，核对同名 MIDI 的 `Get-FileHash` 值与转录前一致，另存的 MIDI 可正确打开。将各项实际测试提交和结果追加至 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。

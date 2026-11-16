@@ -23,5 +23,5 @@
 | PyInstaller 打包 Core | 已实测（第二至五轮） | [build_windows.ps1](../scripts/build_windows.ps1)、[listenscope_core.spec](../packaging/listenscope_core.spec)。 |
 | 脱敏诊断 ZIP 导出 | 仅自动化 | [diagnostics.py](../core/diagnostics.py)。 |
 | 近实时二轨分离（实验，默认关闭） | 未通过目标机验收 | 第五轮启动即触发内存保护，没有听到输出。输出环重复读取已修复，待目标机复测（见 [CURRENT_STATE](CURRENT_STATE.md)）。 |
-| Chroma 纵轴拥挤优化、相对调性的和弦级数显示 | 未实现 | 第五轮 UI 待办。 |
+| Chroma 纵轴标签与相对调性的和弦级数显示 | 已实现，待目标机复测 | 热图纵轴缩小音名标签。当前和弦按检测到的大调或自然小调显示级数，如 C 大调下 `Am` 显示 `vi`，Capo 移调后级数保持。 |
 | 自动化 CI | 已提供 Linux offscreen pytest 工作流 | 见 [DEVELOPMENT](DEVELOPMENT.md)；Windows 实测仍需手动执行。 |

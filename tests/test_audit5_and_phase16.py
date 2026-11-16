@@ -679,12 +679,13 @@ def test_live_separator_ignores_malformed_ipc_payload(monkeypatch: pytest.Monkey
 
     # Queue several corrupt messages followed by NaN-bearing and valid chunks, then stop event
     res_q.put("not-a-dict")
-    res_q.put({"type": "chunk", "shape": ("bad", 2), "vocals": b"1234", "instrumental": b"1234"})
-    res_q.put({"type": "chunk", "shape": (4, 1), "vocals": b"\x00" * 16, "instrumental": b"\x00" * 16})
-    res_q.put({"type": "chunk", "shape": (chunk_frames, 2), "vocals": b"\x00" * 8, "instrumental": good_pcm.tobytes()})
+    res_q.put({"type": "chunk", "seq": 0, "shape": ("bad", 2), "vocals": b"1234", "instrumental": b"1234"})
+    res_q.put({"type": "chunk", "seq": 0, "shape": (4, 1), "vocals": b"\x00" * 16, "instrumental": b"\x00" * 16})
+    res_q.put({"type": "chunk", "seq": 0, "shape": (chunk_frames, 2), "vocals": b"\x00" * 8, "instrumental": good_pcm.tobytes()})
     res_q.put(
         {
             "type": "chunk",
+            "seq": 0,
             "shape": (chunk_frames, 2),
             "vocals": bad_pcm.tobytes(),
             "instrumental": good_pcm.tobytes(),

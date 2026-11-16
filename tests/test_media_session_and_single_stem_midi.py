@@ -15,6 +15,7 @@ import numpy as np
 from PySide6 import QtWidgets
 import pytest
 
+from analysis.chords import chord_scale_degree, transpose_chord_symbol, transpose_key_label
 from core.config import AIConfig, ResourceLimits
 from core.media_session import (
     MediaSessionSnapshot,
@@ -29,6 +30,7 @@ from core.models import (
     TempoEstimate,
 )
 from core.settings_store import PersistedSettings, load_settings, save_settings
+from ui.chroma_widget import ChromaAndHarmonyWidget
 import main as main_mod
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -97,6 +99,39 @@ def _make_chord_snapshot(chord: str) -> AnalysisSnapshot:
         peak_dbfs=-14.0,
         window_seconds=2.0,
     )
+
+
+def test_chroma_chord_degree_tracks_key_and_survives_capo() -> None:
+    app = _get_app()
+    widget = ChromaAndHarmonyWidget()
+    try:
+        snap = _make_chord_snapshot("Am")
+        widget.update_analysis(snap)
+        assert widget.chord_degree_lbl.text() == "相对级数: vi"
+        widget.set_transpose_semitones(-2)
+        assert widget.chord_degree_lbl.text() == "相对级数: vi"
+        snap.key.primary = "A minor"
+        widget.update_analysis(snap)
+        assert widget.chord_degree_lbl.text() == "相对级数: i"
+        snap.key.primary = "Unknown"
+        widget.update_analysis(snap)
+        assert widget.chord_degree_lbl.text() == "相对级数: -"
+        widget.clear_progression()
+        assert widget.chord_degree_lbl.text() == "相对级数: -"
+    finally:
+        widget.close()
+        app.processEvents()
+
+
+def test_chord_scale_degrees_cover_quality_and_accidentals() -> None:
+    for chord, key, expected in (
+        ("Bdim", "C major", "vii°"), ("Dm7/F", "C major", "ii7"),
+        ("E7", "A minor", "V7"), ("F", "A minor", "VI"),
+        ("Bb", "C major", "♭VII"), ("G♭", "D♭ 大调", "IV"),
+        ("N (静音)", "C major", "-"), ("C", "Insufficient", "-"),
+    ):
+        assert chord_scale_degree(chord, key) == expected
+        assert chord_scale_degree(transpose_chord_symbol(chord, -2), transpose_key_label(key, -2)) == expected
 
 
 @pytest.mark.parametrize("historical_job", [False, True], ids=["external", "historical-job"])
@@ -385,9 +420,16 @@ def test_smtc_tracker_guards_and_controller_auto_reset(
         app.processEvents()
 
         assert len(reset_calls) == 1
+        assert ctrl._auto_track_reset_count == 1
         assert ctrl.window.chroma_widget.recent_progression == []
         assert ctrl._capture_backend is not None and ctrl._capture_backend.is_running
         assert "七里香" in ctrl.window.chroma_widget.track_status_lbl.text()
+        for _ in range(3):
+            ctrl.process_media_session_snapshots(
+                [MediaSessionSnapshot("QQMusic.exe", "七里香", "周杰伦", playback_status="playing")]
+            )
+        assert ctrl._auto_track_reset_count == 1
+        assert len(reset_calls) == 1
 
         # Disable auto-reset via UI checkbox -> saved and suppresses future automatic clears while keeping manual button
         ctrl.window.chroma_widget.auto_reset_chk.setChecked(False)
@@ -413,6 +455,7 @@ def test_smtc_tracker_guards_and_controller_auto_reset(
         ctrl.window.chroma_widget.reset_harmony_btn.click()
         app.processEvents()
         assert len(reset_calls) == 2
+        assert ctrl._auto_track_reset_count == 1
         assert ctrl.window.chroma_widget.recent_progression == []
     finally:
         ctrl.window.close()

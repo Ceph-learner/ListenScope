@@ -252,8 +252,8 @@ class ExperimentalLiveSeparator:
         sr = self.audio_config.sample_rate
         ch = self.audio_config.channels
         self._chunk_frames = max(sr // 2, int(round(self.ai_config.live_chunk_seconds * sr)))
-        self._overlap_frames = max(0, int(round(self.ai_config.live_overlap_seconds * sr)))
-        self._hop_frames = max(sr // 4, self._chunk_frames - self._overlap_frames)
+        self._overlap_frames = min(self._chunk_frames // 2, max(0, int(round(self.ai_config.live_overlap_seconds * sr))))
+        self._hop_frames = self._chunk_frames - self._overlap_frames
 
         # Bounded output circular storage for assembled vocals & instrumental
         self._out_cap_frames = max(sr * 2, int(round(self.ai_config.live_max_buffer_seconds * sr)))
@@ -261,6 +261,7 @@ class ExperimentalLiveSeparator:
         self._out_inst = np.zeros((self._out_cap_frames, ch), dtype=np.float32)
         self._out_write_pos = 0
         self._out_available = 0
+        self._output_primed = False
 
         self._lock = threading.RLock()
         self._active = False
@@ -654,6 +655,7 @@ class ExperimentalLiveSeparator:
                 self._out_inst.fill(0.0)
                 self._out_write_pos = 0
                 self._out_available = 0
+                self._output_primed = False
                 self._overlap_add.reset()
                 self._last_read_abs_frame = self.ring_buffer.total_written_frames
 
@@ -835,10 +837,23 @@ class ExperimentalLiveSeparator:
             self._out_available -= take
             return out
 
+    def _pull_playback_block(self, frames: int) -> np.ndarray:
+        """Let the playback queue recover between bursts of inference output."""
+        with self._lock:
+            if not self._output_primed:
+                target = min(self._out_cap_frames, max(frames, self._hop_frames * 2))
+                if self._out_available < target:
+                    return np.zeros((frames, self.audio_config.channels), dtype=np.float32)
+            self._output_primed = self._out_available >= frames
+            return self.pull_mixed_block(frames)
+
     def _run_loop(self) -> None:
         sr = self.audio_config.sample_rate
         chunk_duration = self._chunk_frames / float(sr)
         seq = 0
+        first_valid_seq = 0
+        last_result_seq = -1
+        last_request_start: int | None = None
 
         while not self._stop_event.is_set():
             snap = self.resource_manager.sample()
@@ -861,6 +876,18 @@ class ExperimentalLiveSeparator:
                 return
 
             # Drain any completed separated chunks from worker
+            newest = self.ring_buffer.total_written_frames
+            oldest = self.ring_buffer.oldest_abs_frame
+            if newest < self._last_read_abs_frame:
+                # Outstanding results belong to the source timeline before the clear.
+                first_valid_seq = seq
+                last_request_start = None
+                self._overlap_add.reset()
+                self._last_read_abs_frame = max(oldest, newest - self._chunk_frames)
+                with self._lock:
+                    self._out_available = 0
+                    self._output_primed = False
+
             if self._res_q is not None:
                 while True:
                     try:
@@ -890,6 +917,9 @@ class ExperimentalLiveSeparator:
                         )
                         return
                     if mtype == "chunk":
+                        result_seq = msg.get("seq")
+                        if type(result_seq) is not int or result_seq < first_valid_seq or result_seq <= last_result_seq:
+                            continue
                         raw_shape = msg.get("shape")
                         voc_bytes = msg.get("vocals")
                         inst_bytes = msg.get("instrumental")
@@ -911,7 +941,7 @@ class ExperimentalLiveSeparator:
                             infer_sec = 0.0
                         expected_bytes = shape[0] * shape[1] * 4
                         if (
-                            shape[0] <= 0
+                            shape[0] != self._chunk_frames
                             or shape[1] != self.audio_config.channels
                             or len(voc_bytes) != expected_bytes
                             or len(inst_bytes) != expected_bytes
@@ -929,14 +959,17 @@ class ExperimentalLiveSeparator:
                             voc = np.nan_to_num(voc, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
                         if not np.all(np.isfinite(inst)):
                             inst = np.nan_to_num(inst, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
+                        if result_seq != last_result_seq + 1:
+                            self._overlap_add.reset()
                         assembled = self._overlap_add.process_chunk({"vocals": voc, "instrumental": inst})
+                        last_result_seq = result_seq
                         self._append_output(assembled["vocals"], assembled["instrumental"])
                         rtf = infer_sec / max(0.01, chunk_duration)
                         with self._lock:
                             self._latest_rtf = rtf
                             self._latest_latency_ms = infer_sec * 1000.0 + (self._overlap_frames / float(sr)) * 1000.0
                         if rtf >= 1.25:
-                            logger.warning("Live separation RTF=%.2f >= 1.25, dropping stale backlog", rtf)
+                            logger.warning("Live separation RTF=%.2f >= 1.25, output may underrun", rtf)
 
             if not self._is_worker_alive():
                 if self._subproc_reader_thread is not None and self._subproc_reader_thread.is_alive():
@@ -972,22 +1005,16 @@ class ExperimentalLiveSeparator:
 
             newest = self.ring_buffer.total_written_frames
             oldest = self.ring_buffer.oldest_abs_frame
-            if newest < self._last_read_abs_frame:
-                # Ring buffer was cleared/reset; resync OLA state and cursor cleanly
-                self._overlap_add.reset()
-                self._last_read_abs_frame = max(oldest, newest - self._chunk_frames)
-            elif self._last_read_abs_frame < oldest:
-                self._overlap_add.reset()
+            if self._last_read_abs_frame < oldest:
                 self._last_read_abs_frame = oldest
 
             backlog_frames = newest - self._last_read_abs_frame
             max_buf_frames = int(round(self.ai_config.live_max_buffer_seconds * sr))
 
             if backlog_frames > max_buf_frames:
-                # Drop older buffered audio so memory/latency never exceed cap; reset OLA on jump
+                # Drop older input so latency remains bounded.
                 with self._lock:
                     self._dropped_chunks += 1
-                self._overlap_add.reset()
                 self._last_read_abs_frame = max(oldest, newest - self._chunk_frames)
                 backlog_frames = newest - self._last_read_abs_frame
 
@@ -995,15 +1022,17 @@ class ExperimentalLiveSeparator:
                 read_start = max(oldest, self._last_read_abs_frame)
                 read_end = min(newest, read_start + self._chunk_frames)
                 pcm = self.ring_buffer.read_range(read_start, read_end)
-                if pcm.shape[0] >= self._chunk_frames:
+                if pcm.shape[0] == self._chunk_frames:
+                    # Skip an ID when the submitted audio is no longer adjacent.
+                    request_seq = seq + int(last_request_start is not None and read_start != last_request_start + self._hop_frames)
                     try:
-                        self._req_q.put_nowait((seq, pcm.tobytes(), pcm.shape))
-                        seq += 1
+                        self._req_q.put_nowait((request_seq, pcm.tobytes(), pcm.shape))
+                        seq = request_seq + 1
+                        last_request_start = read_start
                         self._last_read_abs_frame = read_start + self._hop_frames
                     except queue.Full:
                         with self._lock:
                             self._dropped_chunks += 1
-                        self._overlap_add.reset()
                         self._last_read_abs_frame = max(oldest, newest - self._overlap_frames)
 
             backlog_sec = max(0.0, (newest - self._last_read_abs_frame) / float(sr))
@@ -1022,7 +1051,7 @@ class ExperimentalLiveSeparator:
             return
 
         def _callback(outdata, frames, _time_info, _status) -> None:
-            outdata[:] = self.pull_mixed_block(frames)
+            outdata[:] = self._pull_playback_block(frames)
 
         stream = None
         try:
