@@ -5,12 +5,14 @@ from __future__ import annotations
 import gc
 import os
 import time
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6 import QtWidgets
 
-from core.models import ResourceStatus
+from core.models import CaptureMode, ResourceStatus
 from core.resource_manager import SimulationOverrides
 from main import ListenScopeController
 
@@ -56,4 +58,53 @@ def test_desktop_gui_headless_smoke_capture_settings_and_emergency_stop(tmp_path
         ctrl = None  # type: ignore[assignment]
         app.processEvents()
         gc.collect()
+        app.processEvents()
+
+
+def test_gui_refuses_live_monitor_when_process_capture_falls_back(tmp_path, monkeypatch) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    ctrl = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path / "ws")
+    try:
+        ctrl._timer.stop()
+        ctrl._capture_backend = SimpleNamespace(
+            is_running=True,
+            get_stats=lambda: SimpleNamespace(mode=CaptureMode.SYSTEM_LOOPBACK),
+            stop=Mock(),
+        )
+        launch = Mock(return_value=(True, "test"))
+        monkeypatch.setattr(ctrl.live_separator, "start", launch)
+
+        ctrl.window.live_widget.toggle_btn.click()
+
+        launch.assert_not_called()
+        button = ctrl.window.live_widget.toggle_btn
+        assert button.isEnabled() and not button.isChecked()
+        assert "系统环回" in ctrl.window.notice_banner.text()
+        assert ctrl._capture_backend.is_running
+    finally:
+        ctrl.window.close()
+        ctrl.shutdown()
+        app.processEvents()
+
+
+def test_stopping_capture_invalidates_and_stops_live_before_backend(tmp_path, monkeypatch) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    ctrl = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path / "ws")
+    calls = []
+    try:
+        ctrl._timer.stop()
+        ctrl._capture_backend = SimpleNamespace(stop=lambda: calls.append("capture"))
+        ctrl.live_separator._starting = True
+
+        def stop_live(*, status_message):
+            assert ctrl._capture_backend is None
+            calls.append("live")
+            ctrl.live_separator._starting = False
+
+        monkeypatch.setattr(ctrl.live_separator, "stop", stop_live)
+        ctrl.stop_capture()
+        assert calls == ["live", "capture"]
+    finally:
+        ctrl.window.close()
+        ctrl.shutdown()
         app.processEvents()

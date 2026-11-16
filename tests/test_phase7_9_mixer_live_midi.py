@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from queue import Queue
+import sys
 import time
+from types import SimpleNamespace
 import wave
 
 import mido
@@ -158,6 +160,45 @@ def test_live_playback_primes_again_after_underrun(live_output_ring) -> None:
     np.testing.assert_array_equal(live._pull_playback_block(4), silent)
     live._append_output(pcm, pcm)
     np.testing.assert_array_equal(live._pull_playback_block(4), np.full((4, 2), 0.5))
+
+
+def test_live_rejects_stale_capture_before_worker_start(live_output_ring, monkeypatch) -> None:
+    live = live_output_ring
+    monkeypatch.setattr(live.resource_manager, "can_start_ai_job", lambda **_: pytest.fail("stale request reached worker admission"))
+    ok, message = live.start(source_is_current=lambda: False)
+    assert not ok and "捕获源已变化" in message
+    assert not live.is_active and not live.is_starting
+
+
+def test_live_output_open_mutes_and_discards_if_capture_changes(live_output_ring, monkeypatch) -> None:
+    live = live_output_ring
+    live._active = True
+    source_current = True
+    calls = []
+    rendered = np.empty((4, 2), dtype=np.float32)
+
+    class FakeStream:
+        def __init__(self, *, callback, **kwargs):
+            self.callback = callback
+
+        def start(self):
+            nonlocal source_current
+            source_current = False
+            self.callback(rendered, len(rendered), None, None)
+
+        def stop(self):
+            calls.append("stop")
+
+        def close(self):
+            calls.append("close")
+
+    pcm = np.full((8, 2), 0.25, dtype=np.float32)
+    live._append_output(pcm, pcm)
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=FakeStream))
+    live._ensure_output_stream(lambda: source_current)
+    np.testing.assert_array_equal(rendered, np.zeros_like(rendered))
+    assert calls == ["stop", "close"] and live._stream is None
+    assert live._out_available == 8
 
 
 def test_live_ignores_duplicate_results_and_drops_overlap_across_gap(live_output_ring, monkeypatch) -> None:

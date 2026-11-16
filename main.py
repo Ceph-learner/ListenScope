@@ -71,6 +71,7 @@ from core.models import (
     AIJobRequest,
     AIJobResult,
     AIJobState,
+    CaptureMode,
     MidiNoteCandidate,
     MidiTranscriptionResult,
     OOMRecoveryAction,
@@ -474,15 +475,22 @@ class ListenScopeController:
         else:
             self._start_track_monitor(target_proc_name)
 
-    def stop_capture(self) -> None:
-        self._stop_track_monitor()
+    def stop_capture(self, *, live_stop_reason: str = "捕获已停止，实时分轨已关闭") -> None:
+        backend = self._capture_backend
+        # Invalidate queued live starts before checking whether the separator has started.
+        self._capture_backend = None
         self._drain_stop.set()
-        if self._capture_backend is not None:
+        if self.live_separator.is_active or self.live_separator.is_starting:
+            self.live_separator.stop(status_message=live_stop_reason)
+            self._put_latest(self._ui_live_pending_q, False)
+        else:
+            self.live_separator.close_output_stream()
+        self._stop_track_monitor()
+        if backend is not None:
             try:
-                self._capture_backend.stop()
+                backend.stop()
             except Exception:
                 pass
-            self._capture_backend = None
         if self._drain_thread is not None and self._drain_thread.is_alive():
             self._drain_thread.join(timeout=2.0)
         self._drain_thread = None
@@ -1049,13 +1057,6 @@ class ListenScopeController:
         except Exception as exc:
             self.window.show_banner_message(f"导出混音失败: {exc}")
 
-    def _ensure_live_separator_stopped_for_ring_reset(self, reason: str) -> None:
-        if self.live_separator.is_active or self.live_separator.is_starting:
-            self.live_separator.stop(status_message=reason)
-            self._put_latest(self._ui_live_pending_q, False)
-        else:
-            self.live_separator.close_output_stream()
-
     def _on_import_audio_file(self, file_path: str) -> None:
         """Stream up to 120s of a local WAV/FLAC/OGG file into the bounded ring buffer."""
         if not file_path:
@@ -1065,10 +1066,9 @@ class ListenScopeController:
             self.window.show_banner_message(f"导入本地音频失败: 文件不存在 ({src_path})")
             return
         try:
-            self.stop_capture()
+            self.stop_capture(live_stop_reason="已导入本地音频，自动停止实验性实时分轨")
             self.ab_player.stop()
             self.mixer_engine.pause()
-            self._ensure_live_separator_stopped_for_ring_reset("已导入本地音频，自动停止实验性实时分轨")
             imported_sec, truncated = self.ring_buffer.import_audio_file_streaming(
                 src_path,
                 max_seconds=float(self.audio_config.ring_buffer_seconds),
@@ -1114,10 +1114,9 @@ class ListenScopeController:
             if canon.shape[0] == 0:
                 self.window.show_banner_message(f"单轨 `{stem_name}` 不包含有效音频帧。")
                 return
-            self.stop_capture()
+            self.stop_capture(live_stop_reason="已载入单轨分析，自动停止实验性实时分轨")
             self.ab_player.stop()
             self.mixer_engine.pause()
-            self._ensure_live_separator_stopped_for_ring_reset("已载入单轨分析，自动停止实验性实时分轨")
             self.ring_buffer.clear()
             self.ab_player.set_ab_range(0, 0)
             self.bookmark_manager.clear()
@@ -1450,6 +1449,18 @@ class ListenScopeController:
         threading.Thread(target=_run, name="ListenScope-LiveBench", daemon=True).start()
 
     def _on_live_start(self, model_id: str) -> None:
+        backend = self._capture_backend
+        blocked_reason = ""
+        if backend is None or not backend.is_running:
+            blocked_reason = "请先开始按进程捕获，再开启近实时分轨监听。"
+        elif backend.get_stats().mode == CaptureMode.SYSTEM_LOOPBACK:
+            blocked_reason = "系统环回会重新捕获分轨监听输出。请切换到按进程环回后再开启近实时分轨。"
+        if blocked_reason:
+            self.window.live_widget.set_pending_start(False)
+            self.window.update_live_metrics(self.live_separator.latest_metrics())
+            self.window.show_banner_message(blocked_reason)
+            return
+
         self.metronome.stop_standalone()
         self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
         self.ab_player.pause()
@@ -1464,8 +1475,10 @@ class ListenScopeController:
                     open_audio_device=True,
                     gpu_ai_ready=self.hardware_report.gpu_ai_ready,
                     gpu_block_reason=self.hardware_report.gpu_ai_block_reason,
+                    source_is_current=lambda: self._capture_backend is backend,
                 )
-                self._put_latest(self._ui_banner_q, msg if not ok else f"✅ {msg}")
+                if self._capture_backend is backend:
+                    self._put_latest(self._ui_banner_q, msg if not ok else f"✅ {msg}")
             finally:
                 self._put_latest(self._ui_live_pending_q, False)
 

@@ -113,8 +113,8 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         root.setSpacing(10)
 
         banner = QtWidgets.QLabel(
-            "⚠️ 实验功能 (参考 Moises Live 体验)：默认关闭！仅支持 2-stem (人声 + 伴奏)，并在独立子进程运行；\n"
-            "若检测 RTF >= 1.0 或系统 RAM/VRAM 进入警戒线，将自动停止以保护 8GB 显存与 16GB 内存安全，普通实时频谱继续运行。"
+            "实验性近实时二轨分离（人声 + 伴奏）。监听前请选择按进程捕获，系统环回会把监听输出再次录入。\n"
+            "速度基准用于判断模型能否跟上实时播放。资源告警时自动停止分轨，频谱分析继续运行。"
         )
         banner.setWordWrap(True)
         banner.setStyleSheet(
