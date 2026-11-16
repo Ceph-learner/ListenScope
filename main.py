@@ -1253,18 +1253,6 @@ class ListenScopeController:
             return "mix"
         return cleaned
 
-    def _resolve_intermediate_midi_path(self, stem_path: Path | str, stem_name: str) -> Path:
-        src = Path(stem_path)
-        try:
-            if src.resolve().is_relative_to(self.work_dir.resolve()):
-                return src.with_suffix(".mid")
-        except Exception:
-            pass
-        safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem_name or src.stem).strip("._") or "stem"
-        midi_dir = self.work_dir / "midi"
-        midi_dir.mkdir(parents=True, exist_ok=True)
-        return midi_dir / f"{safe_stem}_{uuid.uuid4().hex[:8]}.mid"
-
     def _on_open_single_stem_midi(self, file_path: str) -> None:
         """Load an arbitrary external single-stem WAV into the mixer and start MIDI transcription non-destructively."""
         if not file_path:
@@ -1308,7 +1296,6 @@ class ListenScopeController:
         self._on_transcribe_stem_midi(stem_name, str(src))
 
     def _on_transcribe_stem_midi(self, stem_name: str, stem_path: str) -> None:
-        out_mid = self._resolve_intermediate_midi_path(stem_path, stem_name)
         midi_py = str(self._midi_python_executable or "").strip()
         mock_mode = self.use_mock_ai_for_demo
         bundle_root = get_bundle_root()
@@ -1326,6 +1313,8 @@ class ListenScopeController:
 
         def _run() -> None:
             try:
+                source_path = Path(stem_path).absolute()
+                out_mid = self.work_dir.absolute() / "midi" / f"{uuid.uuid4().hex}.mid"
                 can_run_subproc = bool(
                     not mock_mode
                     and midi_py
@@ -1342,7 +1331,7 @@ class ListenScopeController:
                         "-m",
                         "analysis.midi_transcription",
                         "--audio",
-                        str(stem_path),
+                        str(source_path),
                         "--output-midi",
                         str(out_mid),
                         "--stem-name",
@@ -1412,7 +1401,7 @@ class ListenScopeController:
                             missing_reason = "未配置独立 Python 3.11 CPU MIDI 解释器 (.venv-midi)"
 
                     res = transcribe_stem_to_midi(
-                        stem_path,
+                        source_path,
                         out_mid,
                         stem_name=stem_name,
                         allow_full_mix=False,
