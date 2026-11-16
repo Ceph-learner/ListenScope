@@ -167,9 +167,9 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         self.lbl_mem = QtWidgets.QLabel("RAM (主/Worker): -")
         self.lbl_vram = QtWidgets.QLabel("空闲 VRAM / GPU%: -")
         self.lbl_buf = QtWidgets.QLabel("输出缓冲: 0.00 s")
-        self.lbl_playback_health = QtWidgets.QLabel("输入跳段 0 次 | 输出重缓冲 0 次 | 声卡报告欠载 0 次")
+        self.lbl_playback_health = QtWidgets.QLabel("输入跳段 0 次 | 输出溢出丢弃 0 帧 | 输出重缓冲 0 次 | 声卡报告欠载 0 次")
         self.lbl_playback_health.setWordWrap(True)
-        self.lbl_playback_health.setToolTip("同一次分轨内累计。启动预缓冲不计入输出重缓冲。声卡欠载按驱动报告统计。")
+        self.lbl_playback_health.setToolTip("同一次分轨内累计。输出溢出按来不及播放的帧统计，启动预缓冲不计入重缓冲，声卡欠载按驱动报告统计。")
         met_grid.addWidget(self.lbl_state, 0, 0, 1, 2)
         met_grid.addWidget(self.lbl_latency, 1, 0)
         met_grid.addWidget(self.lbl_rtf, 1, 1)
@@ -234,7 +234,8 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
             f"输出缓冲: {m.buffer_seconds:.2f} / {m.max_buffer_seconds:.1f} s"
         )
         self.lbl_playback_health.setText(
-            f"输入跳段 {m.dropped_chunks} 次 | 输出重缓冲 {m.playback_rebuffers} 次 | 声卡报告欠载 {m.device_underflows} 次"
+            f"输入跳段 {m.dropped_chunks} 次 | 输出溢出丢弃 {m.output_overwritten_frames} 帧 | "
+            f"输出重缓冲 {m.playback_rebuffers} 次 | 声卡报告欠载 {m.device_underflows} 次"
         )
 
 

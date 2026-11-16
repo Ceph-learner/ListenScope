@@ -348,11 +348,13 @@ def test_controller_phase14_integration_bookmarks_metronome_and_diag(tmp_path: P
         # 3. Diagnostic ZIP bundle export from controller
         live = ctrl.live_separator
         live._dropped_chunks = 2
+        live._output_overwritten_frames = 32
         live._output_primed = True
         live._pull_playback_block(4, device_underflow=True)
         live._status_message = "private test track and path"
         ctrl.window.update_live_metrics(live.latest_metrics())
         assert "输出重缓冲 1" in ctrl.window.live_widget.lbl_playback_health.text()
+        assert "输出溢出丢弃 32 帧" in ctrl.window.live_widget.lbl_playback_health.text()
         diag_zip = tmp_path / "diag" / "test_bundle.zip"
         ctrl._on_export_diagnostic_bundle(str(diag_zip))
         deadline = time.monotonic() + 5.0
@@ -364,6 +366,7 @@ def test_controller_phase14_integration_bookmarks_metronome_and_diag(tmp_path: P
             summary = bundle.read("diagnostic_summary.json").decode("utf-8")
             telemetry = json.loads(summary)["live_separation"]
             assert telemetry["input_drop_events"] == 2
+            assert telemetry["output_overwritten_frames"] == 32
             assert telemetry["playback_rebuffers"] == 1
             assert telemetry["device_underflows"] == 1
             assert "private test track and path" not in summary

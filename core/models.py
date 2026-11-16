@@ -296,6 +296,7 @@ class LiveSeparationMetrics:
     status_message: str
     playback_rebuffers: int = 0
     device_underflows: int = 0
+    output_overwritten_frames: int = 0
 
 
 @dataclass

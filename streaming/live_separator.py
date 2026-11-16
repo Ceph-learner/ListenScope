@@ -262,6 +262,7 @@ class ExperimentalLiveSeparator:
         self._out_write_pos = 0
         self._out_available = 0
         self._output_primed = False
+        self._output_overwritten_frames = 0
         self._playback_rebuffers = 0
         self._device_underflows = 0
 
@@ -343,6 +344,7 @@ class ExperimentalLiveSeparator:
                 status_message=status,
                 playback_rebuffers=self._playback_rebuffers,
                 device_underflows=self._device_underflows,
+                output_overwritten_frames=self._output_overwritten_frames,
             )
 
     def run_benchmark(
@@ -664,6 +666,7 @@ class ExperimentalLiveSeparator:
                 self._out_write_pos = 0
                 self._out_available = 0
                 self._output_primed = False
+                self._output_overwritten_frames = 0
                 self._playback_rebuffers = 0
                 self._device_underflows = 0
                 self._overlap_add.reset()
@@ -800,24 +803,26 @@ class ExperimentalLiveSeparator:
         if n <= 0:
             return
         with self._lock:
-            if n >= self._out_cap_frames:
-                self._out_vocals[:, :] = vocals[-self._out_cap_frames :]
-                self._out_inst[:, :] = inst[-self._out_cap_frames :]
+            capacity = self._out_cap_frames
+            if n >= capacity:
+                self._out_vocals[:] = vocals[n - capacity : n]
+                self._out_inst[:] = inst[n - capacity : n]
                 self._out_write_pos = 0
-                self._out_available = self._out_cap_frames
-                return
-            end = self._out_write_pos + n
-            if end <= self._out_cap_frames:
-                self._out_vocals[self._out_write_pos : end] = vocals[:n]
-                self._out_inst[self._out_write_pos : end] = inst[:n]
             else:
-                first = self._out_cap_frames - self._out_write_pos
-                self._out_vocals[self._out_write_pos :] = vocals[:first]
-                self._out_inst[self._out_write_pos :] = inst[:first]
-                self._out_vocals[: n - first] = vocals[first:n]
-                self._out_inst[: n - first] = inst[first:n]
-            self._out_write_pos = end % self._out_cap_frames
-            self._out_available = min(self._out_cap_frames, self._out_available + n)
+                end = self._out_write_pos + n
+                if end <= capacity:
+                    self._out_vocals[self._out_write_pos : end] = vocals[:n]
+                    self._out_inst[self._out_write_pos : end] = inst[:n]
+                else:
+                    first = capacity - self._out_write_pos
+                    self._out_vocals[self._out_write_pos :] = vocals[:first]
+                    self._out_inst[self._out_write_pos :] = inst[:first]
+                    self._out_vocals[: n - first] = vocals[first:n]
+                    self._out_inst[: n - first] = inst[first:n]
+                self._out_write_pos = end % capacity
+            pending = self._out_available + n
+            self._output_overwritten_frames += max(0, pending - capacity)
+            self._out_available = min(capacity, pending)
 
     def pull_mixed_block(
         self,
