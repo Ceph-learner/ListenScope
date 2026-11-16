@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from audio.playback import HistoryABPlayer
+from audio.pcm_utils import normalize_to_canonical_pcm
 from audio.ring_buffer import FixedRingBuffer
 from core.config import AudioConfig
 from core.logging import PerformanceLogger
@@ -111,6 +112,42 @@ def test_ab_playback_does_not_repeat_partially_overwritten_read(monkeypatch):
 
     monkeypatch.setattr(ring, "read_positioned", overwrite_once)
     np.testing.assert_allclose(player.render_block(4)[:, 0], frames[2:6])
+
+
+@pytest.mark.parametrize("decoder", ["soundfile", "wave", "partial-fallback"])
+@pytest.mark.parametrize("source_rate,channels,cap", [(44100, 1, None), (96000, 2, 0.5), (48000, 2, None)])
+def test_audio_import_matches_continuous_resampling(tmp_path, monkeypatch, decoder, source_rate, channels, cap):
+    import soundfile as sf
+
+    path = tmp_path / "signal.wav"
+    time = np.arange(int(source_rate * 0.71) + 1) / source_rate
+    signal = np.column_stack((0.5 + 0.3 * np.sin(2 * np.pi * 997 * time), -0.4 * np.cos(2 * np.pi * 313 * time)))
+    pcm = (signal[:, :channels] * 32768).astype("<i2")
+    with wave.open(str(path), "wb") as writer:
+        writer.setparams((channels, 2, source_rate, 0, "NONE", "not compressed"))
+        writer.writeframes(pcm.tobytes())
+    if decoder == "wave":
+        def unavailable(*_args, **_kwargs):
+            raise OSError("force standard library WAV decoder")
+        monkeypatch.setattr(sf, "SoundFile", unavailable)
+    elif decoder == "partial-fallback":
+        class InterruptedReader(sf.SoundFile):
+            def read(self, *args, **kwargs):
+                if self.tell() > 0:
+                    raise OSError("interrupt decode after the first block")
+                return super().read(*args, **kwargs)
+
+        monkeypatch.setattr(sf, "SoundFile", InterruptedReader)
+
+    ring = FixedRingBuffer(AudioConfig(ring_buffer_seconds=1))
+    seconds, truncated = ring.import_audio_file_streaming(path, max_seconds=cap, chunk_seconds=0.011)
+    actual, _, _ = ring.read_recent(1)
+    expected = normalize_to_canonical_pcm(pcm, src_rate=source_rate, src_channels=channels)
+    if cap is not None:
+        expected = expected[:round(cap * ring.sample_rate)]
+    assert truncated is (cap is not None)
+    assert seconds == len(expected) / ring.sample_rate
+    np.testing.assert_allclose(actual, expected, atol=2e-6, rtol=0)
 
 
 def test_performance_logger_writes_bounded_jsonl(tmp_path) -> None:
