@@ -15,6 +15,7 @@ import pytest
 from ai.backend import build_separation_backend
 from ai.job_manager import AIJobManager
 from ai.models import list_models
+from ai.resource_guard import stream_chunked_separation
 from core.config import AIConfig, ResourceLimits
 from core.logging import PerformanceLogger
 from core.models import AIJobProgress, AIJobRequest, AIJobState, OOMRecoveryAction
@@ -34,6 +35,35 @@ def _create_stereo_wav(path, duration_sec: float = 4.0, sr: int = 48000) -> None
         wf.setsampwidth(2)
         wf.setframerate(sr)
         wf.writeframes((pcm * 32767.0).astype(np.int16).tobytes())
+
+
+@pytest.mark.parametrize("overlap_seconds", [0.0, 0.25])
+def test_chunked_stems_crossfade_the_same_source_frames(tmp_path: Path, overlap_seconds: float) -> None:
+    src = tmp_path / "ramp.wav"
+    ramp = np.arange(26, dtype=np.int16) * 256
+    with wave.open(str(src), "wb") as wf:
+        wf.setparams((1, 2, 12, 0, "NONE", "not compressed"))
+        wf.writeframes(ramp.astype("<i2").tobytes())
+    chunk_offsets = iter((0.0, 0.5, -0.25))
+
+    def separate(pcm: np.ndarray, sample_rate: int) -> dict[str, np.ndarray]:
+        # Simulate the same stem at different inference levels in each window.
+        return {"vocals": pcm + next(chunk_offsets)}
+
+    result = stream_chunked_separation(
+        src, tmp_path / "stems", ("vocals",), separate,
+        chunk_seconds=1.0, overlap_seconds=overlap_seconds,
+    )
+    with wave.open(result["vocals"], "rb") as wf:
+        assert (wf.getnchannels(), wf.getframerate(), wf.getnframes()) == (1, 12, len(ramp))
+        got = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2")
+
+    offsets = np.repeat([0.0, 0.5, -0.25], [12, 12, 2]).astype(np.float32)
+    if overlap_seconds:
+        offsets[12:15] = [0.0, 0.25, 0.5]
+        offsets[24:] = [0.5, -0.25]
+    expected = ((ramp.astype(np.float32) / 32768 + offsets) * 32767).astype(np.int16)
+    np.testing.assert_array_equal(got, expected)
 
 
 def test_model_registry_priority_and_roformer_default_disabled() -> None:
