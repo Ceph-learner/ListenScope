@@ -6,7 +6,7 @@ Strict safeguards:
 - Inference runs inside a dedicated isolated subprocess (`spawn` OR external `.venv-ai`).
 - Strictly bounded input lag and bounded output ring buffer (`live_max_buffer_seconds`).
 - Automatically stops if ResourceManager enters Warning or Critical state, or if
-  RTF exceeds real-time safety cleanly, leaving CPU capture & spectrum untouched.
+  the worker fails, leaving CPU capture & spectrum untouched.
 """
 
 from __future__ import annotations
@@ -577,8 +577,11 @@ class ExperimentalLiveSeparator:
         open_audio_device: bool = False,
         gpu_ai_ready: Optional[bool] = None,
         gpu_block_reason: Optional[str] = None,
+        source_is_current: Optional[Callable[[], bool]] = None,
     ) -> tuple[bool, str]:
         with self._lock:
+            if source_is_current is not None and not source_is_current():
+                return False, "捕获源已变化，实时分轨启动已取消。"
             if self._active:
                 return True, "实验性实时分轨已在运行中。"
             if self._starting:
@@ -772,7 +775,7 @@ class ExperimentalLiveSeparator:
                 return False, err_msg
 
             if open_audio_device:
-                self._ensure_output_stream()
+                self._ensure_output_stream(source_is_current)
 
             return True, self._status_message
         except Exception as exc:
@@ -1041,9 +1044,11 @@ class ExperimentalLiveSeparator:
             )
             self._stop_event.wait(timeout=0.05)
 
-    def _ensure_output_stream(self) -> None:
+    def _ensure_output_stream(self, source_is_current: Optional[Callable[[], bool]] = None) -> None:
         with self._lock:
             if self._stream is not None or self._stop_event.is_set() or not self._active:
+                return
+            if source_is_current is not None and not source_is_current():
                 return
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
@@ -1051,6 +1056,9 @@ class ExperimentalLiveSeparator:
             return
 
         def _callback(outdata, frames, _time_info, _status) -> None:
+            if self._stop_event.is_set() or (source_is_current is not None and not source_is_current()):
+                outdata.fill(0.0)
+                return
             outdata[:] = self._pull_playback_block(frames)
 
         stream = None
@@ -1065,6 +1073,8 @@ class ExperimentalLiveSeparator:
             discard = False
             with self._lock:
                 if self._stream is not None or self._stop_event.is_set() or not self._active:
+                    discard = True
+                elif source_is_current is not None and not source_is_current():
                     discard = True
                 else:
                     self._stream = stream
