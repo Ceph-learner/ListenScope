@@ -85,6 +85,41 @@ class FixedRingBuffer:
             end = self._total_written_frames
             return max(0, end - self.capacity_frames), end, self._generation
 
+    def snap_ab_to_zero(self, a: int, b: int, generation: int) -> tuple[int, int, int]:
+        """Improve both played edge samples within 5 ms, preserving a half-open range."""
+        with self._lock:
+            oldest, newest, current = self.frame_state()
+            if current != generation or not oldest <= a < b <= newest:
+                raise ValueError("A/B 选区已过期，请在历史波形上重新选择。")
+            radius = round(self.sample_rate * 0.005)
+            min_frames = min(b - a, (self.sample_rate + 1) // 2)
+            snapped_a = self._quiet_crossing(a, max(oldest + 1, a - radius),
+                                             min(b - min_frames, a + radius), oldest, newest, start=True)
+            snapped_b = self._quiet_crossing(b, max(snapped_a + min_frames, b - radius),
+                                             min(newest - 1, b + radius), oldest, newest, start=False)
+            return snapped_a, snapped_b, newest
+
+    def _quiet_crossing(self, anchor: int, lo: int, hi: int, oldest: int, newest: int, *, start: bool) -> int:
+        if lo > hi:
+            return anchor
+        offset = 0 if start else -1
+        first = max(oldest, min(lo - 1, anchor + offset))
+        stop = min(newest, max(hi + 1, anchor + offset + 1))
+        pcm = self._read_range_locked(first, stop)
+        frames = np.arange(lo, hi + 1)
+        before = pcm[frames - first - 1]
+        after = pcm[frames - first]
+        # Detect crossings per channel; a stereo sum can cancel out loud edges.
+        crosses = np.any((before != after) & (np.minimum(before, after) <= 0)
+                         & (np.maximum(before, after) >= 0), axis=1)
+        peaks = np.max(np.abs(after if start else before), axis=1)
+        anchor_peak = np.max(np.abs(pcm[anchor - first + offset]))
+        candidates = np.flatnonzero(crosses & (peaks < anchor_peak))
+        if candidates.size == 0:
+            return anchor
+        order = np.lexsort((np.abs(frames[candidates] - anchor), peaks[candidates]))
+        return int(frames[candidates[order[0]]])
+
     def range_has_audio(self, start: int, end: int, generation: int) -> bool:
         """Check for any nonzero PCM without copying the whole selected interval."""
         for cursor in range(start, end, 8192):

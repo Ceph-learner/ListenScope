@@ -167,15 +167,7 @@ class HistoryABPlayer:
         a = max(oldest, newest - req)
         b = newest
         with self._lock:
-            self._a_frame = a
-            self._b_frame = b
-            self._range_generation = generation
-            self._cursor_frame = a
-            self._stretcher.reset(0.0)
-            if self.metronome is not None:
-                self.metronome.cancel_count_in()
-                if self.metronome.overlay_enabled:
-                    self.metronome.reset_phase()
+            self._set_range_locked(a, b, generation)
         return a, b
 
     def set_ab_range(self, a_frame: int, b_frame: int) -> tuple[int, int]:
@@ -183,16 +175,31 @@ class HistoryABPlayer:
         a = max(oldest, min(int(a_frame), newest))
         b = max(a, min(int(b_frame), newest))
         with self._lock:
-            self._a_frame = a
-            self._b_frame = b
-            self._range_generation = generation
-            self._cursor_frame = a
-            self._stretcher.reset(0.0)
-            if self.metronome is not None:
-                self.metronome.cancel_count_in()
-                if self.metronome.overlay_enabled:
-                    self.metronome.reset_phase()
+            self._set_range_locked(a, b, generation)
         return a, b
+
+    def snap_ab_to_zero(self) -> tuple[int, int, int, int, int]:
+        with self._lock:
+            if self._is_playing:
+                raise ValueError("请先停止 A/B 播放，再微调边界。")
+            a, b = self._a_frame, self._b_frame
+            if b <= a:
+                raise ValueError("请先在历史波形上设定 A/B 区间。")
+            snapped_a, snapped_b, newest = self.ring_buffer.snap_ab_to_zero(a, b, self._range_generation)
+            if (snapped_a, snapped_b) != (a, b):
+                self._set_range_locked(snapped_a, snapped_b, self._range_generation)
+            return snapped_a, snapped_b, newest, snapped_a - a, snapped_b - b
+
+    def _set_range_locked(self, a: int, b: int, generation: int) -> None:
+        self._a_frame = a
+        self._b_frame = b
+        self._range_generation = generation
+        self._cursor_frame = a
+        self._stretcher.reset(0.0)
+        if self.metronome is not None:
+            self.metronome.cancel_count_in()
+            if self.metronome.overlay_enabled:
+                self.metronome.reset_phase()
 
     def set_loop(self, enabled: bool) -> None:
         with self._lock:

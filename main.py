@@ -389,6 +389,7 @@ class ListenScopeController:
         w.capture_toggle_requested.connect(self._on_capture_toggle)
         w.ab_select_recent_requested.connect(self._on_ab_select_recent)
         w.ab_set_range_sec_requested.connect(self._on_ab_set_range)
+        w.ab_snap_requested.connect(self._on_ab_snap)
         w.ab_play_requested.connect(self._on_ab_play)
         w.history_view_changed.connect(self._refresh_history_overview)
         w.ab_stop_requested.connect(self.ab_player.stop)
@@ -713,6 +714,21 @@ class ListenScopeController:
         self.window.show_banner_message(
             f"已设定 A/B 区间（倒退 {actual_start_ago:.1f}s ~ {actual_end_ago:.1f}s，共 {(b - a) / float(sr):.1f}s）。"
         )
+
+    def _on_ab_snap(self) -> None:
+        try:
+            a, b, newest, delta_a, delta_b = self.ab_player.snap_ab_to_zero()
+        except ValueError as exc:
+            self.window.show_banner_message(str(exc))
+            return
+        sr = self.ring_buffer.sample_rate
+        self.window.show_snapped_ab((newest - a) / sr, (newest - b) / sr)
+        if delta_a or delta_b:
+            self.window.show_banner_message(
+                f"已微调 A/B 边界（A {delta_a * 1000 / sr:+.2f} ms，B {delta_b * 1000 / sr:+.2f} ms）。"
+            )
+        else:
+            self.window.show_banner_message("附近没有更安静的过零点，A/B 边界保持原样。")
 
     def _refresh_history_overview(self) -> None:
         older, newer = self.window.history_ago_range

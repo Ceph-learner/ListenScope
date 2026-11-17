@@ -49,6 +49,44 @@ def test_ab_playback_distinguishes_silent_audio_and_reset_history():
     assert not player.is_playing
 
 
+def test_ab_zero_snap_uses_played_stereo_edges_across_wrap():
+    ring = FixedRingBuffer(AudioConfig(sample_rate=1000, ring_buffer_seconds=1))
+    samples = np.full(1200, 0.6, dtype=np.float32)
+    samples[498:500] = (-0.8, 0.02)
+    samples[998:1000] = (-0.03, 0.8)
+    stereo = np.column_stack([samples, -samples])
+    ring.write(stereo[:900])
+    ring.write(stereo[900:])
+    player = HistoryABPlayer(ring)
+    player.set_ab_range(500, 1000)
+
+    assert player.snap_ab_to_zero() == (499, 999, 1200, -1, -1)
+    assert player.snap_ab_to_zero() == (499, 999, 1200, 0, 0)
+    player.start_playback(open_audio_device=False)
+    with pytest.raises(ValueError, match="先停止"):
+        player.snap_ab_to_zero()
+    block = player.render_block(501)
+    np.testing.assert_allclose(block[[0, 499, 500], 0], [0.02, -0.03, 0.02])
+    player.stop()
+
+
+def test_ab_zero_snap_keeps_dc_and_rejects_expired_or_reset_selection():
+    ring = FixedRingBuffer(AudioConfig(sample_rate=1000, ring_buffer_seconds=1))
+    dc = np.full((1000, 2), 0.5, dtype=np.float32)
+    ring.write(dc)
+    player = HistoryABPlayer(ring)
+    player.set_ab_range(0, 1000)
+    assert player.snap_ab_to_zero() == (0, 1000, 1000, 0, 0)
+    ring.write(dc[:10])
+    with pytest.raises(ValueError, match="选区已过期"):
+        player.snap_ab_to_zero()
+    player.set_ab_range(10, 1000)
+    ring.clear()
+    ring.write(dc)
+    with pytest.raises(ValueError, match="选区已过期"):
+        player.snap_ab_to_zero()
+
+
 def _write_const_wav(path, val: float, frames: int = 4800, sr: int = 48000) -> None:
     pcm = np.full((frames, 2), val, dtype=np.float32)
     with wave.open(str(path), "wb") as wf:
