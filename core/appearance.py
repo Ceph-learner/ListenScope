@@ -10,6 +10,12 @@ PRESETS = {
     "codex": ("Codex", "#141417", "#ECECF0", "#ACAEFF"),
     "claude": ("Claude Code", "#201B18", "#F1E5D8", "#DF9B7B"),
 }
+DEFAULT_ANALYSIS_LAYOUT = "monitor"
+ANALYSIS_LAYOUTS = {
+    "monitor": "实时监听",
+    "frequency": "频率诊断",
+    "history": "时频追踪",
+}
 SCOPES = {"off", "floating", "panels"}
 LAYOUTS = {
     "workbench": ("A · 工作台", "音轨、分析和历史波形从上到下排列。"),
@@ -42,6 +48,7 @@ class Appearance:
     softness: int = 60
     dispersion: int = 20
     layout: str = "split"
+    analysis_layout: str = DEFAULT_ANALYSIS_LAYOUT
 
     @classmethod
     def from_mapping(cls, raw):
@@ -58,6 +65,7 @@ class Appearance:
             softness=_number(raw.get("softness"), 0, 100, 60),
             dispersion=_number(raw.get("dispersion"), 0, 100, 20),
             layout=_choice(raw.get("layout"), LAYOUTS, "split"),
+            analysis_layout=_choice(raw.get("analysis_layout"), ANALYSIS_LAYOUTS, DEFAULT_ANALYSIS_LAYOUT),
         )
 
     @property

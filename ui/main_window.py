@@ -372,6 +372,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         # 2. CENTER TABS
         self.tabs = QtWidgets.QTabWidget()
         self.spectrum_widget = SpectrumAnalysisWidget()
+        self.spectrum_widget.view_combo.activated.connect(self._on_analysis_layout_selected)
         self.chroma_widget = ChromaAndHarmonyWidget()
         self.mixer_widget = StemMixerWidget(mixer_engine)
         self.resource_panel = ResourceStatusPanel()
@@ -593,12 +594,20 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.mixer_widget.plot_appearance = appearance
         if old is None or appearance.layout != old.layout:
             self._apply_workspace_layout(appearance.layout)
-        if old is not None and replace(appearance, layout=old.layout) == old:
+        analysis_view = self.spectrum_widget.view_combo
+        analysis_view.setCurrentIndex(analysis_view.findData(appearance.analysis_layout))
+        if old is not None and replace(appearance, layout=old.layout, analysis_layout=old.analysis_layout) == old:
             return
         self.setStyleSheet(appearance_stylesheet(DARK_STYLESHEET, appearance))
         for plot in self.findChildren(pg.PlotWidget):
             apply_plot_appearance(plot, appearance)
         self.chroma_widget.refresh_chroma_note_ticks()
+
+    def _on_analysis_layout_selected(self) -> None:
+        layout = self.spectrum_widget.view_combo.currentData()
+        if layout != self.appearance.analysis_layout:
+            self.apply_appearance(replace(self.appearance, analysis_layout=layout))
+            self.appearance_applied.emit()
 
     def _apply_workspace_layout(self, layout: str) -> None:
         practice = layout == "practice"

@@ -5,7 +5,7 @@ import re
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.appearance import Appearance, LAYOUTS, PRESETS
+from core.appearance import ANALYSIS_LAYOUTS, DEFAULT_ANALYSIS_LAYOUT, Appearance, LAYOUTS, PRESETS
 
 
 def _blend(left, right, amount):
@@ -41,6 +41,17 @@ QPushButton#analysisAction:enabled {{ background: {colors["#28303B"]}; border-co
 QPushButton#analysisAction:hover:enabled {{ background: {colors["#1F6FEB"]}; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QSpinBox:focus {{ border: 1px solid {accent}; }}
 QLabel#settingsHeading {{ font-size: {appearance.font_size + 12}px; font-weight: 700; }}
+QLabel#analysisHeading {{ font-size: {appearance.font_size + 7}px; font-weight: 700; }}
+QFrame#analysisMetric {{ background: {surface}; border: 1px solid {rim}; border-radius: 8px; }}
+QFrame#analysisMetric QLabel {{ background: transparent; }}
+QFrame#analysisChart {{ background: {surface}; border: 1px solid {rim}; border-radius: 7px; }}
+QFrame#analysisChart QLabel {{ background: transparent; }}
+QLabel#analysisChartHeading {{ font-weight: 600; }}
+QLabel#analysisCaption {{ color: {colors["#B4BECB"]}; }}
+QLabel#analysisPitch {{ color: {accent}; font-size: {appearance.font_size + 15}px; font-weight: 700; }}
+QLabel#analysisValue {{ font-size: {appearance.font_size + 5}px; font-weight: 600; }}
+QProgressBar#analysisLevel {{ background: {colors["#1A1E24"]}; border: 0; border-radius: 2px; }}
+QProgressBar#analysisLevel::chunk {{ background: {accent}; border-radius: 2px; }}
 QLabel#settingsPageHeading {{ font-size: {appearance.font_size + 6}px; font-weight: 700; }}
 QLabel#settingsSubtitle {{ color: {colors["#B4BECB"]}; }}
 QWidget#settingsNavigation {{ background: {surface}; border: 1px solid {rim}; border-radius: 9px; }}
@@ -109,7 +120,7 @@ class AppearanceDialog(QtWidgets.QDialog):
             self._presets.addButton(button)
             button.clicked.connect(lambda _checked, key=key: self._show_values(
                 Appearance(preset=key, scope="floating" if key == "lenso" else "off",
-                           layout=self._layout.currentData())
+                           layout=self._layout.currentData(), analysis_layout=self._analysis_layout.currentData())
             ))
             button.setProperty("preset", key)
             presets.addWidget(button)
@@ -124,6 +135,10 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._layout_hint = QtWidgets.QLabel()
         self._layout_hint.setWordWrap(True)
         form.addRow("", self._layout_hint)
+        self._analysis_layout = QtWidgets.QComboBox()
+        for key, label in ANALYSIS_LAYOUTS.items():
+            self._analysis_layout.addItem(f"{label}（默认）" if key == DEFAULT_ANALYSIS_LAYOUT else label, key)
+        form.addRow("实时分析布局", self._analysis_layout)
         self._font = QtWidgets.QSpinBox()
         self._font.setRange(11, 16)
         self._font.setSuffix(" px")
@@ -192,6 +207,7 @@ class AppearanceDialog(QtWidgets.QDialog):
             "font_size": self._font.value(),
             "scope": self._scope.currentData(),
             "layout": self._layout.currentData(),
+            "analysis_layout": self._analysis_layout.currentData(),
             **{key: field.text() for key, field in self._colors.items()},
             **{key: slider.value() for key, slider in self._sliders.items()},
         })
@@ -203,6 +219,7 @@ class AppearanceDialog(QtWidgets.QDialog):
             button.setChecked(button.property("preset") == values.preset)
         self._font.setValue(values.font_size)
         self._layout.setCurrentIndex(self._layout.findData(values.layout))
+        self._analysis_layout.setCurrentIndex(self._analysis_layout.findData(values.analysis_layout))
         self._scope.setCurrentIndex(self._scope.findData(values.scope))
         for key, field in self._colors.items():
             field.setText(getattr(values, key))
