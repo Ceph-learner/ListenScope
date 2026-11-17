@@ -19,6 +19,7 @@ from analysis.chords import (
 from analysis.chroma import PITCH_CLASSES
 from audio.metronome import TapTempoTracker
 from core.models import AnalysisSnapshot
+from ui.chord_practice import ChordPracticeDialog
 
 
 TRANSPOSE_PRESETS: list[tuple[str, int]] = [
@@ -309,6 +310,9 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.reset_harmony_btn.clicked.connect(self._on_reset_clicked)
         prog_bar.addWidget(self.chord_progression_lbl, 1)
         prog_bar.addWidget(self.progression_mode_combo)
+        self.practice_chords_btn = QtWidgets.QPushButton("练习和弦")
+        self.practice_chords_btn.clicked.connect(self._open_chord_practice)
+        prog_bar.addWidget(self.practice_chords_btn)
         root.addLayout(prog_bar)
         prog_bar = QtWidgets.QHBoxLayout()
         prog_bar.addWidget(QtWidgets.QLabel("移调/Capo:"))
@@ -435,6 +439,12 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 labels.append(f"{name} ({degree})")
         text = " → ".join(labels) or "-"
         self.chord_progression_lbl.setText(f"最近和弦进行 (最多 12 步): {text}")
+
+    def _open_chord_practice(self) -> None:
+        estimate = self._last_snapshot.key if self._last_snapshot is not None else None
+        dialog = ChordPracticeDialog(self.recent_progression, estimate, self._transpose_semitones, self)
+        dialog.exec()
+        dialog.deleteLater()
 
     def _on_tap_tempo_clicked(self) -> None:
         tap_bpm = self._tap_tracker.tap()
