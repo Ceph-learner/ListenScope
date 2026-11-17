@@ -952,7 +952,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         dlg.appearance_requested.connect(self.open_appearance_dialog)
         if focus_midi:
             dlg._tabs.setCurrentIndex(1)
-            dlg.midi_python_edit.setFocus()
+            QtCore.QTimer.singleShot(0, dlg.midi_python_edit.setFocus)
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             if dlg.updated_limits is not None and dlg.updated_ai_config is not None:
                 self._resource_limits = dlg.updated_limits
