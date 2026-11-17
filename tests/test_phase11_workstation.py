@@ -121,6 +121,52 @@ def _write_drums_wav(path: Path, *, bpm: float = 120.0, duration_sec: float = 4.
     return path
 
 
+def test_weak_stems_are_analyzed_without_turning_silence_into_notes(tmp_path: Path) -> None:
+    bass = _write_sine_wav(tmp_path / "bass.wav", [(55.0, 2.0)], amp=0.0075)
+    other = _write_chord_progression_wav(tmp_path / "other.wav", [([220.0, 277.18, 329.63], 2.0)])
+    audio, rate = sf.read(other, dtype="float32")
+    sf.write(other, audio * 0.025, rate, subtype="PCM_16")
+    silent = _write_sine_wav(tmp_path / "silent.wav", [(0, 2.0)])
+    weak = analyze_stems_offline({"other": other, "bass": bass})
+    assert weak.bass is not None and weak.bass.signal_detected
+    assert any(note.pitch_midi == 33 for note in weak.bass.notes)
+    assert any(segment.chord.startswith("A") for segment in weak.chord_timeline)
+    silence = analyze_stems_offline({"other": silent, "bass": silent})
+    assert silence.bass is not None and silence.bass.signal_detected is False
+    assert not silence.bass.notes
+    assert silence.chord_timeline and all(segment.stability == "Silent" for segment in silence.chord_timeline)
+    noise_path = tmp_path / "noise.wav"
+    sf.write(noise_path, np.random.default_rng(42).normal(0, 0.0056, 96000), 48000, subtype="PCM_16")
+    noise = analyze_bass_stem(noise_path)
+    assert noise.signal_detected is True and not noise.notes
+
+
+def test_clear_stem_results_invalidates_pending_analysis(tmp_path: Path) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    ctrl = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path / "workspace")
+    try:
+        path = _write_sine_wav(tmp_path / "bass.wav", [(55.0, 1.0)])
+        mixer = ctrl.window.mixer_widget
+        mixer.load_stem_paths({"bass": str(path)})
+        ctrl.ring_buffer.write(np.ones((100, 2), dtype=np.float32))
+        mixer.set_midi_transcribing("bass")
+        assert mixer.analysis_tabs.currentIndex() == 2
+        assert mixer.midi_settings_btn.isEnabled()
+        generation = ctrl._stem_generation
+        report = analyze_stems_offline({"bass": path})
+        ctrl._ui_deep_analysis_q.put_nowait((generation, report, "old result"))
+        mixer.clear_results_btn.click()
+        ctrl._on_ui_tick()
+        assert not mixer.clear_results_btn.isEnabled()
+        assert not ctrl.mixer_engine.tracks
+        assert ctrl._latest_deep_report is None and ctrl._stem_generation == generation + 1
+        assert ctrl.ring_buffer.total_written_frames == 100 and path.exists()
+    finally:
+        ctrl.shutdown()
+        ctrl.window.close()
+        app.processEvents()
+
+
 def test_settings_store_persistence_and_safety_invariants(tmp_path: Path) -> None:
     s_path = tmp_path / "cfg" / "settings.json"
     # Missing file falls back safely

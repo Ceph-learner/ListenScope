@@ -7,7 +7,7 @@ from typing import Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from analysis.chroma import PITCH_CLASSES
 from audio.playback import BASS_MONITOR_BOOST_DB, StemMixerEngine
@@ -142,6 +142,8 @@ class StemMixerWidget(QtWidgets.QWidget):
     export_sheet_requested = QtCore.Signal(str)     # output .md/.csv path
     save_midi_requested = QtCore.Signal(str)        # output .mid path
     metronome_overlay_toggled = QtCore.Signal(bool)
+    midi_settings_requested = QtCore.Signal()
+    clear_results_requested = QtCore.Signal()
 
     def __init__(self, mixer_engine: StemMixerEngine, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -162,7 +164,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         root.setSpacing(8)
 
         # AI Job status & progress bar
-        job_box = QtWidgets.QGroupBox("AI 音轨分离任务状态 (独立子进程串行)")
+        job_box = QtWidgets.QGroupBox("分轨任务")
         job_l = QtWidgets.QHBoxLayout(job_box)
         self.job_status_lbl = QtWidgets.QLabel("空闲：请在下方 120s 历史时间轴选择片段并启动 2-Stem 或 4-Stem 分轨")
         self.job_status_lbl.setWordWrap(True)
@@ -210,13 +212,14 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         self.export_btn = QtWidgets.QPushButton("导出混合 WAV")
         self.export_btn.setToolTip("流式导出当前分轨混音 WAV；若已设定局部循环、不变调倍速或随播节拍器将同步应用到导出结果")
-        self.deep_analyze_btn = QtWidgets.QPushButton("深度分析分轨 (和弦/Bass/鼓/旋律)")
+        self.deep_analyze_btn = QtWidgets.QPushButton("分析和弦与节奏")
+        self.deep_analyze_btn.setObjectName("analysisAction")
         self.deep_analyze_btn.setEnabled(False)
         self.sevenths_chk = QtWidgets.QCheckBox("扩展和弦 (maj7/m7/7/sus4)")
         self.sevenths_chk.setToolTip("离线深度分轨和声识别是否启用 7 和弦与 sus4 模板（实时视图仍保持 12 大/小三和弦标准）")
         self.export_sheet_btn = QtWidgets.QPushButton("导出扒谱报告")
         self.export_sheet_btn.setEnabled(False)
-        self.open_stem_midi_btn = QtWidgets.QPushButton("打开单轨 WAV 转 MIDI...")
+        self.open_stem_midi_btn = QtWidgets.QPushButton("打开单轨 WAV…")
         self.open_stem_midi_btn.setToolTip(
             "从任意目录选择已有单轨 WAV (如上一轮导出的 bass.wav) 直接载入混音器，并通过独立 Python 3.11 Basic Pitch 转录与导出 MIDI；不中断当前实时捕获"
         )
@@ -234,11 +237,16 @@ class StemMixerWidget(QtWidgets.QWidget):
         ctrl_bar.addWidget(self.stop_btn)
         ctrl_bar.addWidget(self.loop_chk)
         ctrl_bar.addWidget(self.export_btn)
-        ctrl_bar.addWidget(self.deep_analyze_btn)
-        ctrl_bar.addWidget(self.sevenths_chk)
-        ctrl_bar.addWidget(self.export_sheet_btn)
-        ctrl_bar.addWidget(self.open_stem_midi_btn)
-        ctrl_bar.addSpacing(8)
+        ctrl_bar.addStretch(1)
+        self.clear_results_btn = QtWidgets.QPushButton("清除分轨结果")
+        self.clear_results_btn.setToolTip("清空当前音轨、分析和 MIDI 预览，保留原音频和已导出的文件。")
+        self.clear_results_btn.setEnabled(False)
+        self.clear_results_btn.clicked.connect(self.clear_results_requested.emit)
+        ctrl_bar.addWidget(self.clear_results_btn)
+        root.addLayout(ctrl_bar)
+
+        monitor_bar = QtWidgets.QHBoxLayout()
+        monitor_bar.addWidget(QtWidgets.QLabel("监听"))
 
         presets = [
             ("全部", "all"),
@@ -252,16 +260,16 @@ class StemMixerWidget(QtWidgets.QWidget):
         for label, key in presets:
             b = QtWidgets.QPushButton(label)
             b.clicked.connect(lambda _=False, k=key: self._apply_preset(k))
-            ctrl_bar.addWidget(b)
+            monitor_bar.addWidget(b)
             self._preset_buttons[key] = b
         self.bass_monitor_boost_chk = QtWidgets.QCheckBox(f"贝斯独听 +{BASS_MONITOR_BOOST_DB} dB")
         self.bass_monitor_boost_chk.setChecked(True)
         self.bass_monitor_boost_chk.setToolTip("仅在播放且贝斯是唯一出声的轨道时生效。可关闭以回到原电平，导出不受影响。")
         self.bass_monitor_boost_chk.toggled.connect(self.mixer_engine.set_bass_monitor_boost)
-        ctrl_bar.addWidget(self.bass_monitor_boost_chk)
+        monitor_bar.addWidget(self.bass_monitor_boost_chk)
         self._sync_preset_availability(())
-        ctrl_bar.addStretch(1)
-        root.addLayout(ctrl_bar)
+        monitor_bar.addStretch(1)
+        root.addLayout(monitor_bar)
 
         # Practice toolbar: pitch-preserving speed, sub-region chord loop & live chord HUD
         practice_bar = QtWidgets.QHBoxLayout()
@@ -319,6 +327,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(115)
         self._tracks_container = QtWidgets.QWidget()
         self._tracks_layout = QtWidgets.QVBoxLayout(self._tracks_container)
         self._tracks_layout.setSpacing(6)
@@ -327,12 +336,18 @@ class StemMixerWidget(QtWidgets.QWidget):
         splitter.addWidget(scroll)
 
         self.analysis_tabs = QtWidgets.QTabWidget()
+        self.analysis_tabs.setMinimumHeight(212)
 
         # Sub-tab 1: Deep Stem Arrangement & Chord Progression Timeline (non-destructive CPU analysis)
         deep_tab = QtWidgets.QWidget()
         deep_l = QtWidgets.QVBoxLayout(deep_tab)
+        analysis_actions = QtWidgets.QHBoxLayout()
+        for control in (self.deep_analyze_btn, self.sevenths_chk, self.export_sheet_btn):
+            analysis_actions.addWidget(control)
+        analysis_actions.addStretch(1)
+        deep_l.addLayout(analysis_actions)
         self.deep_summary_lbl = QtWidgets.QLabel(
-            "分轨完成后点击上方「深度分析分轨」：离线流式解析时间轴和弦进行、Bass 根音、鼓组 Kick/Snare/Hi-Hat 16 步律动及主旋律音域（点击行跳转试听，可点「循环选中和弦段」反复练习）。"
+            "分轨完成后，可在这里分析和弦、调性、贝斯音符和鼓点。"
         )
         self.deep_summary_lbl.setWordWrap(True)
         self.deep_summary_lbl.setStyleSheet(
@@ -348,7 +363,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.chord_timeline_table.cellClicked.connect(self._on_chord_row_clicked)
         deep_l.addWidget(self.deep_summary_lbl)
         deep_l.addWidget(self.chord_timeline_table, 1)
-        self.analysis_tabs.addTab(deep_tab, "和弦进行 & Bass/鼓/旋律深度分析")
+        self.analysis_tabs.addTab(deep_tab, "和弦与节奏")
 
         # Sub-tab 2: Piano Roll (PyQtGraph horizontal bar visualizer + synchronized playhead cursor + click-to-seek)
         pr_tab = QtWidgets.QWidget()
@@ -369,24 +384,25 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.piano_roll_plot.addItem(self._piano_roll_cursor)
         self.piano_roll_plot.scene().sigMouseClicked.connect(self._on_piano_roll_clicked)
         pr_l.addWidget(self.piano_roll_plot)
-        self.analysis_tabs.addTab(pr_tab, "MIDI 钢琴卷帘 (Piano Roll)")
+        self.analysis_tabs.addTab(pr_tab, "MIDI 卷帘")
 
         # Sub-tab 3: MIDI Table + Save As
         midi_tab = QtWidgets.QWidget()
         midi_l = QtWidgets.QVBoxLayout(midi_tab)
         midi_hdr = QtWidgets.QHBoxLayout()
         self.midi_info_lbl = QtWidgets.QLabel(
-            "尚未执行分轨 MIDI 转录（Basic Pitch 默认通过独立 Python 3.11 CPU 环境 `.venv-midi` 仅针对单一分轨运行；点击音符行可跳转至对应时间位置）。"
+            "尚未转录。点轨道右侧「转 MIDI」，或打开已有单轨 WAV。"
         )
         self.midi_info_lbl.setWordWrap(True)
-        self.midi_open_stem_btn = QtWidgets.QPushButton("打开单轨 WAV...")
-        self.midi_open_stem_btn.setToolTip("直接打开本地任意目录的单轨 WAV 文件 (如 bass.wav) 载入混音器并转录 MIDI")
-        self.midi_open_stem_btn.clicked.connect(self._on_open_single_stem_clicked)
+        self.midi_open_stem_btn = self.open_stem_midi_btn
+        self.midi_settings_btn = QtWidgets.QPushButton("MIDI 环境设置")
+        self.midi_settings_btn.clicked.connect(self.midi_settings_requested.emit)
         self.save_midi_btn = QtWidgets.QPushButton("另存 MIDI (.mid)")
         self.save_midi_btn.setEnabled(False)
         self.save_midi_btn.clicked.connect(self._on_save_midi_clicked)
         midi_hdr.addWidget(self.midi_info_lbl, 1)
         midi_hdr.addWidget(self.midi_open_stem_btn)
+        midi_hdr.addWidget(self.midi_settings_btn)
         midi_hdr.addWidget(self.save_midi_btn)
         midi_l.addLayout(midi_hdr)
 
@@ -397,9 +413,26 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.midi_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.midi_table.cellClicked.connect(self._on_midi_row_clicked)
         midi_l.addWidget(self.midi_table)
-        self.analysis_tabs.addTab(midi_tab, "MIDI 音符明细表")
+        self.analysis_tabs.addTab(midi_tab, "MIDI 音符")
+
+        rhythm_tab = QtWidgets.QWidget()
+        rhythm_layout = QtWidgets.QVBoxLayout(rhythm_tab)
+        self.rhythm_status = QtWidgets.QLabel("分析含独立鼓轨的分轨结果后，这里会显示 16 步鼓点。")
+        self.rhythm_status.setWordWrap(True)
+        rhythm_layout.addWidget(self.rhythm_status)
+        self.rhythm_table = QtWidgets.QTableWidget(3, 16)
+        self.rhythm_table.setAccessibleName("16 步鼓点网格")
+        self.rhythm_table.setVerticalHeaderLabels(["底鼓", "军鼓", "踩镲"])
+        self.rhythm_table.setHorizontalHeaderLabels([str(step) for step in range(1, 17)])
+        self.rhythm_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self.rhythm_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        rhythm_layout.addWidget(self.rhythm_table)
+        self.analysis_tabs.addTab(rhythm_tab, "鼓点")
 
         splitter.addWidget(self.analysis_tabs)
+        splitter.setChildrenCollapsible(False)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
         splitter.setSizes([240, 220])
         root.addWidget(splitter, 1)
 
@@ -629,6 +662,7 @@ class StemMixerWidget(QtWidgets.QWidget):
             self.save_midi_requested.emit(file_path)
 
     def set_midi_transcribing(self, stem_name: str, midi_python: str = "") -> None:
+        self.analysis_tabs.setCurrentIndex(2)
         self._last_midi_stem_name = stem_name or "listenscope_stem"
         self.save_midi_btn.setEnabled(False)
         self.midi_info_lbl.setStyleSheet(
@@ -640,7 +674,7 @@ class StemMixerWidget(QtWidgets.QWidget):
             )
         else:
             self.midi_info_lbl.setText(
-                f"⏳ 未配置独立 `.venv-midi`，正在后台对 `{self._last_midi_stem_name}` 执行轻量回退 MIDI 转录..."
+                f"正在对 {self._last_midi_stem_name} 使用轻量转录。配置独立环境后可用 Basic Pitch。"
             )
 
     def set_midi_error(self, message: str) -> None:
@@ -678,6 +712,7 @@ class StemMixerWidget(QtWidgets.QWidget):
             AIJobState.WRITING,
         )
         self.cancel_btn.setEnabled(running)
+        self.clear_results_btn.setEnabled(bool(self._rows) and not running)
         self.job_progress.setValue(int(round(prog.progress * 100)))
         self.job_status_lbl.setText(f"[{prog.state.value}] {prog.message}")
         if running:
@@ -685,6 +720,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
     def handle_ai_result(self, res: AIJobResult) -> None:
         self.cancel_btn.setEnabled(False)
+        self.clear_results_btn.setEnabled(bool(self._rows))
         if res.state == AIJobState.COMPLETED:
             self.job_progress.setValue(100)
             self.job_status_lbl.setText(
@@ -700,6 +736,11 @@ class StemMixerWidget(QtWidgets.QWidget):
         else:
             self.job_progress.setValue(0)
             self.job_status_lbl.setText(f"[{res.state.value}] {res.error or '已停止'}")
+
+    def clear_results(self) -> None:
+        self.load_stem_paths({})
+        self.job_progress.setValue(0)
+        self.job_status_lbl.setText("分轨结果已清除。可在历史时间轴重新选择片段。")
 
     def load_stem_paths(self, stem_paths: dict[str, str]) -> None:
         for row in self._rows.values():
@@ -718,9 +759,11 @@ class StemMixerWidget(QtWidgets.QWidget):
             self._piano_roll_item = None
         self.piano_roll_plot.setTitle("MIDI 钢琴卷帘预览 (Pitch vs Time · 单击画面可跳转播放位置)")
         self.midi_table.setRowCount(0)
+        self.rhythm_table.clearContents()
+        self.rhythm_status.setText("分析含独立鼓轨的分轨结果后，这里会显示 16 步鼓点。")
         self.midi_info_lbl.setStyleSheet("")
         self.midi_info_lbl.setText(
-            "尚未执行分轨 MIDI 转录（Basic Pitch 默认通过独立 Python 3.11 CPU 环境 `.venv-midi` 仅针对单一分轨运行；点击音符行可跳转至对应时间位置）。"
+            "尚未转录。点轨道右侧「转 MIDI」，或打开已有单轨 WAV。"
         )
         self.save_midi_btn.setEnabled(False)
         self.loop_chord_btn.setEnabled(False)
@@ -732,11 +775,13 @@ class StemMixerWidget(QtWidgets.QWidget):
         tracks = self.mixer_engine.load_stems(stem_paths)
         self._sync_preset_availability(tracks)
         self.deep_analyze_btn.setEnabled(bool(tracks))
+        self.clear_results_btn.setEnabled(bool(tracks))
         self.export_sheet_btn.setEnabled(False)
         self.chord_timeline_table.setRowCount(0)
         self.analysis_tabs.setCurrentIndex(0)
         self.deep_summary_lbl.setText(
-            "分轨完成后点击上方「深度分析分轨」：离线流式解析时间轴和弦进行、Bass 根音、鼓组 Kick/Snare/Hi-Hat 16 步律动及主旋律音域（点击行跳转试听，可点「循环选中和弦段」反复练习）。"
+            "点「分析和弦与节奏」生成和弦时间轴、贝斯音符和鼓点。"
+            if tracks else "分轨完成后，可在这里分析和弦、调性、贝斯音符和鼓点。"
         )
         self._piano_roll_cursor.setVisible(False)
         self.sync_playback_position()
@@ -765,19 +810,36 @@ class StemMixerWidget(QtWidgets.QWidget):
         parts = [
             f"调性: {key_p} (候选: {key_s}, {report.estimated_key.stability}{tr_tag}) | BPM: {bpm_txt} | 和声源: {report.harmonic_source_label}"
         ]
-        if report.bass is not None:
+        if report.bass is None:
+            parts.append("贝斯 · 缺少独立贝斯轨")
+        elif not report.bass.notes:
+            state = "低于静音门限" if report.bass.signal_detected is False else "没有足够稳定的音符"
+            parts.append(f"贝斯 · {state}")
+        else:
             low_b = self._tr_note(report.bass.lowest_note) or "-"
             high_b = self._tr_note(report.bass.highest_note) or "-"
             roots_b = ", ".join(self._tr_note(r) for r in report.bass.root_pitch_classes) or "-"
             parts.append(
-                f"Bass: 音域 {low_b}~{high_b} | "
+                f"贝斯: 音域 {low_b}~{high_b} | "
                 f"核心根音 [{roots_b}] | 音符数={len(report.bass.notes)}"
             )
         if report.drums is not None:
+            self.rhythm_table.clearContents()
+            self.rhythm_status.setText("按估计速度对齐的 16 步常见鼓点")
+            for column, step in enumerate(report.drums.groove_16_step[:16]):
+                for row, hit in enumerate(("K", "S", "H")):
+                    if hit in step.split("+"):
+                        item = QtWidgets.QTableWidgetItem("●")
+                        item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+                        item.setForeground(QtGui.QColor(self.plot_appearance.colors[2]))
+                        self.rhythm_table.setItem(row, column, item)
             parts.append(
                 f"Drums: Kick={len(report.drums.kick_times_sec)} / Snare={len(report.drums.snare_times_sec)} / "
                 f"HiHat={len(report.drums.hihat_times_sec)} | 16步律动: {' '.join(report.drums.groove_16_step)}"
             )
+        else:
+            self.rhythm_table.clearContents()
+            self.rhythm_status.setText("当前结果没有独立鼓轨。")
         if report.melody is not None:
             low_m = self._tr_note(report.melody.lowest_note) or "-"
             high_m = self._tr_note(report.melody.highest_note) or "-"

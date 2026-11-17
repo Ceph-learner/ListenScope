@@ -273,6 +273,7 @@ class ListenScopeController:
         self._ui_track_decision_q: queue.Queue[TrackTrackerDecision] = queue.Queue(maxsize=32)
         self._probe_seq = 0
         self._stem_generation = 0
+        self._cleared_ai_task_id = ""
         self._practice_dirty = False
         self._auto_reset_on_track_change = bool(saved_settings.auto_reset_on_track_change)
         self._auto_track_reset_count = 0
@@ -307,6 +308,7 @@ class ListenScopeController:
             volume=self.metronome.volume,
         )
         self.window.chroma_widget.set_transpose_semitones(saved_settings.transpose_semitones)
+        self.window.chroma_widget.set_progression_mode(saved_settings.progression_mode)
         self.window.mixer_widget.set_transpose_semitones(saved_settings.transpose_semitones)
         self.window.chroma_widget.sync_auto_reset_ui(enabled=self._auto_reset_on_track_change)
 
@@ -388,6 +390,7 @@ class ListenScopeController:
         w.ab_select_recent_requested.connect(self._on_ab_select_recent)
         w.ab_set_range_sec_requested.connect(self._on_ab_set_range)
         w.ab_play_requested.connect(self._on_ab_play)
+        w.history_view_changed.connect(self._refresh_history_overview)
         w.ab_stop_requested.connect(self.ab_player.stop)
         w.ab_loop_toggled.connect(self.ab_player.set_loop)
         w.ab_speed_changed.connect(self.ab_player.set_speed)
@@ -403,6 +406,8 @@ class ListenScopeController:
         w.mixer_widget.oom_action_requested.connect(self._on_oom_action)
         w.mixer_widget.export_mix_requested.connect(self._on_export_mix)
         w.mixer_widget.deep_analyze_requested.connect(self._on_deep_analyze_stems)
+        w.mixer_widget.midi_settings_requested.connect(lambda: w.open_settings_dialog(focus_midi=True))
+        w.mixer_widget.clear_results_requested.connect(self._on_clear_stem_results)
         w.mixer_widget.export_sheet_requested.connect(self._on_export_transcription_sheet)
         w.mixer_widget.save_midi_requested.connect(self._on_save_midi_as)
         w.mixer_widget.send_stem_to_analysis.connect(self._on_send_stem_to_analysis)
@@ -418,6 +423,7 @@ class ListenScopeController:
         w.ab_bookmark_select_requested.connect(self._on_ab_bookmark_select)
         w.ab_bookmark_delete_requested.connect(self._on_ab_bookmark_delete)
         w.chroma_widget.metronome_bpm_changed.connect(self._on_metronome_bpm_changed)
+        w.chroma_widget.progression_mode_changed.connect(self._on_progression_mode_changed)
         w.chroma_widget.metronome_beats_changed.connect(self._on_metronome_beats_changed)
         w.chroma_widget.metronome_overlay_toggled.connect(self._on_metronome_overlay_toggled)
         w.chroma_widget.metronome_standalone_toggled.connect(self._on_metronome_standalone_toggled)
@@ -708,6 +714,11 @@ class ListenScopeController:
             f"已设定 A/B 区间（倒退 {actual_start_ago:.1f}s ~ {actual_end_ago:.1f}s，共 {(b - a) / float(sr):.1f}s）。"
         )
 
+    def _refresh_history_overview(self) -> None:
+        older, newer = self.window.history_ago_range
+        mins, maxs, span = self.ring_buffer.snapshot_envelope(300, ago_range=(older, newer))
+        self.window.update_history_overview(mins, maxs, span, end_ago=newer)
+
     def _on_ab_play(self) -> None:
         if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
             self.ab_player.select_recent_seconds(min(30.0, max(1.0, self.ring_buffer.available_seconds)))
@@ -716,7 +727,8 @@ class ListenScopeController:
         self.mixer_engine.pause()
         self.live_separator.close_output_stream()
         try:
-            hint = self.ab_player.start_playback(open_audio_device=True)
+            device_options = {} if self.use_mock_ai_for_demo else {"require_device": True}
+            hint = self.ab_player.start_playback(open_audio_device=True, **device_options)
             self.window.show_banner_message(hint)
         except Exception as exc:
             self.window.show_banner_message(f"A/B 回放失败: {exc}")
@@ -777,6 +789,9 @@ class ListenScopeController:
 
     def _on_transpose_semitones_changed(self, semitones: int) -> None:
         self.window.mixer_widget.set_transpose_semitones(int(semitones))
+        self._practice_dirty = True
+
+    def _on_progression_mode_changed(self, _mode: str) -> None:
         self._practice_dirty = True
 
     def _on_metronome_overlay_toggled(self, enabled: bool) -> None:
@@ -1091,8 +1106,7 @@ class ListenScopeController:
             self.window.history_coverage_lbl.setText(
                 f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s"
             )
-            mins, maxs, avail_sec = self.ring_buffer.snapshot_envelope(300)
-            self.window.update_history_overview(mins, maxs, avail_sec)
+            self._refresh_history_overview()
             if truncated:
                 self.window.show_banner_message(
                     f"⚠️ 本地音频已流式载入前 {imported_sec:.1f}s（超过 {self.audio_config.ring_buffer_seconds:.0f}s 上限已自动截断以保护内存），可直接 A/B 播放或 AI 分轨。"
@@ -1138,12 +1152,21 @@ class ListenScopeController:
             self.window.history_coverage_lbl.setText(
                 f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s"
             )
-            mins, maxs, avail_sec = self.ring_buffer.snapshot_envelope(300)
-            self.window.update_history_overview(mins, maxs, avail_sec)
+            self._refresh_history_overview()
             self.window.tabs.setCurrentWidget(self.window.chroma_widget)
             self.window.show_banner_message(f"已将单轨 `{stem_name}` 载入实时和弦/音高分析视图（仅截取前 <=30s）。")
         except Exception as exc:
             self.window.show_banner_message(f"送入分析失败: {exc}")
+
+    def _on_clear_stem_results(self) -> None:
+        if self.ai_job_manager.is_busy:
+            return
+        self._stem_generation += 1
+        self._latest_deep_report = None
+        self._latest_midi_result = None
+        self._cleared_ai_task_id = self.ai_job_manager.latest_progress().task_id
+        self.window.mixer_widget.clear_results()
+        self.window.show_banner_message("已清除本次分轨、分析和 MIDI 预览。")
 
     def _on_deep_analyze_stems(
         self,
@@ -1518,6 +1541,7 @@ class ListenScopeController:
             transpose_semitones=self.window.chroma_widget.transpose_semitones,
             auto_reset_on_track_change=self._auto_reset_on_track_change,
             appearance=self.window.appearance,
+            progression_mode=self.window.chroma_widget.progression_mode,
         )
 
     def _on_appearance_applied(self) -> None:
@@ -1596,12 +1620,16 @@ class ListenScopeController:
                 break
         while True:
             try:
-                self.window.update_ai_progress(self._ui_ai_progress_q.get_nowait())
+                progress = self._ui_ai_progress_q.get_nowait()
+                if not self._cleared_ai_task_id or progress.task_id != self._cleared_ai_task_id:
+                    self.window.update_ai_progress(progress)
             except queue.Empty:
                 break
         while True:
             try:
                 ai_res = self._ui_ai_result_q.get_nowait()
+                if self._cleared_ai_task_id and ai_res.task_id == self._cleared_ai_task_id:
+                    continue
                 if ai_res.state == AIJobState.COMPLETED:
                     self._stem_generation += 1
                     self._latest_deep_report = None
@@ -1692,8 +1720,7 @@ class ListenScopeController:
             else:
                 self.window.history_coverage_lbl.setText(f"已缓冲: {self.ring_buffer.available_seconds:.1f} / 120.0 s")
 
-            mins, maxs, avail_sec = self.ring_buffer.snapshot_envelope(300)
-            self.window.update_history_overview(mins, maxs, avail_sec)
+            self._refresh_history_overview()
             self._sync_ab_bookmarks()
 
             rsnap = self.resource_manager.sample()

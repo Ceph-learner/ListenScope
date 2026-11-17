@@ -168,17 +168,25 @@ class FixedRingBuffer:
             out[first_part:] = self._buffer[: count - first_part]
         return out
 
-    def snapshot_envelope(self, num_points: int = 300) -> tuple[np.ndarray, np.ndarray, float]:
+    def snapshot_envelope(
+        self, num_points: int = 300, *, ago_range: tuple[float, float] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
         """Compute bounded chronological min/max waveform envelope without copying the 46MB ring buffer."""
         n_pts = max(1, int(num_points))
         mins = np.zeros(n_pts, dtype=np.float32)
         maxs = np.zeros(n_pts, dtype=np.float32)
         with self._lock:
             avail = min(self._total_written_frames, self.capacity_frames)
+            newer = 0
+            if ago_range is not None:
+                older, newer_sec = ago_range
+                older_frames = min(avail, max(0, round(older * self.sample_rate)))
+                newer = min(avail, max(0, round(newer_sec * self.sample_rate)))
+                avail = older_frames - newer
             if avail <= 0:
                 return mins, maxs, 0.0
             avail_sec = avail / float(self.sample_rate)
-            start_ring = (self._write_pos - avail) % self.capacity_frames
+            start_ring = (self._write_pos - newer - avail) % self.capacity_frames
             cap = self.capacity_frames
             buf = self._buffer
             for i in range(n_pts):

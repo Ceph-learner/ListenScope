@@ -215,7 +215,7 @@ class HistoryABPlayer:
                 if self.metronome.overlay_enabled:
                     self.metronome.reset_phase()
 
-    def start_playback(self, *, open_audio_device: bool = True) -> str:
+    def start_playback(self, *, open_audio_device: bool = True, require_device: bool = False) -> str:
         """Start A/B playback and return user-facing QQ Music pause reminder."""
         with self._lock:
             oldest = self.ring_buffer.oldest_abs_frame
@@ -235,7 +235,7 @@ class HistoryABPlayer:
                     self.metronome.reset_phase()
 
         if open_audio_device:
-            self._ensure_output_stream()
+            self._ensure_output_stream(require_device=require_device)
         return AB_PAUSE_PLAYER_HINT
 
     def pause(self) -> None:
@@ -451,13 +451,16 @@ class HistoryABPlayer:
             )
         return out
 
-    def _ensure_output_stream(self) -> None:
+    def _ensure_output_stream(self, *, require_device: bool = False) -> None:
         with self._lock:
             if self._stream is not None or not self._is_playing:
                 return
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
-        except ImportError:
+        except (ImportError, OSError) as exc:
+            if require_device:
+                self.pause()
+                raise RuntimeError("当前音频输出不可用，请检查系统默认播放设备。") from exc
             logger.debug("sounddevice not installed; HistoryABPlayer running in pull-only mode")
             return
 
@@ -492,6 +495,9 @@ class HistoryABPlayer:
                     pass
             with self._lock:
                 self._stream = None
+            if require_device:
+                self.pause()
+                raise RuntimeError(f"无法打开播放设备，请检查系统默认输出设备。{exc}") from exc
 
     def _close_output_stream(self) -> None:
         with self._lock:

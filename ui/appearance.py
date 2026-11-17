@@ -37,6 +37,8 @@ def appearance_stylesheet(base, appearance):
 QGroupBox, QFrame[trackCard=true] {{ background: {surface}; }}
 QFrame[trackCard=true] {{ border: 1px solid {rim}; border-radius: 6px; }}
 QGroupBox QLabel, QFrame[trackCard=true] QLabel {{ background: transparent; }}
+QPushButton#analysisAction:enabled {{ background: {colors["#28303B"]}; border-color: {accent}; font-weight: 600; }}
+QPushButton#analysisAction:hover:enabled {{ background: {colors["#1F6FEB"]}; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QSpinBox:focus {{ border: 1px solid {accent}; }}
 """
     if appearance.scope == "off":

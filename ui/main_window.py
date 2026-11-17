@@ -271,6 +271,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     emergency_stop_requested = QtCore.Signal()
     settings_applied = QtCore.Signal(object, object, str)
     appearance_applied = QtCore.Signal()
+    history_view_changed = QtCore.Signal()
     import_audio_requested = QtCore.Signal(str)
     toggle_playback_requested = QtCore.Signal()
     ab_bookmark_save_requested = QtCore.Signal(str)
@@ -473,11 +474,21 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.history_overview_plot.setMinimumHeight(58)
         self.history_overview_plot.setMaximumHeight(72)
         self.history_overview_plot.setBackground("#14161A")
-        self.history_overview_plot.setXRange(-120.0, 0.0, padding=0.01)
+        history_view = self.history_overview_plot.getViewBox()
+        history_view.setLimits(xMin=-120.0, xMax=0.0, minXRange=0.25, maxXRange=120.0)
+        self.history_overview_plot.setXRange(-120.0, 0.0, padding=0)
         self.history_overview_plot.setYRange(-1.05, 1.05)
         self.history_overview_plot.hideAxis("left")
-        self.history_overview_plot.setLabel("bottom", "120s 历史波形与 A/B 选区 (-120s ~ 0s最新)", units="s")
-        self.history_overview_plot.setMouseEnabled(x=False, y=False)
+        self.history_overview_plot.setLabel("bottom", "历史波形 · 滚轮缩放 / 拖动平移", units="s")
+        self.history_overview_plot.setMouseEnabled(x=True, y=False)
+        self.history_overview_plot.setMenuEnabled(False)
+        self.history_overview_plot.hideButtons()
+        self.history_overview_plot.setToolTip("0 秒为最新。拖动波形空白处平移，拖动 A/B 线调整选区。")
+        self._history_view_timer = QtCore.QTimer(self)
+        self._history_view_timer.setSingleShot(True)
+        self._history_view_timer.setInterval(60)
+        self._history_view_timer.timeout.connect(self.history_view_changed.emit)
+        history_view.sigXRangeChanged.connect(lambda *_: self._history_view_timer.start())
         self._hist_max_curve = self.history_overview_plot.plot(pen=pg.mkPen("#4EA8DE", width=1.0))
         self._hist_min_curve = self.history_overview_plot.plot(pen=pg.mkPen("#4EA8DE", width=1.0))
         self.ab_region = pg.LinearRegionItem(
@@ -500,6 +511,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_region.sigRegionChanged.connect(self._on_ab_region_dragged)
         self.ab_region.sigRegionChangeFinished.connect(self._on_ab_region_finished)
         bottom_l.addWidget(self.history_overview_plot)
+        history_reset = QtWidgets.QPushButton("120 秒总览")
+        history_reset.clicked.connect(lambda: self.history_overview_plot.setXRange(-120, 0, padding=0))
+        row_a.addWidget(history_reset)
 
         bookmark_row = QtWidgets.QHBoxLayout()
         bookmark_row.addWidget(QtWidgets.QLabel("A/B 书签(<=12):"))
@@ -568,6 +582,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.mixer_widget.plot_appearance = appearance
         for plot in self.findChildren(pg.PlotWidget):
             apply_plot_appearance(plot, appearance)
+        self.chroma_widget.refresh_chroma_note_ticks()
 
     def open_appearance_dialog(self, parent: QtWidgets.QWidget | None = None) -> None:
         dialog = AppearanceDialog(self.appearance, DARK_STYLESHEET, parent or self)
@@ -702,12 +717,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._set_ab_region_from_ago(sec, 0.0)
         self.ab_select_recent_requested.emit(sec)
 
-    def update_history_overview(self, mins: np.ndarray, maxs: np.ndarray, avail_sec: float) -> None:
+    @property
+    def history_ago_range(self) -> tuple[float, float]:
+        start, end = self.history_overview_plot.viewRange()[0]
+        return -start, -end
+
+    def update_history_overview(
+        self, mins: np.ndarray, maxs: np.ndarray, avail_sec: float, *, end_ago: float = 0,
+    ) -> None:
         if avail_sec <= 0.0 or mins.size == 0 or maxs.size == 0:
             self._hist_max_curve.setData([], [])
             self._hist_min_curve.setData([], [])
             return
-        x = np.linspace(-float(avail_sec), 0.0, int(mins.shape[0]), dtype=np.float32)
+        x = np.linspace(-end_ago - avail_sec, -end_ago, int(mins.shape[0]), dtype=np.float32)
         self._hist_max_curve.setData(x, np.asarray(maxs, dtype=np.float32))
         self._hist_min_curve.setData(x, np.asarray(mins, dtype=np.float32))
 
@@ -918,7 +940,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def sync_mixer_position(self) -> None:
         self.mixer_widget.sync_playback_position()
 
-    def open_settings_dialog(self) -> None:
+    def open_settings_dialog(self, *, focus_midi: bool = False) -> None:
         dlg = SettingsDialog(
             self._hardware_report,
             self._resource_limits,
@@ -928,6 +950,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             parent=self,
         )
         dlg.appearance_requested.connect(self.open_appearance_dialog)
+        if focus_midi:
+            dlg._tabs.setCurrentIndex(1)
+            dlg.midi_python_edit.setFocus()
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             if dlg.updated_limits is not None and dlg.updated_ai_config is not None:
                 self._resource_limits = dlg.updated_limits

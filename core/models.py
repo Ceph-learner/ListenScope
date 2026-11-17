@@ -346,6 +346,7 @@ class BassAnalysisResult:
     highest_note: Optional[str]
     root_pitch_classes: list[str] = field(default_factory=list)
     notes: list[StemNoteEvent] = field(default_factory=list)
+    signal_detected: Optional[bool] = None
 
 
 @dataclass
