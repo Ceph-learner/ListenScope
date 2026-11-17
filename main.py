@@ -1092,7 +1092,7 @@ class ListenScopeController:
                 src_path,
                 max_seconds=float(self.audio_config.ring_buffer_seconds),
             )
-            self.analysis_worker.reset_harmony()
+            self.analysis_worker.reset_harmony(include_buffered_audio=True)
             self.window.chroma_widget.clear_progression()
             self.bookmark_manager.clear()
             self._sync_ab_bookmarks()

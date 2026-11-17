@@ -54,6 +54,7 @@ class AnalysisWorker:
         self._last_analyzed_frame: int = -1
         self._frame_count: int = 0
         self._harmony_generation: int = 0
+        self._reset_boundary: tuple[int, int] | None = None
         self._dropped_cycles: int = 0
 
     @property
@@ -82,10 +83,12 @@ class AnalysisWorker:
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=2.0)
 
-    def reset_harmony(self) -> None:
+    def reset_harmony(self, *, include_buffered_audio: bool = False) -> None:
         """Reset chord, chroma history, key window, and BPM accumulators cleanly (e.g. on song change)."""
         with self._analysis_lock:
             self._harmony_generation += 1
+            _, end, generation = self.ring_buffer.frame_state()
+            self._reset_boundary = None if include_buffered_audio else (generation, end)
             self.chords.reset()
             self.chroma.clear()
             self.tempo.reset()
@@ -100,8 +103,15 @@ class AnalysisWorker:
 
     def analyze_latest_once(self) -> AnalysisSnapshot:
         """Synchronously compute one analysis snapshot from recent ring buffer audio."""
+        with self._analysis_lock:
+            return self._analyze_latest_locked()
+
+    def _analyze_latest_locked(self) -> AnalysisSnapshot:
         window_sec = max(0.1, self.config.fft_size / float(self.audio_config.sample_rate))
-        pcm, _, end_abs = self.ring_buffer.read_recent(max(window_sec, 0.15))
+        _, _, ring_generation = self.ring_buffer.frame_state()
+        pcm, start_abs, end_abs = self.ring_buffer.read_recent(max(window_sec, 0.15))
+        if self._reset_boundary is not None and self._reset_boundary[0] == ring_generation:
+            pcm = pcm[max(0, self._reset_boundary[1] - start_abs):]
 
         if pcm.shape[0] == 0:
             mono = np.zeros(self.config.fft_size, dtype=np.float32)
@@ -112,8 +122,7 @@ class AnalysisWorker:
         else:
             mono = np.mean(pcm, axis=1, dtype=np.float32)
             _, rms_db, _, peak_db = compute_rms_and_peak(pcm)
-            with self._analysis_lock:
-                prev_abs = self._last_analyzed_frame
+            prev_abs = self._last_analyzed_frame
             audio_silent = rms_db < self.config.silence_threshold_dbfs
             is_silent = (end_abs == prev_abs) or audio_silent
 
@@ -121,24 +130,22 @@ class AnalysisWorker:
         fft_mag, fft_db, log_db = self.spectrum.analyze_frame(mono)
         pitch_est = self.pitch.estimate_from_magnitude(fft_mag, is_silent=is_silent)
 
-        with self._analysis_lock:
-            gen = self._harmony_generation
-            self._last_analyzed_frame = end_abs
-            chroma_12 = self.chroma.extract_from_magnitude(fft_mag, record_history=True, is_silent=is_silent)
-            chord_est = self.chords.update(chroma_12, is_silent=is_silent)
+        self._last_analyzed_frame = end_abs
+        chroma_12 = self.chroma.extract_from_magnitude(fft_mag, record_history=True, is_silent=is_silent)
+        chord_est = self.chords.update(chroma_12, is_silent=is_silent)
 
-            self._frame_count += 1
-            # Update key every ~8 cycles (~0.5s) to keep CPU overhead negligible
-            with self._lock:
-                prev_snap = self._latest_snapshot
-            if self._frame_count % 8 == 1 or prev_snap is None:
-                chroma_win = self.chroma.recent_chroma_matrix(seconds=float(self.config.key_window_seconds))
-                key_est = self.key_detector.estimate(chroma_win)
-            else:
-                key_est = prev_snap.key
+        self._frame_count += 1
+        # Update key every ~8 cycles (~0.5s) to keep CPU overhead negligible
+        with self._lock:
+            prev_snap = self._latest_snapshot
+        if self._frame_count % 8 == 1 or prev_snap is None:
+            chroma_win = self.chroma.recent_chroma_matrix(seconds=float(self.config.key_window_seconds))
+            key_est = self.key_detector.estimate(chroma_win)
+        else:
+            key_est = prev_snap.key
 
-            # A repeated non-silent snapshot has zero flux, not a new silent-to-sound edge.
-            tempo_est = self.tempo.update(log_db, is_silent=audio_silent)
+        # A repeated non-silent snapshot has zero flux, not a new silent-to-sound edge.
+        tempo_est = self.tempo.update(log_db, is_silent=audio_silent)
 
         # Decimate display bins cleanly for UI transmission (avoid huge list allocations)
         fft_freqs = self.spectrum.fft_freqs
@@ -163,10 +170,8 @@ class AnalysisWorker:
             peak_dbfs=peak_db,
             window_seconds=self.ring_buffer.available_seconds,
         )
-        with self._analysis_lock:
-            if gen == self._harmony_generation:
-                with self._lock:
-                    self._latest_snapshot = snap
+        with self._lock:
+            self._latest_snapshot = snap
         return snap
 
     def _run_loop(self) -> None:
