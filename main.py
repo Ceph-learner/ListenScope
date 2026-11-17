@@ -45,6 +45,7 @@ from analysis.stem_analyzer import analyze_stems_offline, export_transcription_s
 from analysis.worker import AnalysisWorker
 from audio.bookmarks import ABBookmarkManager
 from audio.capture_base import AudioCaptureBackend
+from audio.drum_preview import DrumPreviewPlayer, render_drum_preview
 from audio.metronome import PracticeMetronome
 from audio.pcm_utils import decode_wave_bytes, normalize_to_canonical_pcm
 from audio.playback import AB_PAUSE_PLAYER_HINT, HistoryABPlayer, StemMixerEngine
@@ -222,6 +223,7 @@ class ListenScopeController:
             sample_rate=self.audio_config.sample_rate,
             channels=self.audio_config.channels,
         )
+        self.drum_preview = DrumPreviewPlayer(self.audio_config.sample_rate, self.audio_config.channels)
         self.bookmark_manager = ABBookmarkManager(max_bookmarks=12)
         self.ab_player = HistoryABPlayer(
             self.ring_buffer,
@@ -406,6 +408,7 @@ class ListenScopeController:
         w.mixer_widget.cancel_ai_requested.connect(self._on_cancel_ai)
         w.mixer_widget.oom_action_requested.connect(self._on_oom_action)
         w.mixer_widget.export_mix_requested.connect(self._on_export_mix)
+        w.mixer_widget.drum_preview_requested.connect(self._on_drum_preview)
         w.mixer_widget.deep_analyze_requested.connect(self._on_deep_analyze_stems)
         w.mixer_widget.midi_settings_requested.connect(lambda: w.open_settings_dialog(focus_midi=True))
         w.mixer_widget.clear_results_requested.connect(self._on_clear_stem_results)
@@ -449,6 +452,7 @@ class ListenScopeController:
             )
             self.window.show_banner_message("🧪 当前运行合成测试信号源（非 Windows 真机 WASAPI 捕获）。")
         elif kind == "system_loopback":
+            self._stop_drum_preview()
             backend = WasapiSystemLoopbackBackend(audio_config=self.audio_config)
             self.window.show_banner_message(SYSTEM_LOOPBACK_WARNING)
         else:
@@ -735,7 +739,42 @@ class ListenScopeController:
         mins, maxs, span = self.ring_buffer.snapshot_envelope(300, ago_range=(older, newer))
         self.window.update_history_overview(mins, maxs, span, end_ago=newer)
 
+    def _on_drum_preview(self) -> None:
+        if self._stop_drum_preview():
+            return
+        report = self._latest_deep_report
+        if report is None or report.drums is None:
+            return
+        backend = self._capture_backend
+        if backend is not None and backend.is_running and backend.get_stats().mode == CaptureMode.SYSTEM_LOOPBACK:
+            self.window.show_banner_message("请先停止系统环回捕获，再试听鼓点，避免把试听声录入历史。")
+            return
+        if self.live_separator.is_active or self.live_separator.is_starting or self.window.live_widget.pending_start:
+            self.window.show_banner_message("请先停止近实时分轨监听，再试听鼓点。")
+            return
+        pcm = render_drum_preview(report.drums, self.drum_preview.sample_rate)
+        if not pcm.size:
+            self.window.show_banner_message("当前分析没有可试听的鼓点。")
+            return
+        self.ab_player.pause()
+        self.mixer_engine.pause()
+        self.metronome.stop_standalone()
+        self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
+        try:
+            self.drum_preview.play(pcm)
+        except Exception as exc:
+            self.window.show_banner_message(f"无法打开鼓点试听设备：{exc}")
+            return
+        self.window.mixer_widget.set_drum_preview_playing(True)
+
+    def _stop_drum_preview(self) -> bool:
+        if self.drum_preview.stop():
+            self.window.mixer_widget.set_drum_preview_playing(False)
+            return True
+        return False
+
     def _on_ab_play(self) -> None:
+        self._stop_drum_preview()
         if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
             self.ab_player.select_recent_seconds(min(30.0, max(1.0, self.ring_buffer.available_seconds)))
         self.metronome.stop_standalone()
@@ -782,6 +821,7 @@ class ListenScopeController:
             self.window.show_banner_message(f"导出 A/B 片段失败: {exc}")
 
     def _on_mixer_before_play(self) -> None:
+        self._stop_drum_preview()
         self.metronome.stop_standalone()
         self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
         self.ab_player.pause()
@@ -817,6 +857,7 @@ class ListenScopeController:
 
     def _on_metronome_standalone_toggled(self, enabled: bool) -> None:
         if enabled:
+            self._stop_drum_preview()
             self.ab_player.pause()
             self.mixer_engine.pause()
             self.live_separator.close_output_stream()
@@ -934,6 +975,8 @@ class ListenScopeController:
         self.window.show_banner_message("✅ 已重置和弦/调性/BPM 分析历史，实时捕获继续运行。")
 
     def _on_toggle_active_playback(self) -> None:
+        if self._stop_drum_preview():
+            return
         if self.window.tabs.currentWidget() is self.window.mixer_widget:
             if self.mixer_engine.is_playing:
                 self.mixer_engine.pause()
@@ -1181,6 +1224,7 @@ class ListenScopeController:
         self._latest_deep_report = None
         self._latest_midi_result = None
         self._cleared_ai_task_id = self.ai_job_manager.latest_progress().task_id
+        self._stop_drum_preview()
         self.window.mixer_widget.clear_results()
         self.window.show_banner_message("已清除本次分轨、分析和 MIDI 预览。")
 
@@ -1321,6 +1365,7 @@ class ListenScopeController:
             return
 
         try:
+            self._stop_drum_preview()
             self._stem_generation += 1
             self._latest_deep_report = None
             self._latest_midi_result = None
@@ -1504,6 +1549,7 @@ class ListenScopeController:
             self.window.show_banner_message(blocked_reason)
             return
 
+        self._stop_drum_preview()
         self.metronome.stop_standalone()
         self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
         self.ab_player.pause()
@@ -1647,6 +1693,7 @@ class ListenScopeController:
                 if self._cleared_ai_task_id and ai_res.task_id == self._cleared_ai_task_id:
                     continue
                 if ai_res.state == AIJobState.COMPLETED:
+                    self._stop_drum_preview()
                     self._stem_generation += 1
                     self._latest_deep_report = None
                     self._latest_midi_result = None
@@ -1694,6 +1741,7 @@ class ListenScopeController:
                 if gen != self._stem_generation:
                     continue
                 if deep_res is not None:
+                    self._stop_drum_preview()
                     self._latest_deep_report = deep_res
                     self.window.display_deep_analysis(deep_res)
                 if deep_msg:
@@ -1701,6 +1749,8 @@ class ListenScopeController:
             except queue.Empty:
                 break
 
+        if self.drum_preview.close_if_finished():
+            self.window.mixer_widget.set_drum_preview_playing(False)
         self.ab_player.close_if_finished()
         self.mixer_engine.close_if_finished()
         self.window.update_ab_playhead(
@@ -1761,6 +1811,7 @@ class ListenScopeController:
                 pass
         if hasattr(self, "_timer"):
             self._timer.stop()
+        self._stop_drum_preview()
         self.stop_capture()
         self.metronome.stop_standalone()
         self.ab_player.stop()
