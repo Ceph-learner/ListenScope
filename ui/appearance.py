@@ -5,7 +5,7 @@ import re
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.appearance import Appearance, PRESETS
+from core.appearance import Appearance, LAYOUTS, PRESETS
 
 
 def _blend(left, right, amount):
@@ -37,6 +37,8 @@ def appearance_stylesheet(base, appearance):
 QGroupBox, QFrame[trackCard=true] {{ background: {surface}; }}
 QFrame[trackCard=true] {{ border: 1px solid {rim}; border-radius: 6px; }}
 QGroupBox QLabel, QFrame[trackCard=true] QLabel {{ background: transparent; }}
+QPushButton#analysisAction:enabled {{ background: {colors["#28303B"]}; border-color: {accent}; font-weight: 600; }}
+QPushButton#analysisAction:hover:enabled {{ background: {colors["#1F6FEB"]}; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QSpinBox:focus {{ border: 1px solid {accent}; }}
 """
     if appearance.scope == "off":
@@ -88,13 +90,22 @@ class AppearanceDialog(QtWidgets.QDialog):
             button.setCheckable(True)
             self._presets.addButton(button)
             button.clicked.connect(lambda _checked, key=key: self._show_values(
-                Appearance(preset=key, scope="floating" if key == "lenso" else "off")
+                Appearance(preset=key, scope="floating" if key == "lenso" else "off",
+                           layout=self._layout.currentData())
             ))
             button.setProperty("preset", key)
             presets.addWidget(button)
         root.addLayout(presets)
 
         form = QtWidgets.QFormLayout()
+        self._layout = QtWidgets.QComboBox()
+        for key, (label, _description) in LAYOUTS.items():
+            self._layout.addItem(label, key)
+        self._layout.currentIndexChanged.connect(self._refresh_sample)
+        form.addRow("界面布局", self._layout)
+        self._layout_hint = QtWidgets.QLabel()
+        self._layout_hint.setWordWrap(True)
+        form.addRow("", self._layout_hint)
         self._font = QtWidgets.QSpinBox()
         self._font.setRange(11, 16)
         self._font.setSuffix(" px")
@@ -162,16 +173,18 @@ class AppearanceDialog(QtWidgets.QDialog):
             "preset": self._presets.checkedButton().property("preset"),
             "font_size": self._font.value(),
             "scope": self._scope.currentData(),
+            "layout": self._layout.currentData(),
             **{key: field.text() for key, field in self._colors.items()},
             **{key: slider.value() for key, slider in self._sliders.items()},
         })
 
     def _show_values(self, values):
-        controls = [self._font, self._scope, *self._colors.values(), *self._sliders.values()]
+        controls = [self._layout, self._font, self._scope, *self._colors.values(), *self._sliders.values()]
         blockers = [QtCore.QSignalBlocker(widget) for widget in controls]
         for button in self._presets.buttons():
             button.setChecked(button.property("preset") == values.preset)
         self._font.setValue(values.font_size)
+        self._layout.setCurrentIndex(self._layout.findData(values.layout))
         self._scope.setCurrentIndex(self._scope.findData(values.scope))
         for key, field in self._colors.items():
             field.setText(getattr(values, key))
@@ -182,6 +195,7 @@ class AppearanceDialog(QtWidgets.QDialog):
 
     def _refresh_sample(self):
         appearance = self.values()
+        self._layout_hint.setText(LAYOUTS[appearance.layout][1])
         for slider in self._sliders.values():
             slider.setEnabled(appearance.scope != "off")
             slider.setToolTip(f"{slider.value()}%")

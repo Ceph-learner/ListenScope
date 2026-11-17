@@ -187,6 +187,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("高显存模型解锁:", self.roformer_chk)
 
         tabs.addTab(cfg_tab, "资源安全阈值 & AI 配置")
+        self._tabs = tabs
         root.addWidget(tabs, 1)
 
         btns = QtWidgets.QDialogButtonBox(

@@ -2,13 +2,31 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 import wave
 
 import numpy as np
+import pytest
 
 from audio.playback import AB_PAUSE_PLAYER_HINT, HistoryABPlayer, StemMixerEngine
 from audio.ring_buffer import FixedRingBuffer
 from core.config import AudioConfig
+
+
+def test_ab_playback_reports_unavailable_output_device(monkeypatch):
+    ring = FixedRingBuffer(AudioConfig(ring_buffer_seconds=1))
+    ring.write(np.full((1000, 2), 0.1, dtype=np.float32))
+    player = HistoryABPlayer(ring)
+    player.set_ab_range(0, 1000)
+
+    def unavailable(**_kwargs):
+        raise OSError("device disconnected")
+
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=unavailable))
+    with pytest.raises(RuntimeError, match="无法打开播放设备"):
+        player.start_playback(require_device=True)
+    assert not player.is_playing
 
 
 def _write_const_wav(path, val: float, frames: int = 4800, sr: int = 48000) -> None:

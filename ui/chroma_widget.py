@@ -136,6 +136,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
     reset_harmony_requested = QtCore.Signal()
     auto_reset_toggled = QtCore.Signal(bool)
+    progression_mode_changed = QtCore.Signal(str)
     metronome_bpm_changed = QtCore.Signal(float)
     metronome_beats_changed = QtCore.Signal(int)
     metronome_overlay_toggled = QtCore.Signal(bool)
@@ -283,6 +284,11 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             "padding: 5px 10px; background: #1C2026; border: 1px solid #2C323C; border-radius: 5px; color: #E6EAF0;"
         )
         self.chord_progression_lbl.setWordWrap(True)
+        self.progression_mode_combo = QtWidgets.QComboBox()
+        for label, value in (("和弦名", "chords"), ("罗马数字", "degrees"), ("和弦名与级数", "both")):
+            self.progression_mode_combo.addItem(label, value)
+        self.progression_mode_combo.setAccessibleName("最近和弦进行显示方式")
+        self.progression_mode_combo.currentIndexChanged.connect(self._on_progression_mode_changed)
 
         self.transpose_combo = QtWidgets.QComboBox()
         self.transpose_combo.setToolTip("仅切换乐谱/变调夹和弦与调性显示偏移（零 PCM 拷贝/重采样开销，不影响实音分析）")
@@ -302,10 +308,14 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.reset_harmony_btn.setToolTip("切歌后一键清空和弦轨迹、调性滑动窗口与 BPM 累积，不中断当前捕获")
         self.reset_harmony_btn.clicked.connect(self._on_reset_clicked)
         prog_bar.addWidget(self.chord_progression_lbl, 1)
+        prog_bar.addWidget(self.progression_mode_combo)
+        root.addLayout(prog_bar)
+        prog_bar = QtWidgets.QHBoxLayout()
         prog_bar.addWidget(QtWidgets.QLabel("移调/Capo:"))
         prog_bar.addWidget(self.transpose_combo)
         prog_bar.addWidget(self.auto_reset_chk)
         prog_bar.addWidget(self.reset_harmony_btn)
+        prog_bar.addStretch(1)
         root.addLayout(prog_bar)
 
         self.track_status_lbl = QtWidgets.QLabel("曲目会话监测 (SMTC): 待启动按进程捕获（也可随时手动点击「换歌重置」）")
@@ -339,7 +349,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         note_font = QtGui.QFont(self.font())
         note_font.setPixelSize(10)
         ay.setStyle(tickFont=note_font, tickTextOffset=3)
-        ay.setTicks([[(i + 0.5, name) for i, name in enumerate(PITCH_CLASSES)]])
+        ay.geometryChanged.connect(self.refresh_chroma_note_ticks)
+        self.chroma_hist_plot.setYRange(0, len(PITCH_CLASSES), padding=0)
+        self.chroma_hist_plot.setMouseEnabled(x=True, y=False)
+        self.refresh_chroma_note_ticks()
         self._chroma_img = pg.ImageItem()
         try:
             cmap = pg.colormap.get("viridis") if hasattr(pg, "colormap") else None
@@ -352,6 +365,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         splitter.setSizes([210, 240])
         root.addWidget(splitter, 1)
+
+    def refresh_chroma_note_ticks(self) -> None:
+        axis = self.chroma_hist_plot.getAxis("left")
+        font = axis.style["tickFont"] or self.font()
+        label_height = QtGui.QFontMetrics(font).height() + 3
+        available = max(1.0, axis.height())
+        stride = max(1, min(len(PITCH_CLASSES), int(np.ceil(len(PITCH_CLASSES) * label_height / available))))
+        if stride != getattr(self, "_chroma_tick_stride", None):
+            self._chroma_tick_stride = stride
+            axis.setTicks([[(i + 0.5, PITCH_CLASSES[i]) for i in range(0, len(PITCH_CLASSES), stride)]])
 
     @property
     def transpose_semitones(self) -> int:
@@ -383,10 +406,35 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     def _refresh_transposed_views(self) -> None:
         if self._last_snapshot is not None:
             self._render_harmonic_labels(self._last_snapshot)
-        if self._chord_history:
-            semi = self._transpose_semitones
-            disp = [transpose_chord_symbol(c, semi) if semi != 0 else c for c in self._chord_history]
-            self.chord_progression_lbl.setText(f"最近和弦进行 (最多 12 步): {' -> '.join(disp)}")
+        self._render_recent_progression()
+
+    @property
+    def progression_mode(self) -> str:
+        return self.progression_mode_combo.currentData()
+
+    def set_progression_mode(self, mode: str) -> None:
+        index = self.progression_mode_combo.findData(mode)
+        self.progression_mode_combo.setCurrentIndex(max(0, index))
+
+    def _on_progression_mode_changed(self) -> None:
+        self._render_recent_progression()
+        self.progression_mode_changed.emit(self.progression_mode)
+
+    def _render_recent_progression(self) -> None:
+        key = self._last_snapshot.key.primary if self._last_snapshot is not None else ""
+        mode = self.progression_mode
+        labels = []
+        for chord in self._chord_history:
+            name = transpose_chord_symbol(chord, self._transpose_semitones)
+            degree = chord_scale_degree(chord, key) if mode != "chords" else "-"
+            if degree == "-":
+                labels.append(name)
+            elif mode == "degrees":
+                labels.append(degree)
+            else:
+                labels.append(f"{name} ({degree})")
+        text = " → ".join(labels) or "-"
+        self.chord_progression_lbl.setText(f"最近和弦进行 (最多 12 步): {text}")
 
     def _on_tap_tempo_clicked(self) -> None:
         tap_bpm = self._tap_tracker.tap()
@@ -538,17 +586,18 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.tuning_bar.set_pitch(None, 0.0)
 
     def update_analysis(self, snap: AnalysisSnapshot, chroma_history: np.ndarray | None = None) -> None:
+        previous_key = self._last_snapshot.key.primary if self._last_snapshot is not None else None
         self._last_snapshot = snap
         self._render_harmonic_labels(snap)
         ch = snap.chord
-        if not ch.is_silent and ch.primary not in ("Unknown", "N (静音)", "-"):
-            if not self._chord_history or self._chord_history[-1] != ch.primary:
-                self._chord_history.append(ch.primary)
-                semi = self._transpose_semitones
-                disp = [transpose_chord_symbol(c, semi) if semi != 0 else c for c in self._chord_history]
-                self.chord_progression_lbl.setText(
-                    f"最近和弦进行 (最多 12 步): {' -> '.join(disp)}"
-                )
+        new_chord = (
+            not ch.is_silent and ch.primary not in ("Unknown", "N (静音)", "-")
+            and (not self._chord_history or self._chord_history[-1] != ch.primary)
+        )
+        if new_chord:
+            self._chord_history.append(ch.primary)
+        if new_chord or previous_key != snap.key.primary:
+            self._render_recent_progression()
 
         tp = snap.tempo
         if tp.bpm is not None:

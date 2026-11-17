@@ -29,6 +29,7 @@ class PersistedSettings:
     auto_reset_on_track_change: bool = True
     schema_version: int = 2
     appearance: Appearance = Appearance()
+    progression_mode: str = "chords"
 
 
 def default_settings_path() -> Path:
@@ -167,8 +168,13 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
         ai_python_executable=ai_python,
         midi_python_executable=midi_python,
         appearance=Appearance.from_mapping(payload.get("appearance")),
+        progression_mode=_progression_mode(payload.get("progression_mode")),
         **practice,
     )
+
+
+def _progression_mode(value: object) -> str:
+    return value if isinstance(value, str) and value in ("chords", "degrees", "both") else "chords"
 
 
 def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None) -> Path:
@@ -190,6 +196,7 @@ def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None
         "ai_python_executable": str(settings.ai_python_executable or "").strip(),
         "midi_python_executable": str(settings.midi_python_executable or "").strip(),
         "appearance": asdict(settings.appearance),
+        "progression_mode": _progression_mode(settings.progression_mode),
         **practice,
     }
     tmp = target.with_suffix(".json.tmp")

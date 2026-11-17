@@ -246,14 +246,17 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
 
     raw_obs: list[tuple[float, int, float, float]] = []
     cand_bins = np.arange(min_bin, max_bin + 1)
+    signal_detected = False
+    silence_rms = 10.0 ** (AnalysisConfig().silence_threshold_dbfs / 20.0)
 
     for center_sec, frame in frames_iter:
         if not np.all(np.isfinite(frame)):
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         rms = float(np.sqrt(np.mean(np.square(frame))))
-        if rms < 0.012:
+        if rms < silence_rms:
             raw_obs.append((max(0.0, center_sec - hop_sec * 0.5), -1, 0.0, 0.0))
             continue
+        signal_detected = True
 
         mag = np.abs(np.fft.rfft(frame * win)).astype(np.float32)
         h1 = mag[cand_bins]
@@ -299,6 +302,7 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
         highest_note=highest,
         root_pitch_classes=roots,
         notes=events,
+        signal_detected=signal_detected,
     )
 
 
@@ -554,6 +558,7 @@ def analyze_harmony_and_chords(
     hop_size = cfg.hop_size
     hop_sec = hop_size / float(CANONICAL_SR)
     win_frames = max(4, int(round(segment_sec / hop_sec)))
+    silence_rms = 10.0 ** (cfg.silence_threshold_dbfs / 20.0)
 
     duration_sec, frames_iter = _iter_aligned_mono_48k_frames(
         sources, fft_size=fft_size, hop_size=hop_size, max_seconds=max_seconds
@@ -571,7 +576,7 @@ def analyze_harmony_and_chords(
         if not np.all(np.isfinite(frame)):
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         rms = float(np.sqrt(np.mean(np.square(frame))))
-        is_silent = (not np.isfinite(rms)) or rms < 0.008
+        is_silent = (not np.isfinite(rms)) or rms < silence_rms
         fft_mag, _fft_db, log_db = spec.analyze_frame(frame)
         c12 = chroma_ext.extract_from_magnitude(fft_mag, record_history=True, is_silent=is_silent)
 

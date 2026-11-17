@@ -156,6 +156,18 @@ def test_audio_import_matches_continuous_resampling(tmp_path, monkeypatch, decod
     np.testing.assert_allclose(actual, expected, atol=2e-6, rtol=0)
 
 
+def test_history_zoom_uses_only_visible_frames_after_wrap():
+    config = AudioConfig(sample_rate=100, channels=2, ring_buffer_seconds=1)
+    ring = FixedRingBuffer(config)
+    frames = np.arange(150, dtype=np.float32)
+    for part in np.array_split(frames, 3):
+        ring.write(np.column_stack((part, part)))
+    lows, highs, span = ring.snapshot_envelope(2, ago_range=(0.4, 0.2))
+    assert span == 0.2
+    np.testing.assert_array_equal(lows, [110, 120])
+    np.testing.assert_array_equal(highs, [119, 129])
+
+
 def test_performance_logger_writes_bounded_jsonl(tmp_path) -> None:
     perf = PerformanceLogger(log_dir=tmp_path / "perf", history_maxlen=3)
     req = AIJobRequest(
