@@ -12,12 +12,14 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import mido
 import numpy as np
 import pyqtgraph as pg
 import pytest
 import soundfile as sf
 from PySide6 import QtWidgets
 
+from analysis.drum_midi import export_drum_midi
 from analysis.stem_analyzer import (
     analyze_bass_stem,
     analyze_drums_stem,
@@ -27,7 +29,7 @@ from analysis.stem_analyzer import (
 )
 from audio.ring_buffer import FixedRingBuffer
 from core.config import AIConfig, AudioConfig, ResourceLimits
-from core.models import MidiNoteCandidate, MidiTranscriptionResult
+from core.models import DrumsAnalysisResult, MidiNoteCandidate, MidiTranscriptionResult
 from core.resource_manager import SimulationOverrides
 from core.settings_store import PersistedSettings, load_settings, save_settings
 from core.system_probe import probe_external_ai_environment, probe_system
@@ -273,6 +275,77 @@ def test_ring_buffer_streaming_audio_import_resampling_and_truncation(tmp_path: 
     pcm = rb.read_range(max(0, newest - 48000), newest)
     assert pcm.shape[1] == 2
     assert float(np.max(np.abs(pcm))) > 0.1
+
+
+def test_drum_midi_preserves_source_time_with_simultaneous_and_repeated_hits(tmp_path):
+    drums = DrumsAnalysisResult(
+        tmp_path / "drums.wav", 2.0, 90, "Stable",
+        kick_times_sec=[1.0, 0.5, 0.52, 0.50001],
+        snare_times_sec=[0.5], hihat_times_sec=[0.0, 2.0, float("nan")],
+        groove_16_step=["S"] * 16,
+    )
+    path = tmp_path / "drums.mid"
+    assert export_drum_midi(drums, path) == 5
+    midi = mido.MidiFile(path)
+    assert midi.type == 0
+    assert midi.length == pytest.approx(2.0, abs=0.001)
+    tick = 0
+    messages = []
+    for msg in midi.tracks[0]:
+        tick += msg.time
+        if msg.type in ("note_on", "note_off"):
+            assert msg.channel == 9
+            messages.append((tick, msg.type, msg.note))
+    assert [msg for msg in messages if msg[1] == "note_on"] == [
+        (0, "note_on", 42), (360, "note_on", 36), (360, "note_on", 38),
+        (374, "note_on", 36), (720, "note_on", 36),
+    ]
+    assert [msg for msg in messages if msg[0] == 374] == [(374, "note_off", 36), (374, "note_on", 36)]
+
+
+def test_drum_midi_failed_export_preserves_destination_and_cleans_temp(tmp_path, monkeypatch):
+    drums = DrumsAnalysisResult(tmp_path / "drums.wav", 1.0, None, "Unknown")
+    destination = tmp_path / "existing.mid"
+    destination.write_bytes(b"existing")
+    with pytest.raises(ValueError, match="没有可导出的鼓点"):
+        export_drum_midi(drums, destination)
+    drums.kick_times_sec = [0.1]
+
+    def deny_replace(_self, _destination):
+        raise PermissionError("destination is locked")
+
+    monkeypatch.setattr(Path, "replace", deny_replace)
+    with pytest.raises(PermissionError):
+        export_drum_midi(drums, destination)
+    assert destination.read_bytes() == b"existing"
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+def test_drum_midi_button_exports_current_report_and_disables_after_clear(tmp_path, monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from audio.playback import StemMixerEngine
+    from core.models import KeyEstimate, StemDeepAnalysisReport, TempoEstimate
+    from ui.mixer_widget import StemMixerWidget
+
+    widget = StemMixerWidget(StemMixerEngine())
+    path = tmp_path / "my drums"
+    drums = DrumsAnalysisResult(tmp_path / "drums.wav", 2.0, None, "Unknown", [0.5])
+    report = StemDeepAnalysisReport(
+        2.0, "Drums", KeyEstimate("Unknown", "Unknown", "Insufficient", 0.0, 0.0),
+        TempoEstimate(None, "Unknown", 0.0), drums=drums,
+    )
+    assert not widget.export_drums_btn.isEnabled()
+    widget.display_deep_analysis(report)
+    assert widget.export_drums_btn.isEnabled()
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getSaveFileName", lambda *_: (str(path), ""))
+    widget.export_drums_btn.click()
+    midi = mido.MidiFile(path.with_suffix(".mid"))
+    assert next(msg.tempo for msg in midi.tracks[0] if msg.type == "set_tempo") == 500000
+    assert any(msg.type == "note_on" for msg in midi.tracks[0])
+    widget.clear_results()
+    assert not widget.export_drums_btn.isEnabled()
+    widget.close()
+    app.processEvents()
 
 
 def test_deep_stem_analyzer_bass_drums_melody_chords_and_export(tmp_path: Path) -> None:

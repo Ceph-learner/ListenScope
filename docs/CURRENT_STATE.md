@@ -10,6 +10,8 @@ ListenScope 是 Windows 本地音乐分析与练习工作台。入口 [main.py](
 - [固定 PCM 环](../audio/ring_buffer.py)
 - A/B 历史波形支持横向缩放。停止 A/B 后可点击「贴近零点」，在每个已选边界的 ±5 ms 内查找更安静的实际播放边缘。
 
+- 深度分轨的「鼓点」页支持导出独立鼓 MIDI。沿用检测的击打时间，可在 DAW 中选择鼓音源；映射见 [MIDI Association 打击乐说明](https://midi.org/general-midi-lite)。
+
 - CPU 分析：频谱、Chroma、和弦与 BPM
 - A/B 回放与导出
 - 「设置 / 系统状态 → 外观主题」支持四套预设、自定义字号和三种颜色。原生 Qt 渐变模拟玻璃层，滑杆更新设置内样区，保存时才更新主界面。由 [PR #12](https://github.com/Ceph-learner/ListenScope/pull/12) 合并。
