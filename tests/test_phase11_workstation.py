@@ -186,10 +186,11 @@ def test_settings_navigation_keeps_draft_edits_and_midi_focus() -> None:
         assert dlg.min_ram_spin.value() == 6000
         dlg.open_category("midi")
         assert dlg.midi_python_edit.text() == "draft.exe"
-        dlg.open_category("appearance")
+        dlg.open_category("midi")
         dlg.resize(560, 500)
         app.processEvents()
         assert dlg.width() == 560 and all(button.isVisible() for button in dlg._category_buttons.values())
+        assert dlg.midi_python_edit.width() >= 180
         dlg.reject()
         assert dlg.updated_limits is None
         assert dlg.updated_midi_python == ""

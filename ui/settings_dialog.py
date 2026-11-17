@@ -234,16 +234,16 @@ class SettingsDialog(QtWidgets.QDialog):
             "HTDemucs 4-Stem 内部模型分段时长（实测默认 6s）；与离线流式分块分开设置，且不影响 MDX 内部 segment_size=256。"
         )
 
-        py_row = QtWidgets.QHBoxLayout()
+        py_row = QtWidgets.QVBoxLayout()
         self.ai_python_edit = QtWidgets.QLineEdit(ai_python_executable)
+        self.ai_python_edit.setAccessibleName("AI Worker Python")
         self.ai_python_edit.setPlaceholderText("留空使用当前 Python；建议 Windows 分环境打包时填写 .venv-ai\\Scripts\\python.exe")
         self.browse_ai_py_btn = QtWidgets.QPushButton("浏览...")
         self.browse_ai_py_btn.clicked.connect(self._browse_ai_python)
         self.verify_ai_env_btn = QtWidgets.QPushButton("验证 AI 环境")
         self.verify_ai_env_btn.clicked.connect(self._verify_ai_environment)
-        py_row.addWidget(self.ai_python_edit, 1)
-        py_row.addWidget(self.browse_ai_py_btn)
-        py_row.addWidget(self.verify_ai_env_btn)
+        py_row.addWidget(self.ai_python_edit)
+        py_row.addLayout(self._environment_actions(self.browse_ai_py_btn, self.verify_ai_env_btn))
 
         self.ai_probe_result_lbl = QtWidgets.QLabel(
             "验证 CUDA、ONNX、Demucs 和 FFmpeg。留空时使用当前 Python。"
@@ -251,16 +251,16 @@ class SettingsDialog(QtWidgets.QDialog):
         self.ai_probe_result_lbl.setWordWrap(True)
         self.ai_probe_result_lbl.setStyleSheet("padding: 6px; background: #1C2026; border: 1px solid #2C323C; border-radius: 5px; color: #D7DCE2;")
 
-        midi_py_row = QtWidgets.QHBoxLayout()
+        midi_py_row = QtWidgets.QVBoxLayout()
         self.midi_python_edit = QtWidgets.QLineEdit(midi_python_executable)
+        self.midi_python_edit.setAccessibleName("MIDI Python 3.11")
         self.midi_python_edit.setPlaceholderText("建议填写 Python 3.11 独立环境: .venv-midi\\Scripts\\python.exe")
         self.browse_midi_py_btn = QtWidgets.QPushButton("浏览...")
         self.browse_midi_py_btn.clicked.connect(self._browse_midi_python)
         self.verify_midi_env_btn = QtWidgets.QPushButton("验证 MIDI 环境")
         self.verify_midi_env_btn.clicked.connect(self._verify_midi_environment)
-        midi_py_row.addWidget(self.midi_python_edit, 1)
-        midi_py_row.addWidget(self.browse_midi_py_btn)
-        midi_py_row.addWidget(self.verify_midi_env_btn)
+        midi_py_row.addWidget(self.midi_python_edit)
+        midi_py_row.addLayout(self._environment_actions(self.browse_midi_py_btn, self.verify_midi_env_btn))
 
         self.midi_probe_result_lbl = QtWidgets.QLabel(
             "Basic Pitch 使用独立的 Python 3.11 CPU 环境。缺少可用环境时，单轨转录会标明所用的轻量算法。"
@@ -288,7 +288,8 @@ class SettingsDialog(QtWidgets.QDialog):
             section.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
             section.setHorizontalSpacing(14)
             section.setVerticalSpacing(10)
-            section.addRow(label, controls)
+            section.addRow(QtWidgets.QLabel(label))
+            section.addRow(controls)
             section.addRow(feedback)
             env_layout.addWidget(group)
         env_layout.addStretch(1)
@@ -324,6 +325,14 @@ class SettingsDialog(QtWidgets.QDialog):
             widget = area
         self._page_map[key] = widget
         self._pages.addWidget(widget)
+
+    @staticmethod
+    def _environment_actions(browse: QtWidgets.QPushButton, verify: QtWidgets.QPushButton) -> QtWidgets.QHBoxLayout:
+        row = QtWidgets.QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(browse)
+        row.addWidget(verify)
+        return row
 
     def update_appearance_summary(self, appearance: Appearance) -> None:
         self._theme_summary.setText(PRESETS[appearance.preset][0])
