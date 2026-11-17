@@ -90,9 +90,14 @@ class DrumPreviewPlayer:
             raise
 
     def close_if_finished(self) -> bool:
-        if self._stream is not None and not self._stream.active:
-            return self.stop()
-        return False
+        if self._stream is None:
+            return False
+        try:
+            if self._stream.active:
+                return False
+        except Exception:
+            logging.getLogger(__name__).debug("Could not query drum preview stream", exc_info=True)
+        return self.stop()
 
     def stop(self) -> bool:
         stream, self._stream = self._stream, None

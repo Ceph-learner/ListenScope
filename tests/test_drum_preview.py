@@ -71,6 +71,14 @@ def test_preview_stream_writes_silent_tail_and_closes_after_device_finishes(monk
     assert stream.closed
     assert not player.stop()
 
+    player.play(np.array([0.5], dtype=np.float32))
+    with monkeypatch.context() as patch:
+        def fail_status(_self):
+            raise OSError("output disconnected")
+        patch.setattr(FakeStream, "active", property(fail_status), raising=False)
+        assert player.close_if_finished()
+    assert streams[-1].closed
+
     def fail_start(self):
         raise OSError("device unavailable")
     monkeypatch.setattr(FakeStream, "start", fail_start)
