@@ -167,6 +167,36 @@ def test_clear_stem_results_invalidates_pending_analysis(tmp_path: Path) -> None
         app.processEvents()
 
 
+def test_settings_categories_keep_draft_edits_and_restore_focus() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dlg = SettingsDialog(probe_system(), ResourceLimits(), AIConfig())
+    dlg.show()
+    app.processEvents()
+    try:
+        assert dlg._active_category == "home" and dlg._category_columns == 2
+        dlg._category_buttons["resources"].click()
+        dlg.min_ram_spin.setValue(6000)
+        dlg._back.click()
+        assert dlg.focusWidget() is dlg._category_buttons["resources"]
+        dlg.focus_midi()
+        assert dlg._active_category == "midi"
+        assert dlg.focusWidget() is dlg.midi_python_edit
+        dlg.midi_python_edit.setText("draft.exe")
+        dlg.open_category("resources")
+        assert dlg.min_ram_spin.value() == 6000
+        dlg.open_category("midi")
+        assert dlg.midi_python_edit.text() == "draft.exe"
+        dlg.open_category("home")
+        dlg.resize(560, 500)
+        app.processEvents()
+        assert dlg._category_columns == 1
+        dlg.reject()
+        assert dlg.updated_limits is None
+        assert dlg.updated_midi_python == ""
+    finally:
+        dlg.close()
+
+
 def test_settings_store_persistence_and_safety_invariants(tmp_path: Path) -> None:
     s_path = tmp_path / "cfg" / "settings.json"
     # Missing file falls back safely

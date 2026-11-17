@@ -6,16 +6,40 @@ from pathlib import Path
 import threading
 from typing import Any, Optional
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtSvg, QtWidgets
 
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
 from core.models import SystemHardwareReport
+from core.paths import get_bundle_root
 from core.system_probe import (
     MIDI_ENV_SETUP_GUIDE,
     apply_external_ai_probe_to_report,
     probe_external_ai_environment,
     probe_external_midi_environment,
 )
+
+SETTINGS_CATEGORIES = {
+    "appearance": ("外观与布局", "切换三套工作区，调整配色与字号"),
+    "resources": ("资源保护", "配置内存、显存阈值和分轨模型参数"),
+    "midi": ("AI 与 MIDI 环境", "选择两个独立的 Python 解释器，分别验证"),
+    "status": ("系统诊断", "查看硬件、捕获能力和运行环境"),
+}
+
+
+def _category_icon(name: str) -> QtGui.QPixmap:
+    path = get_bundle_root() / "ui" / "assets" / "settings" / f"{name}.svg"
+    try:
+        svg = path.read_bytes().replace(b"currentColor", b"#a9ead7")
+    except OSError:
+        return QtGui.QPixmap()
+    renderer = QtSvg.QSvgRenderer(QtCore.QByteArray(svg))
+    pixmap = QtGui.QPixmap(44, 44)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    pixmap.setDevicePixelRatio(2)
+    return pixmap
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -50,16 +74,38 @@ class SettingsDialog(QtWidgets.QDialog):
         self._midi_probe_finished.connect(self._on_midi_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
 
         root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(22, 18, 22, 16)
+        root.setSpacing(14)
         heading = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("设置")
-        title.setStyleSheet("font-size: 19px; font-weight: 600;")
-        heading.addWidget(title, 1)
-        appearance_btn = QtWidgets.QPushButton("外观主题…")
-        appearance_btn.setObjectName("appearanceEntry")
-        appearance_btn.clicked.connect(lambda: self.appearance_requested.emit(self))
-        heading.addWidget(appearance_btn)
+        self._back = QtWidgets.QPushButton("← 所有分类")
+        self._back.clicked.connect(lambda: self.open_category("home"))
+        heading.addWidget(self._back, alignment=QtCore.Qt.AlignmentFlag.AlignVCenter)
+        heading_labels = QtWidgets.QVBoxLayout()
+        heading_labels.setSpacing(4)
+        self._title = QtWidgets.QLabel()
+        self._title.setObjectName("settingsHeading")
+        self._subtitle = QtWidgets.QLabel()
+        self._subtitle.setObjectName("settingsSubtitle")
+        self._subtitle.setWordWrap(True)
+        heading_labels.addWidget(self._title)
+        heading_labels.addWidget(self._subtitle)
+        heading.addLayout(heading_labels, 1)
         root.addLayout(heading)
-        tabs = QtWidgets.QTabWidget()
+        self._pages = QtWidgets.QStackedWidget()
+        root.addWidget(self._pages, 1)
+        self._page_map = {}
+        self._category_buttons = {}
+        self._active_category = "home"
+        home = QtWidgets.QWidget()
+        home_layout = QtWidgets.QVBoxLayout(home)
+        home_layout.setContentsMargins(0, 2, 0, 4)
+        self._category_grid = QtWidgets.QGridLayout()
+        self._category_grid.setSpacing(12)
+        home_layout.addLayout(self._category_grid)
+        home_layout.addStretch(1)
+        self._add_page("home", home, scroll=True)
+        for key, (label, description) in SETTINGS_CATEGORIES.items():
+            self._category_buttons[key] = self._make_category_button(key, label, description)
 
         # Tab 1: System Status (Prompt Section 3 explicit requirement)
         status_tab = QtWidgets.QWidget()
@@ -88,12 +134,18 @@ class SettingsDialog(QtWidgets.QDialog):
         st_layout.addWidget(self.status_alert_lbl)
         self._refresh_status_alert(hardware_report)
 
-        tabs.addTab(status_tab, "系统状态")
+        self._add_page("status", status_tab)
 
         # Tab 2: ResourceLimits & AIConfig
         cfg_tab = QtWidgets.QWidget()
         form = QtWidgets.QFormLayout(cfg_tab)
         form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(12)
+        env_tab = QtWidgets.QWidget()
+        env_layout = QtWidgets.QVBoxLayout(env_tab)
+        env_layout.setContentsMargins(0, 4, 0, 0)
+        env_layout.setSpacing(14)
 
         self.min_ram_spin = QtWidgets.QDoubleSpinBox()
         self.min_ram_spin.setRange(2560, 32768)
@@ -153,7 +205,7 @@ class SettingsDialog(QtWidgets.QDialog):
         py_row.addWidget(self.verify_ai_env_btn)
 
         self.ai_probe_result_lbl = QtWidgets.QLabel(
-            "配置会持久化保存至 ~/.listenscope/settings.json；可点击“验证 AI 环境”检测 CUDA / ONNX / Demucs / FFmpeg（Basic Pitch 请在下方独立 MIDI 环境配置）。"
+            "验证 CUDA、ONNX、Demucs 和 FFmpeg。留空时使用当前 Python。"
         )
         self.ai_probe_result_lbl.setWordWrap(True)
         self.ai_probe_result_lbl.setStyleSheet("padding: 6px; background: #1C2026; border: 1px solid #2C323C; border-radius: 5px; color: #D7DCE2;")
@@ -170,7 +222,7 @@ class SettingsDialog(QtWidgets.QDialog):
         midi_py_row.addWidget(self.verify_midi_env_btn)
 
         self.midi_probe_result_lbl = QtWidgets.QLabel(
-            "MIDI 转录独立调用 Python 3.11 CPU 环境 (basic-pitch 0.4.0 + tensorflow<=2.15 + setuptools<81)；未配置或缺失时将展示安装方法并明确标注所采用的轻量回退算法。"
+            "Basic Pitch 使用独立的 Python 3.11 CPU 环境。缺少可用环境时，单轨转录会标明所用的轻量算法。"
         )
         self.midi_probe_result_lbl.setWordWrap(True)
         self.midi_probe_result_lbl.setStyleSheet("padding: 6px; background: #1C2026; border: 1px solid #2C323C; border-radius: 5px; color: #D7DCE2;")
@@ -178,37 +230,130 @@ class SettingsDialog(QtWidgets.QDialog):
         self.roformer_chk = QtWidgets.QCheckBox("允许实验性 BS-RoFormer 模型 (仅在 RTX 5060 Ti 8GB 实测峰值通过后手动启用)")
         self.roformer_chk.setChecked(ai_config.allow_experimental_roformer)
 
-        form.addRow("AI 启动提示可用 RAM 阈值 (min_ram_before_ai):", self.min_ram_spin)
-        form.addRow("拒绝新 AI 分轨 RAM 阈值 (pause_ram_before_ai):", self.pause_ram_spin)
-        form.addRow("立即紧急停止 AI RAM 阈值 (critical_ram):", self.crit_ram_spin)
+        form.addRow("分轨前内存提醒", self.min_ram_spin)
+        form.addRow("拒绝新分轨的内存阈值", self.pause_ram_spin)
+        form.addRow("紧急停止的内存阈值", self.crit_ram_spin)
         form.addRow("GPU 2-Stem 最低空闲显存 (min_vram_2stem):", self.vram_2s_spin)
         form.addRow("GPU 4-Stem 最低空闲显存 (min_vram_4stem):", self.vram_4s_spin)
         form.addRow("桌面/QQ音乐保留最低空闲显存 (critical_vram_free):", self.crit_vram_spin)
         form.addRow("离线音频流式分块长度 (long_audio_chunk_seconds):", self.chunk_sec_spin)
         form.addRow("HTDemucs 4-Stem 模型分段 (demucs_default_segment_sec):", self.demucs_seg_spin)
-        form.addRow("独立 AI Worker Python 路径 (.venv-ai):", py_row)
-        form.addRow("AI 环境验证结果:", self.ai_probe_result_lbl)
-        form.addRow("独立 CPU MIDI Python 路径 (.venv-midi):", midi_py_row)
-        form.addRow("MIDI 环境验证结果:", self.midi_probe_result_lbl)
+        for title, label, controls, feedback in (
+            ("分轨环境", "AI Worker Python", py_row, self.ai_probe_result_lbl),
+            ("转录环境", "MIDI Python 3.11", midi_py_row, self.midi_probe_result_lbl),
+        ):
+            group = QtWidgets.QGroupBox(title)
+            section = QtWidgets.QFormLayout(group)
+            section.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
+            section.setHorizontalSpacing(14)
+            section.setVerticalSpacing(10)
+            section.addRow(label, controls)
+            section.addRow(feedback)
+            env_layout.addWidget(group)
+        env_layout.addStretch(1)
         form.addRow("高显存模型解锁:", self.roformer_chk)
 
-        self._config_scroll = QtWidgets.QScrollArea()
-        self._config_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        self._config_scroll.setWidgetResizable(True)
-        self._config_scroll.setWidget(cfg_tab)
-        tabs.addTab(self._config_scroll, "资源与环境")
-        self._tabs = tabs
-        root.addWidget(tabs, 1)
+        self._add_page("resources", cfg_tab, scroll=True)
+        self._add_page("midi", env_tab, scroll=True)
 
         btns = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
         btns.accepted.connect(self._on_accept)
         btns.rejected.connect(self.reject)
+        save = btns.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        save.setText("保存设置")
+        save.setObjectName("settingsSave")
+        save.setAutoDefault(False)
+        save.setDefault(False)
+        btns.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel).setText("取消")
         root.addWidget(btns)
 
         self._orig_limits = resource_limits
         self._orig_ai_cfg = ai_config
+        self._arrange_categories()
+        self.open_category("home")
+
+    def _add_page(self, key: str, widget: QtWidgets.QWidget, *, scroll: bool = False) -> None:
+        if scroll:
+            area = QtWidgets.QScrollArea()
+            area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+            area.setWidgetResizable(True)
+            area.setWidget(widget)
+            widget = area
+        self._page_map[key] = widget
+        self._pages.addWidget(widget)
+
+    def _make_category_button(self, key: str, title: str, summary: str) -> QtWidgets.QPushButton:
+        button = QtWidgets.QPushButton()
+        button.setObjectName("settingsCategory")
+        button.setAccessibleName(title)
+        button.setAccessibleDescription(summary)
+        button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        button.setAutoDefault(False)
+        button.setMinimumHeight(102)
+        button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        row = QtWidgets.QHBoxLayout(button)
+        row.setContentsMargins(16, 15, 14, 15)
+        row.setSpacing(12)
+        icon = QtWidgets.QLabel()
+        icon.setObjectName("settingsCategoryIcon")
+        icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        icon.setFixedSize(38, 38)
+        icon.setPixmap(_category_icon(key))
+        row.addWidget(icon)
+        text = QtWidgets.QVBoxLayout()
+        text.setSpacing(5)
+        name = QtWidgets.QLabel(title)
+        name.setObjectName("settingsCategoryTitle")
+        description = QtWidgets.QLabel(summary)
+        description.setObjectName("settingsSubtitle")
+        description.setWordWrap(True)
+        text.addWidget(name)
+        text.addWidget(description)
+        row.addLayout(text, 1)
+        arrow = QtWidgets.QLabel("›")
+        arrow.setObjectName("settingsCategoryArrow")
+        row.addWidget(arrow)
+        for label in (icon, name, description, arrow):
+            label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        button.clicked.connect(lambda _checked=False: self.open_category(key))
+        return button
+
+    def _arrange_categories(self) -> None:
+        columns = 2 if self.width() >= 630 else 1
+        if columns == getattr(self, "_category_columns", None):
+            return
+        self._category_columns = columns
+        for index, button in enumerate(self._category_buttons.values()):
+            self._category_grid.removeWidget(button)
+            self._category_grid.addWidget(button, index // columns, index % columns)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_category_buttons"):
+            self._arrange_categories()
+
+    def open_category(self, key: str) -> None:
+        if key == "appearance":
+            self.appearance_requested.emit(self)
+            return
+        previous = self._active_category
+        self._active_category = key
+        self._pages.setCurrentWidget(self._page_map[key])
+        self._back.setVisible(key != "home")
+        title, subtitle = SETTINGS_CATEGORIES.get(key, ("设置", "选择要查看或调整的类别。"))
+        self._title.setText(title)
+        self._subtitle.setText(subtitle)
+        if key == "home":
+            self._category_buttons.get(previous, self._category_buttons["appearance"]).setFocus()
+        else:
+            self._back.setFocus()
+
+    def focus_midi(self) -> None:
+        self.open_category("midi")
+        self._page_map["midi"].ensureWidgetVisible(self.midi_python_edit)
+        self.midi_python_edit.setFocus()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._dialog_closed = True

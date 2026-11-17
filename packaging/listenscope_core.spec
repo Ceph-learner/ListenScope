@@ -73,6 +73,7 @@ a = Analysis(
         (str(project_root / "analysis"), "analysis"),
         (str(project_root / "scripts"), "scripts"),
         (str(project_root / "ui" / "assets" / "listenscope.ico"), "ui/assets"),
+        (str(project_root / "ui" / "assets" / "settings"), "ui/assets/settings"),
         *extra_datas,
     ],
     hiddenimports=[

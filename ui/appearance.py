@@ -40,6 +40,28 @@ QGroupBox QLabel, QFrame[trackCard=true] QLabel {{ background: transparent; }}
 QPushButton#analysisAction:enabled {{ background: {colors["#28303B"]}; border-color: {accent}; font-weight: 600; }}
 QPushButton#analysisAction:hover:enabled {{ background: {colors["#1F6FEB"]}; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QSpinBox:focus {{ border: 1px solid {accent}; }}
+QLabel#settingsHeading {{ font-size: {appearance.font_size + 12}px; font-weight: 700; }}
+QLabel#settingsSubtitle {{ color: {colors["#B4BECB"]}; }}
+QPushButton#settingsCategory {{
+    background: {surface};
+    border: 1px solid {rim};
+    border-radius: 10px;
+    padding: 0;
+}}
+QPushButton#settingsCategory:hover, QPushButton#settingsCategory:focus {{
+    background: {colors["#28303B"]};
+    border-color: {accent};
+}}
+QPushButton#settingsCategory:pressed {{ background: {colors["#1F6FEB"]}; }}
+QPushButton#settingsCategory QLabel {{ background: transparent; }}
+QPushButton#settingsCategory QLabel#settingsCategoryIcon {{ background: #23394A; border-radius: 8px; }}
+QLabel#settingsCategoryTitle {{ font-size: {appearance.font_size + 4}px; font-weight: 700; }}
+QLabel#settingsCategoryArrow {{ color: {accent}; font-size: {appearance.font_size + 9}px; }}
+QPushButton#settingsSave {{
+    background: {colors["#28303B"]}; border: 1px solid {accent};
+    font-weight: 700; padding: 7px 18px;
+}}
+QPushButton#settingsSave:hover, QPushButton#settingsSave:focus {{ background: {colors["#1F6FEB"]}; }}
 """
     if appearance.scope == "off":
         return qss
