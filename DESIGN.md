@@ -8,7 +8,7 @@ ListenScope 是安静、紧凑、精确的 Windows 音频工作台。分轨页�
 - **设置**：左侧常驻图标与文字导航，右侧显示当前页面。标题、页面标题、说明采用不同字号；导航与详情采用不同表面，当前项有强调色标记，键盘焦点有边框。详情可滚动，保存与取消固定。AI 与 MIDI 在同页分成独立组，诊断只有读数。最终视觉以实际 Qt 窗口的字体、间距、焦点与截图为证据。
 - **工作区**：外观主题内可选择 A 工作台、B 双栏扒谱、C 练习优先。B 是新设置和旧设置缺省值。切换工作区保留主题、A/B 选区、缩放和当前分析页签。历史波形支持滚轮横向缩放、平移、放大缩小按钮和 120 秒总览。
 - **状态**：空状态给出下一步，转录缺少环境时提供直接到达设置的入口。按钮保留键盘焦点与禁用态。视觉不使用额外动画、阴影或背景采样。
-- **实时分析评审**：音高、电平、峰值和缓存时长集中在固定顶部区域，图名置于图框左上，单位与轴刻度降为辅助层级。三种布局分别突出波形、FFT 和时频图。参考 [Logic Pro 控制栏](https://help.apple.com/logicpro/mac/10.1/en.lproj/lgcp2a07a994.html)、[Fluent 2 布局](https://fluent2.microsoft.design/layout)与 [Audacity 时频图](https://manual.audacityteam.org/man/spectrogram_view.html)。切换重用图表、数据和缩放，继续使用原生 Qt 绘制。
+- **实时分析**：音高、电平、峰值和缓存时长集中在固定顶部区域，图名置于图框左上，单位与轴刻度降为辅助层级。三种布局分别突出波形、FFT 和时频图。参考 [Logic Pro 控制栏](https://help.apple.com/logicpro/mac/10.1/en.lproj/lgcp2a07a994.html)、[Fluent 2 布局](https://fluent2.microsoft.design/layout)与 [Audacity 时频图](https://manual.audacityteam.org/man/spectrogram_view.html)。切换重用图表、数据和缩放，继续使用原生 Qt 绘制。
 
 - **参考**：从[用户 UI 收藏](https://github.com/stars/Ceph-learner/lists/ui)核实 Lenso UI，延续当前主题的材质分层。从[Linear 视觉分析](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/linear.app/DESIGN.md)借鉴克制的强调色和紧凑工具表面。视觉参考只取结构原则，代码和素材均沿用原生 Qt 项目已有实现。
 - **预览**：使用实际 PySide6 窗口和合成轨道抓图，核对混音、分析、MIDI 与小窗口热图。目标机 DPI、音频设备、独立 Python 与真实分轨验收单独记录。

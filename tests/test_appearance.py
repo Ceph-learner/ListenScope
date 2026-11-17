@@ -19,17 +19,19 @@ def test_appearance_load_and_round_trip_preserve_schema_two(tmp_path):
     settings = load_settings(path)
     assert settings.appearance == Appearance()
     assert settings.appearance.layout == "split"
+    assert settings.appearance.analysis_layout == "monitor"
+    assert Appearance.from_mapping({"analysis_layout": "invalid"}).analysis_layout == "monitor"
     assert Appearance.from_mapping({"layout": "invalid"}).layout == "split"
     settings.appearance = Appearance.from_mapping({
         "preset": "lenso", "font_size": 500, "background": "#abcdef",
         "accent": "bad", "scope": "panels", "dispersion": -5,
-        "strength": True, "softness": 81, "layout": "practice",
+        "strength": True, "softness": 81, "layout": "practice", "analysis_layout": "history",
     })
     save_settings(settings, path)
     restored = load_settings(path)
     assert restored.schema_version == 2
     assert restored.metronome_bpm == 144
-    assert restored.appearance == Appearance("lenso", 16, "#ABCDEF", "", "", "panels", 45, 81, 0, "practice")
+    assert restored.appearance == Appearance("lenso", 16, "#ABCDEF", "", "", "panels", 45, 81, 0, "practice", "history")
 
 
 def test_appearance_sample_isolated_from_parent_and_scopes_are_painted_only():
@@ -40,9 +42,11 @@ def test_appearance_sample_isolated_from_parent_and_scopes_are_painted_only():
     old_style = parent.styleSheet()
     dialog = AppearanceDialog(original, DARK_STYLESHEET, parent)
     dialog._layout.setCurrentIndex(dialog._layout.findData("practice"))
+    dialog._analysis_layout.setCurrentIndex(dialog._analysis_layout.findData("history"))
     dialog._presets.buttons()[1].click()
     assert dialog.values().preset == "lenso"
     assert dialog.values().layout == "practice"
+    assert dialog.values().analysis_layout == "history"
     dialog._colors["accent"].setText("#123456")
     dialog._scope.setCurrentIndex(dialog._scope.findData("panels"))
     assert "#123456" in dialog._sample.styleSheet()
@@ -103,12 +107,18 @@ def test_analysis_views_keep_live_plot_data_and_show_real_frequency(tmp_path):
         assert panel._log_curve.xData.tolist() == snap.log_freqs_hz
         curves = [panel._log_curve, panel._fft_curve]
         panel.fft_plot.setXRange(2, 3, padding=0)
-        for value, (_, positions, _rows, _columns) in ANALYSIS_VIEWS.items():
-            panel.view_combo.setCurrentIndex(panel.view_combo.findData(value))
+        for value, (positions, _rows, _columns) in ANALYSIS_VIEWS.items():
+            window.apply_appearance(replace(window.appearance, analysis_layout=value))
+            assert panel.view_combo.currentData() == value
             for card, position in zip(panel._chart_cards, positions):
                 assert panel._plot_grid.getItemPosition(panel._plot_grid.indexOf(card)) == position
             assert [panel._log_curve, panel._fft_curve] == curves
             assert panel.fft_plot.viewRange()[0] == [2, 3]
+        index = panel.view_combo.findData("frequency")
+        panel.view_combo.setCurrentIndex(index)
+        panel.view_combo.activated.emit(index)
+        assert window.appearance.analysis_layout == "frequency"
+        assert load_settings(controller._settings_path).appearance.analysis_layout == "frequency"
         assert panel.level_meter.value() == 0
         assert panel.pitch_detail.text() == "等待有效音高"
     finally:

@@ -8,12 +8,13 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
+from core.appearance import ANALYSIS_LAYOUTS
 from core.models import AnalysisSnapshot
 
 ANALYSIS_VIEWS = {
-    "monitor": ("实时监听", ((0, 0, 1, 2), (2, 0, 1, 1), (2, 1, 1, 1), (1, 0, 1, 2)), (4, 3, 3), (1, 1, 0)),
-    "frequency": ("频率诊断", ((0, 1, 1, 1), (0, 0, 2, 1), (1, 1, 1, 1), (2, 0, 1, 2)), (2, 3, 2), (3, 2, 0)),
-    "history": ("时频追踪", ((1, 0, 1, 1), (1, 1, 1, 1), (1, 2, 1, 1), (0, 0, 1, 3)), (5, 3, 0), (1, 1, 1)),
+    "monitor": (((0, 0, 1, 2), (2, 0, 1, 1), (2, 1, 1, 1), (1, 0, 1, 2)), (4, 3, 3), (1, 1, 0)),
+    "frequency": (((0, 1, 1, 1), (0, 0, 2, 1), (1, 1, 1, 1), (2, 0, 1, 2)), (2, 3, 2), (3, 2, 0)),
+    "history": (((1, 0, 1, 1), (1, 1, 1, 1), (1, 2, 1, 1), (0, 0, 1, 3)), (5, 3, 0), (1, 1, 1)),
 }
 
 class _FftFrequencyAxis(pg.AxisItem):
@@ -61,7 +62,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         toolbar.addWidget(title, 1)
         self.view_combo = QtWidgets.QComboBox()
         self.view_combo.setAccessibleName("实时分析布局")
-        for key, (name, *_geometry) in ANALYSIS_VIEWS.items():
+        for key, name in ANALYSIS_LAYOUTS.items():
             self.view_combo.addItem(name, key)
         toolbar.addWidget(self.view_combo)
         root.addLayout(toolbar)
@@ -163,7 +164,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         return card
 
     def _arrange_plots(self) -> None:
-        _, positions, rows, columns = ANALYSIS_VIEWS[self.view_combo.currentData()]
+        positions, rows, columns = ANALYSIS_VIEWS[self.view_combo.currentData()]
         for card, position in zip(self._chart_cards, positions):
             self._plot_grid.removeWidget(card)
             self._plot_grid.addWidget(card, *position)
