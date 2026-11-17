@@ -11,6 +11,11 @@ PRESETS = {
     "claude": ("Claude Code", "#201B18", "#F1E5D8", "#DF9B7B"),
 }
 SCOPES = {"off", "floating", "panels"}
+LAYOUTS = {
+    "workbench": ("A · 工作台", "音轨、分析和历史波形从上到下排列。"),
+    "split": ("B · 双栏扒谱（默认）", "左侧切换音轨，右侧查看分析，历史波形在下方。"),
+    "practice": ("C · 练习优先", "历史波形置顶并放大，下方并排显示分析和音轨。"),
+}
 
 
 def _choice(raw, choices, default):
@@ -36,6 +41,7 @@ class Appearance:
     strength: int = 45
     softness: int = 60
     dispersion: int = 20
+    layout: str = "split"
 
     @classmethod
     def from_mapping(cls, raw):
@@ -51,6 +57,7 @@ class Appearance:
             strength=_number(raw.get("strength"), 0, 100, 45),
             softness=_number(raw.get("softness"), 0, 100, 60),
             dispersion=_number(raw.get("dispersion"), 0, 100, 20),
+            layout=_choice(raw.get("layout"), LAYOUTS, "split"),
         )
 
     @property

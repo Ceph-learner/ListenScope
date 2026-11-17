@@ -323,9 +323,9 @@ class StemMixerWidget(QtWidgets.QWidget):
         root.addLayout(scrub_bar)
 
         # Splitter between Stem tracks and Deep Analysis + Piano Roll + MIDI Table tabs
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self._workspace_splitter = splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
 
-        scroll = QtWidgets.QScrollArea()
+        self._track_scroll = scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setMinimumHeight(115)
         self._tracks_container = QtWidgets.QWidget()
@@ -357,6 +357,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.chord_timeline_table.setHorizontalHeaderLabels(
             ["开始 (s)", "结束 (s)", "和弦候选", "第二候选", "相关度", "稳定度"]
         )
+        self.chord_timeline_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self.chord_timeline_table.horizontalHeader().setStretchLastSection(True)
         self.chord_timeline_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.chord_timeline_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
@@ -435,6 +436,19 @@ class StemMixerWidget(QtWidgets.QWidget):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([240, 220])
         root.addWidget(splitter, 1)
+
+    def apply_workspace_layout(self, layout: str) -> None:
+        splitter = self._workspace_splitter
+        orientation = QtCore.Qt.Orientation
+        splitter.setOrientation(orientation.Vertical if layout == "workbench" else orientation.Horizontal)
+        first = self.analysis_tabs if layout == "practice" else self._track_scroll
+        if splitter.widget(0) is not first:
+            splitter.insertWidget(0, first)
+        splitter.setSizes({
+            "workbench": [220, 240],
+            "split": [640, 490],
+            "practice": [630, 500],
+        }[layout])
 
     @property
     def include_sevenths(self) -> bool:

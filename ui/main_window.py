@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pathlib import Path
 from typing import Any, Optional
 
@@ -311,6 +313,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         main_layout = QtWidgets.QVBoxLayout(central)
+        self._workspace_layout = main_layout
         main_layout.setContentsMargins(8, 8, 8, 8)
         main_layout.setSpacing(8)
 
@@ -382,7 +385,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         main_layout.addWidget(self.tabs, 1)
 
         # 3. BOTTOM 120s HISTORY TIMELINE + A/B LOOP + AI TRIGGER BAR
-        bottom_box = QtWidgets.QGroupBox("最近 120s 播放历史环形缓冲 · A/B 循环与片段 AI 分轨 (仅保留最近 120s / ~46MB)")
+        self._history_box = bottom_box = QtWidgets.QGroupBox("最近 120s 播放历史环形缓冲 · A/B 循环与片段 AI 分轨 (仅保留最近 120s / ~46MB)")
         bottom_l = QtWidgets.QVBoxLayout(bottom_box)
 
         row_a = QtWidgets.QHBoxLayout()
@@ -479,11 +482,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.history_overview_plot.setXRange(-120.0, 0.0, padding=0)
         self.history_overview_plot.setYRange(-1.05, 1.05)
         self.history_overview_plot.hideAxis("left")
-        self.history_overview_plot.setLabel("bottom", "历史波形 · 滚轮缩放 / 拖动平移", units="s")
+        self.history_overview_plot.getAxis("bottom").enableAutoSIPrefix(False)
+        self.history_overview_plot.setAccessibleName("历史波形时间轴（秒）")
         self.history_overview_plot.setMouseEnabled(x=True, y=False)
         self.history_overview_plot.setMenuEnabled(False)
         self.history_overview_plot.hideButtons()
-        self.history_overview_plot.setToolTip("0 秒为最新。拖动波形空白处平移，拖动 A/B 线调整选区。")
+        self.history_overview_plot.setToolTip("0 秒为最新。滚轮缩放横轴，拖动波形空白处平移，拖动 A/B 线调整选区。")
         self._history_view_timer = QtCore.QTimer(self)
         self._history_view_timer.setSingleShot(True)
         self._history_view_timer.setInterval(60)
@@ -511,9 +515,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_region.sigRegionChanged.connect(self._on_ab_region_dragged)
         self.ab_region.sigRegionChangeFinished.connect(self._on_ab_region_finished)
         bottom_l.addWidget(self.history_overview_plot)
-        history_reset = QtWidgets.QPushButton("120 秒总览")
-        history_reset.clicked.connect(lambda: self.history_overview_plot.setXRange(-120, 0, padding=0))
-        row_a.addWidget(history_reset)
+        for text, label, factor in (("−", "缩小横轴", 1.6), ("+", "放大横轴", 0.625)):
+            button = QtWidgets.QToolButton()
+            button.setText(text)
+            button.setToolTip(label)
+            button.setAccessibleName(label)
+            button.clicked.connect(lambda _checked=False, factor=factor: self.zoom_history(factor))
+            row_a.addWidget(button)
+        self.history_reset = QtWidgets.QPushButton("120 秒总览")
+        self.history_reset.clicked.connect(lambda: self.history_overview_plot.setXRange(-120, 0, padding=0))
+        row_a.addWidget(self.history_reset)
 
         bookmark_row = QtWidgets.QHBoxLayout()
         bookmark_row.addWidget(QtWidgets.QLabel("A/B 书签(<=12):"))
@@ -575,14 +586,29 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.apply_appearance(appearance)
 
     def apply_appearance(self, appearance: Appearance) -> None:
-        if appearance == getattr(self, "appearance", None):
+        old = getattr(self, "appearance", None)
+        if appearance == old:
             return
         self.appearance = appearance
-        self.setStyleSheet(appearance_stylesheet(DARK_STYLESHEET, appearance))
         self.mixer_widget.plot_appearance = appearance
+        if old is None or appearance.layout != old.layout:
+            self._apply_workspace_layout(appearance.layout)
+        if old is not None and replace(appearance, layout=old.layout) == old:
+            return
+        self.setStyleSheet(appearance_stylesheet(DARK_STYLESHEET, appearance))
         for plot in self.findChildren(pg.PlotWidget):
             apply_plot_appearance(plot, appearance)
         self.chroma_widget.refresh_chroma_note_ticks()
+
+    def _apply_workspace_layout(self, layout: str) -> None:
+        practice = layout == "practice"
+        main = self._workspace_layout
+        main.removeWidget(self._history_box)
+        index = main.indexOf(self.tabs) + (0 if practice else 1)
+        main.insertWidget(index, self._history_box)
+        self.history_overview_plot.setMinimumHeight(112 if practice else 58)
+        self.history_overview_plot.setMaximumHeight(140 if practice else 72)
+        self.mixer_widget.apply_workspace_layout(layout)
 
     def open_appearance_dialog(self, parent: QtWidgets.QWidget | None = None) -> None:
         dialog = AppearanceDialog(self.appearance, DARK_STYLESHEET, parent or self)
@@ -721,6 +747,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def history_ago_range(self) -> tuple[float, float]:
         start, end = self.history_overview_plot.viewRange()[0]
         return -start, -end
+
+    def zoom_history(self, factor: float) -> None:
+        start, end = self.history_overview_plot.viewRange()[0]
+        center = (start + end) / 2
+        span = max(0.25, min(120.0, (end - start) * factor))
+        left = min(-span, max(-120.0, center - span / 2))
+        self.history_overview_plot.setXRange(left, left + span, padding=0)
 
     def update_history_overview(
         self, mins: np.ndarray, maxs: np.ndarray, avail_sec: float, *, end_ago: float = 0,
