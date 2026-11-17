@@ -10,6 +10,7 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from analysis.chroma import PITCH_CLASSES
+from analysis.drum_midi import export_drum_midi
 from audio.playback import BASS_MONITOR_BOOST_DB, StemMixerEngine
 from core.appearance import Appearance
 from core.models import (
@@ -420,7 +421,14 @@ class StemMixerWidget(QtWidgets.QWidget):
         rhythm_layout = QtWidgets.QVBoxLayout(rhythm_tab)
         self.rhythm_status = QtWidgets.QLabel("分析含独立鼓轨的分轨结果后，这里会显示 16 步鼓点。")
         self.rhythm_status.setWordWrap(True)
-        rhythm_layout.addWidget(self.rhythm_status)
+        rhythm_header = QtWidgets.QHBoxLayout()
+        rhythm_header.addWidget(self.rhythm_status, 1)
+        self.export_drums_btn = QtWidgets.QPushButton("导出鼓点 MIDI")
+        self.export_drums_btn.setEnabled(False)
+        self.export_drums_btn.setToolTip("导出检测到的底鼓、军鼓和踩镲，保留原片段中的击打时间。")
+        self.export_drums_btn.clicked.connect(self._on_export_drums_clicked)
+        rhythm_header.addWidget(self.export_drums_btn)
+        rhythm_layout.addLayout(rhythm_header)
         self.rhythm_table = QtWidgets.QTableWidget(3, 16)
         self.rhythm_table.setAccessibleName("16 步鼓点网格")
         self.rhythm_table.setVerticalHeaderLabels(["底鼓", "军鼓", "踩镲"])
@@ -662,6 +670,28 @@ class StemMixerWidget(QtWidgets.QWidget):
             self._last_single_stem_dir = str(Path(file_path).parent)
             self.open_single_stem_midi_requested.emit(file_path)
 
+    def _on_export_drums_clicked(self) -> None:
+        from core.paths import default_export_dir
+
+        report = self._last_deep_report
+        if report is None or report.drums is None:
+            return
+        selected, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "导出鼓点 MIDI", str(default_export_dir() / "listenscope_drums.mid"),
+            "MIDI 文件 (*.mid *.midi)",
+        )
+        if not selected or self._last_deep_report is not report:
+            return
+        destination = Path(selected)
+        if not destination.suffix:
+            destination = destination.with_suffix(".mid")
+        try:
+            count = export_drum_midi(report.drums, destination)
+        except (OSError, ValueError) as exc:
+            self.rhythm_status.setText(f"导出鼓点 MIDI 失败：{exc}")
+            return
+        self.rhythm_status.setText(f"已导出 {count} 个鼓点至 {destination.name}。")
+
     def _on_save_midi_clicked(self) -> None:
         from core.paths import default_export_dir
 
@@ -774,6 +804,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.piano_roll_plot.setTitle("MIDI 钢琴卷帘预览 (Pitch vs Time · 单击画面可跳转播放位置)")
         self.midi_table.setRowCount(0)
         self.rhythm_table.clearContents()
+        self.export_drums_btn.setEnabled(False)
         self.rhythm_status.setText("分析含独立鼓轨的分轨结果后，这里会显示 16 步鼓点。")
         self.midi_info_lbl.setStyleSheet("")
         self.midi_info_lbl.setText(
@@ -839,7 +870,9 @@ class StemMixerWidget(QtWidgets.QWidget):
             )
         if report.drums is not None:
             self.rhythm_table.clearContents()
-            self.rhythm_status.setText("按估计速度对齐的 16 步常见鼓点")
+            has_hits = bool(report.drums.kick_times_sec or report.drums.snare_times_sec or report.drums.hihat_times_sec)
+            self.export_drums_btn.setEnabled(has_hits)
+            self.rhythm_status.setText("16 步鼓点概览 · MIDI 保留原始击打时间。" if has_hits else "当前鼓轨未检测到鼓点。")
             for column, step in enumerate(report.drums.groove_16_step[:16]):
                 for row, hit in enumerate(("K", "S", "H")):
                     if hit in step.split("+"):
@@ -853,6 +886,7 @@ class StemMixerWidget(QtWidgets.QWidget):
             )
         else:
             self.rhythm_table.clearContents()
+            self.export_drums_btn.setEnabled(False)
             self.rhythm_status.setText("当前结果没有独立鼓轨。")
         if report.melody is not None:
             low_m = self._tr_note(report.melody.lowest_note) or "-"
