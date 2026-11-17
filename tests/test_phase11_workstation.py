@@ -167,17 +167,17 @@ def test_clear_stem_results_invalidates_pending_analysis(tmp_path: Path) -> None
         app.processEvents()
 
 
-def test_settings_categories_keep_draft_edits_and_restore_focus() -> None:
+def test_settings_navigation_keeps_draft_edits_and_midi_focus() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dlg = SettingsDialog(probe_system(), ResourceLimits(), AIConfig())
     dlg.show()
     app.processEvents()
     try:
-        assert dlg._active_category == "home" and dlg._category_columns == 2
+        assert dlg._active_category == "appearance"
+        assert dlg._category_buttons["appearance"].isChecked()
         dlg._category_buttons["resources"].click()
         dlg.min_ram_spin.setValue(6000)
-        dlg._back.click()
-        assert dlg.focusWidget() is dlg._category_buttons["resources"]
+        assert dlg._category_buttons["resources"].isChecked()
         dlg.focus_midi()
         assert dlg._active_category == "midi"
         assert dlg.focusWidget() is dlg.midi_python_edit
@@ -186,10 +186,10 @@ def test_settings_categories_keep_draft_edits_and_restore_focus() -> None:
         assert dlg.min_ram_spin.value() == 6000
         dlg.open_category("midi")
         assert dlg.midi_python_edit.text() == "draft.exe"
-        dlg.open_category("home")
+        dlg.open_category("appearance")
         dlg.resize(560, 500)
         app.processEvents()
-        assert dlg._category_columns == 1
+        assert dlg.width() == 560 and all(button.isVisible() for button in dlg._category_buttons.values())
         dlg.reject()
         assert dlg.updated_limits is None
         assert dlg.updated_midi_python == ""

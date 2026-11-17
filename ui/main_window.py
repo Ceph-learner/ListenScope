@@ -980,9 +980,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._ai_config,
             ai_python_executable=self._ai_python_executable,
             midi_python_executable=self._midi_python_executable,
+            appearance=self.appearance,
             parent=self,
         )
-        dlg.appearance_requested.connect(self.open_appearance_dialog)
+        def edit_appearance(parent: QtWidgets.QWidget) -> None:
+            self.open_appearance_dialog(parent)
+            dlg.update_appearance_summary(self.appearance)
+        dlg.appearance_requested.connect(edit_appearance)
         if focus_midi:
             QtCore.QTimer.singleShot(0, dlg.focus_midi)
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:

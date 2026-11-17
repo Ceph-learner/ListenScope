@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from PySide6 import QtCore, QtGui, QtSvg, QtWidgets
 
+from core.appearance import Appearance, LAYOUTS, PRESETS
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
 from core.models import SystemHardwareReport
 from core.paths import get_bundle_root
@@ -57,6 +58,7 @@ class SettingsDialog(QtWidgets.QDialog):
         *,
         ai_python_executable: str = "",
         midi_python_executable: str = "",
+        appearance: Appearance = Appearance(),
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -76,36 +78,75 @@ class SettingsDialog(QtWidgets.QDialog):
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(22, 18, 22, 16)
         root.setSpacing(14)
-        heading = QtWidgets.QHBoxLayout()
-        self._back = QtWidgets.QPushButton("← 所有分类")
-        self._back.clicked.connect(lambda: self.open_category("home"))
-        heading.addWidget(self._back, alignment=QtCore.Qt.AlignmentFlag.AlignVCenter)
-        heading_labels = QtWidgets.QVBoxLayout()
-        heading_labels.setSpacing(4)
+        title = QtWidgets.QLabel("设置")
+        title.setObjectName("settingsHeading")
+        root.addWidget(title)
+
+        body = QtWidgets.QHBoxLayout()
+        body.setSpacing(16)
+        navigation = QtWidgets.QWidget()
+        navigation.setObjectName("settingsNavigation")
+        navigation.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground)
+        navigation.setFixedWidth(166)
+        nav_layout = QtWidgets.QVBoxLayout(navigation)
+        nav_layout.setContentsMargins(8, 8, 8, 8)
+        nav_layout.setSpacing(5)
+        self._nav_group = QtWidgets.QButtonGroup(self)
+        self._nav_group.setExclusive(True)
+        self._category_buttons = {}
+        for key, (label, description) in SETTINGS_CATEGORIES.items():
+            button = QtWidgets.QPushButton(QtGui.QIcon(_category_icon(key)), label)
+            button.setObjectName("settingsNavButton")
+            button.setAccessibleDescription(description)
+            button.setCheckable(True)
+            button.setAutoDefault(False)
+            button.setMinimumHeight(39)
+            button.setIconSize(QtCore.QSize(18, 18))
+            button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _checked=False, key=key: self.open_category(key))
+            self._nav_group.addButton(button)
+            self._category_buttons[key] = button
+            nav_layout.addWidget(button)
+        nav_layout.addStretch(1)
+        body.addWidget(navigation)
+
+        details = QtWidgets.QVBoxLayout()
+        details.setSpacing(8)
         self._title = QtWidgets.QLabel()
-        self._title.setObjectName("settingsHeading")
+        self._title.setObjectName("settingsPageHeading")
         self._subtitle = QtWidgets.QLabel()
         self._subtitle.setObjectName("settingsSubtitle")
         self._subtitle.setWordWrap(True)
-        heading_labels.addWidget(self._title)
-        heading_labels.addWidget(self._subtitle)
-        heading.addLayout(heading_labels, 1)
-        root.addLayout(heading)
+        details.addWidget(self._title)
+        details.addWidget(self._subtitle)
         self._pages = QtWidgets.QStackedWidget()
-        root.addWidget(self._pages, 1)
+        details.addWidget(self._pages, 1)
         self._page_map = {}
-        self._category_buttons = {}
-        self._active_category = "home"
-        home = QtWidgets.QWidget()
-        home_layout = QtWidgets.QVBoxLayout(home)
-        home_layout.setContentsMargins(0, 2, 0, 4)
-        self._category_grid = QtWidgets.QGridLayout()
-        self._category_grid.setSpacing(12)
-        home_layout.addLayout(self._category_grid)
-        home_layout.addStretch(1)
-        self._add_page("home", home, scroll=True)
-        for key, (label, description) in SETTINGS_CATEGORIES.items():
-            self._category_buttons[key] = self._make_category_button(key, label, description)
+        self._active_category = ""
+        body.addLayout(details, 1)
+        root.addLayout(body, 1)
+
+        appearance_page = QtWidgets.QWidget()
+        appearance_layout = QtWidgets.QVBoxLayout(appearance_page)
+        appearance_layout.setContentsMargins(0, 4, 0, 0)
+        appearance_box = QtWidgets.QGroupBox("当前配置")
+        appearance_form = QtWidgets.QFormLayout(appearance_box)
+        appearance_form.setVerticalSpacing(12)
+        self._theme_summary = QtWidgets.QLabel()
+        self._layout_summary = QtWidgets.QLabel()
+        self._font_summary = QtWidgets.QLabel()
+        appearance_form.addRow("主题", self._theme_summary)
+        appearance_form.addRow("工作区", self._layout_summary)
+        appearance_form.addRow("字号", self._font_summary)
+        edit_appearance = QtWidgets.QPushButton("编辑外观…")
+        edit_appearance.setObjectName("appearanceEntry")
+        edit_appearance.setAutoDefault(False)
+        edit_appearance.clicked.connect(lambda: self.appearance_requested.emit(self))
+        appearance_form.addRow(edit_appearance)
+        appearance_layout.addWidget(appearance_box)
+        appearance_layout.addStretch(1)
+        self._add_page("appearance", appearance_page, scroll=True)
+        self.update_appearance_summary(appearance)
 
         # Tab 1: System Status (Prompt Section 3 explicit requirement)
         status_tab = QtWidgets.QWidget()
@@ -271,8 +312,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._orig_limits = resource_limits
         self._orig_ai_cfg = ai_config
-        self._arrange_categories()
-        self.open_category("home")
+        self.open_category("appearance")
+        self._category_buttons["appearance"].setFocus()
 
     def _add_page(self, key: str, widget: QtWidgets.QWidget, *, scroll: bool = False) -> None:
         if scroll:
@@ -284,71 +325,18 @@ class SettingsDialog(QtWidgets.QDialog):
         self._page_map[key] = widget
         self._pages.addWidget(widget)
 
-    def _make_category_button(self, key: str, title: str, summary: str) -> QtWidgets.QPushButton:
-        button = QtWidgets.QPushButton()
-        button.setObjectName("settingsCategory")
-        button.setAccessibleName(title)
-        button.setAccessibleDescription(summary)
-        button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        button.setAutoDefault(False)
-        button.setMinimumHeight(102)
-        button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
-        row = QtWidgets.QHBoxLayout(button)
-        row.setContentsMargins(16, 15, 14, 15)
-        row.setSpacing(12)
-        icon = QtWidgets.QLabel()
-        icon.setObjectName("settingsCategoryIcon")
-        icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        icon.setFixedSize(38, 38)
-        icon.setPixmap(_category_icon(key))
-        row.addWidget(icon)
-        text = QtWidgets.QVBoxLayout()
-        text.setSpacing(5)
-        name = QtWidgets.QLabel(title)
-        name.setObjectName("settingsCategoryTitle")
-        description = QtWidgets.QLabel(summary)
-        description.setObjectName("settingsSubtitle")
-        description.setWordWrap(True)
-        text.addWidget(name)
-        text.addWidget(description)
-        row.addLayout(text, 1)
-        arrow = QtWidgets.QLabel("›")
-        arrow.setObjectName("settingsCategoryArrow")
-        row.addWidget(arrow)
-        for label in (icon, name, description, arrow):
-            label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        button.clicked.connect(lambda _checked=False: self.open_category(key))
-        return button
-
-    def _arrange_categories(self) -> None:
-        columns = 2 if self.width() >= 630 else 1
-        if columns == getattr(self, "_category_columns", None):
-            return
-        self._category_columns = columns
-        for index, button in enumerate(self._category_buttons.values()):
-            self._category_grid.removeWidget(button)
-            self._category_grid.addWidget(button, index // columns, index % columns)
-
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        super().resizeEvent(event)
-        if hasattr(self, "_category_buttons"):
-            self._arrange_categories()
+    def update_appearance_summary(self, appearance: Appearance) -> None:
+        self._theme_summary.setText(PRESETS[appearance.preset][0])
+        self._layout_summary.setText(LAYOUTS[appearance.layout][0])
+        self._font_summary.setText(f"{appearance.font_size} px")
 
     def open_category(self, key: str) -> None:
-        if key == "appearance":
-            self.appearance_requested.emit(self)
-            return
-        previous = self._active_category
         self._active_category = key
+        self._category_buttons[key].setChecked(True)
         self._pages.setCurrentWidget(self._page_map[key])
-        self._back.setVisible(key != "home")
-        title, subtitle = SETTINGS_CATEGORIES.get(key, ("设置", "选择要查看或调整的类别。"))
+        title, subtitle = SETTINGS_CATEGORIES[key]
         self._title.setText(title)
         self._subtitle.setText(subtitle)
-        if key == "home":
-            self._category_buttons.get(previous, self._category_buttons["appearance"]).setFocus()
-        else:
-            self._back.setFocus()
 
     def focus_midi(self) -> None:
         self.open_category("midi")
