@@ -350,6 +350,11 @@ def test_analysis_worker_reset_harmony() -> None:
     aw.reset_harmony()
     assert aw.latest_snapshot() is None
     assert aw.chroma.recent_chroma_matrix().shape[0] == 0
+    assert aw.analyze_latest_once().chord.is_silent
+    rb.write(_make_sine_stereo(440.0, 0.2, sr=cfg.sample_rate))
+    assert not aw.analyze_latest_once().chord.is_silent
+    aw.reset_harmony(include_buffered_audio=True)
+    assert not aw.analyze_latest_once().chord.is_silent
 
 
 def test_phase13_headless_gui_practice_shortcut_and_hud_integration(tmp_path: Path) -> None:

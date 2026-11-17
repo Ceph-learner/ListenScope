@@ -72,6 +72,7 @@ a = Analysis(
         (str(project_root / "core"), "core"),
         (str(project_root / "analysis"), "analysis"),
         (str(project_root / "scripts"), "scripts"),
+        (str(project_root / "ui" / "assets" / "listenscope.ico"), "ui/assets"),
         *extra_datas,
     ],
     hiddenimports=[
@@ -120,6 +121,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="ListenScope",
+    icon=str(project_root / "ui" / "assets" / "listenscope.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

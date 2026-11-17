@@ -29,6 +29,26 @@ def test_ab_playback_reports_unavailable_output_device(monkeypatch):
     assert not player.is_playing
 
 
+def test_ab_playback_distinguishes_silent_audio_and_reset_history():
+    config = AudioConfig(sample_rate=100, ring_buffer_seconds=2)
+    ring = FixedRingBuffer(config)
+    player = HistoryABPlayer(ring)
+    ring.write(np.zeros((100, 2), dtype=np.float32))
+    player.set_ab_range(0, 100)
+    assert "静音" in player.start_playback(open_audio_device=False)
+    player.pause()
+    ring.clear()
+    ring.write(np.full((100, 2), 0.00001, dtype=np.float32))
+    with pytest.raises(ValueError, match="历史已重置"):
+        player.start_playback(open_audio_device=False)
+    player.set_ab_range(0, 100)
+    assert player.start_playback(open_audio_device=False) == AB_PAUSE_PLAYER_HINT
+    ring.clear()
+    ring.write(np.full((100, 2), 0.25, dtype=np.float32))
+    assert not player.render_block(20).any()
+    assert not player.is_playing
+
+
 def _write_const_wav(path, val: float, frames: int = 4800, sr: int = 48000) -> None:
     pcm = np.full((frames, 2), val, dtype=np.float32)
     with wave.open(str(path), "wb") as wf:

@@ -36,7 +36,7 @@ class SettingsDialog(QtWidgets.QDialog):
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("ListenScope 设置 -> 系统状态 & 资源安全策略")
+        self.setWindowTitle("ListenScope 设置")
         self.resize(820, 690)
 
         self._report = hardware_report
@@ -50,10 +50,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self._midi_probe_finished.connect(self._on_midi_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
 
         root = QtWidgets.QVBoxLayout(self)
+        heading = QtWidgets.QHBoxLayout()
+        title = QtWidgets.QLabel("设置")
+        title.setStyleSheet("font-size: 19px; font-weight: 600;")
+        heading.addWidget(title, 1)
         appearance_btn = QtWidgets.QPushButton("外观主题…")
         appearance_btn.setObjectName("appearanceEntry")
         appearance_btn.clicked.connect(lambda: self.appearance_requested.emit(self))
-        root.addWidget(appearance_btn, alignment=QtCore.Qt.AlignmentFlag.AlignRight)
+        heading.addWidget(appearance_btn)
+        root.addLayout(heading)
         tabs = QtWidgets.QTabWidget()
 
         # Tab 1: System Status (Prompt Section 3 explicit requirement)
@@ -88,6 +93,7 @@ class SettingsDialog(QtWidgets.QDialog):
         # Tab 2: ResourceLimits & AIConfig
         cfg_tab = QtWidgets.QWidget()
         form = QtWidgets.QFormLayout(cfg_tab)
+        form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self.min_ram_spin = QtWidgets.QDoubleSpinBox()
         self.min_ram_spin.setRange(2560, 32768)
@@ -186,7 +192,11 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("MIDI 环境验证结果:", self.midi_probe_result_lbl)
         form.addRow("高显存模型解锁:", self.roformer_chk)
 
-        tabs.addTab(cfg_tab, "资源安全阈值 & AI 配置")
+        self._config_scroll = QtWidgets.QScrollArea()
+        self._config_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._config_scroll.setWidgetResizable(True)
+        self._config_scroll.setWidget(cfg_tab)
+        tabs.addTab(self._config_scroll, "资源与环境")
         self._tabs = tabs
         root.addWidget(tabs, 1)
 
