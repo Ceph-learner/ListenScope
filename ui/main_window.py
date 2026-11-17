@@ -264,6 +264,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     refresh_sources_requested = QtCore.Signal()
     ab_select_recent_requested = QtCore.Signal(float)
     ab_set_range_sec_requested = QtCore.Signal(float, float)
+    ab_snap_requested = QtCore.Signal()
     ab_play_requested = QtCore.Signal()
     ab_stop_requested = QtCore.Signal()
     ab_loop_toggled = QtCore.Signal(bool)
@@ -465,6 +466,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         row_a_transport.addWidget(self.ab_play_btn)
         row_a_transport.addWidget(self.ab_stop_btn)
+        self.ab_snap_btn = QtWidgets.QPushButton("贴近零点")
+        self.ab_snap_btn.setToolTip("停止播放后，在 A/B 边界各 ±5 毫秒内寻找更接近零的样本，以减轻循环接缝声。")
+        self.ab_snap_btn.clicked.connect(self.ab_snap_requested.emit)
+        row_a_transport.addWidget(self.ab_snap_btn)
         row_a_transport.addWidget(self.ab_loop_chk)
         row_a_transport.addWidget(self.ab_speed_combo)
         row_a_transport.addWidget(self.ab_export_wav_btn)
@@ -685,9 +690,17 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _set_ab_region_from_ago(self, start_ago: float, end_ago: float) -> None:
         s_ago = max(0.5, min(120.0, float(start_ago)))
         e_ago = max(0.0, min(s_ago - 0.5, float(end_ago)))
+        self._show_ab_region(s_ago, e_ago)
+
+    def show_snapped_ab(self, start_ago: float, end_ago: float) -> None:
+        self.start_ago_spin.setValue(start_ago)
+        self.end_ago_spin.setValue(end_ago)
+        self._show_ab_region(start_ago, end_ago)
+
+    def _show_ab_region(self, start_ago: float, end_ago: float) -> None:
         self._syncing_ab_region = True
         try:
-            self.ab_region.setRegion((-s_ago, -e_ago))
+            self.ab_region.setRegion((-start_ago, -end_ago))
         finally:
             self._syncing_ab_region = False
 
