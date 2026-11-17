@@ -40,6 +40,24 @@ QGroupBox QLabel, QFrame[trackCard=true] QLabel {{ background: transparent; }}
 QPushButton#analysisAction:enabled {{ background: {colors["#28303B"]}; border-color: {accent}; font-weight: 600; }}
 QPushButton#analysisAction:hover:enabled {{ background: {colors["#1F6FEB"]}; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QSpinBox:focus {{ border: 1px solid {accent}; }}
+QLabel#settingsHeading {{ font-size: {appearance.font_size + 12}px; font-weight: 700; }}
+QLabel#settingsPageHeading {{ font-size: {appearance.font_size + 6}px; font-weight: 700; }}
+QLabel#settingsSubtitle {{ color: {colors["#B4BECB"]}; }}
+QWidget#settingsNavigation {{ background: {surface}; border: 1px solid {rim}; border-radius: 9px; }}
+QPushButton#settingsNavButton {{
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    text-align: left; padding: 6px 8px;
+}}
+QPushButton#settingsNavButton:hover {{ background: {colors["#2E3540"]}; }}
+QPushButton#settingsNavButton:checked {{
+    background: {colors["#28303B"]}; border-left: 3px solid {accent}; font-weight: 700;
+}}
+QPushButton#settingsNavButton:focus {{ border-color: {accent}; }}
+QPushButton#settingsSave {{
+    background: {colors["#28303B"]}; border: 1px solid {accent};
+    font-weight: 700; padding: 7px 18px;
+}}
+QPushButton#settingsSave:hover, QPushButton#settingsSave:focus {{ background: {colors["#1F6FEB"]}; }}
 """
     if appearance.scope == "off":
         return qss

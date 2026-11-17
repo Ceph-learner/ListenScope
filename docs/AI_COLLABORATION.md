@@ -138,3 +138,9 @@ OpenCode Go `opencode-go/deepseek-v4.1-flash` 完成一次文本复核，无重�
 - Command Code GOAT `deepseek/deepseek-v4.1-flash`，36.9 秒，输入 26,193，输出 3,713，缓存读取 17,024。采纳短表单分组、侧栏方案和收敛在用户操作后的短动效，以及多尺寸 ICO、Qt 和 PyInstaller 注册方案。
 
 设置原型从 PyQt-Fluent-Widgets 设置示例借鉴分组和滚动模式，原型导航图标使用 Lucide 并附其许可。产品图标由本项目绘制。原生设置修正滚动与定位，全面重排留给评审。
+
+## 2026-11-17 · 设置左侧导航原生实现
+
+两位 Worker 各完成一次，零重试。OpenCode Go `opencode-go/deepseek-v4.1-flash` 31.4 秒，输入 1,402，输出 812，推理 999。采纳页面栈、分组、统一表单保存路径和 MIDI 直接导航。按用户修正选项采用常驻左侧栏。
+
+Command Code GOAT `deepseek/deepseek-v4.1-flash` 23.2 秒，输入 12,993，输出 1,863，缓存读取 4,096。采纳标题、正文、次级文字层级、浅边框、图标底板、响应式和可见焦点。根据实际 Qt 截图校准页面密度和字号，使用原生按钮状态描绘反馈。工作区与主题状态由既有设置模型处理。

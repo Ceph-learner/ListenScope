@@ -980,15 +980,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._ai_config,
             ai_python_executable=self._ai_python_executable,
             midi_python_executable=self._midi_python_executable,
+            appearance=self.appearance,
             parent=self,
         )
-        dlg.appearance_requested.connect(self.open_appearance_dialog)
+        def edit_appearance(parent: QtWidgets.QWidget) -> None:
+            self.open_appearance_dialog(parent)
+            dlg.update_appearance_summary(self.appearance)
+        dlg.appearance_requested.connect(edit_appearance)
         if focus_midi:
-            dlg._tabs.setCurrentIndex(1)
-            def focus_interpreter() -> None:
-                dlg._config_scroll.ensureWidgetVisible(dlg.midi_python_edit)
-                dlg.midi_python_edit.setFocus()
-            QtCore.QTimer.singleShot(0, focus_interpreter)
+            QtCore.QTimer.singleShot(0, dlg.focus_midi)
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             if dlg.updated_limits is not None and dlg.updated_ai_config is not None:
                 self._resource_limits = dlg.updated_limits
