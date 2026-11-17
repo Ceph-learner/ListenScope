@@ -201,6 +201,10 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
     def selected_model_id(self) -> str:
         return str(self.model_combo.currentData() or "mdx_low_vram_2stem")
 
+    @property
+    def pending_start(self) -> bool:
+        return self._pending_start
+
     def set_pending_start(self, pending: bool) -> None:
         self._pending_start = bool(pending)
         self.toggle_btn.blockSignals(True)

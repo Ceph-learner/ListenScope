@@ -139,6 +139,7 @@ class StemMixerWidget(QtWidgets.QWidget):
     transcribe_stem_midi = QtCore.Signal(str, str)
     open_single_stem_midi_requested = QtCore.Signal(str)  # local single-stem WAV path
     before_play_requested = QtCore.Signal()
+    drum_preview_requested = QtCore.Signal()
     deep_analyze_requested = QtCore.Signal(object)  # dict[stem_name, stem_path]
     export_sheet_requested = QtCore.Signal(str)     # output .md/.csv path
     save_midi_requested = QtCore.Signal(str)        # output .mid path
@@ -423,6 +424,11 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.rhythm_status.setWordWrap(True)
         rhythm_header = QtWidgets.QHBoxLayout()
         rhythm_header.addWidget(self.rhythm_status, 1)
+        self.preview_drums_btn = QtWidgets.QPushButton("试听鼓点")
+        self.preview_drums_btn.setToolTip("从第一个检测到的鼓点开始，试听最多 8 秒合成鼓音。")
+        self.preview_drums_btn.setEnabled(False)
+        self.preview_drums_btn.clicked.connect(self.drum_preview_requested.emit)
+        rhythm_header.addWidget(self.preview_drums_btn)
         self.export_drums_btn = QtWidgets.QPushButton("导出鼓点 MIDI")
         self.export_drums_btn.setEnabled(False)
         self.export_drums_btn.setToolTip("导出检测到的底鼓、军鼓和踩镲，保留原片段中的击打时间。")
@@ -670,6 +676,9 @@ class StemMixerWidget(QtWidgets.QWidget):
             self._last_single_stem_dir = str(Path(file_path).parent)
             self.open_single_stem_midi_requested.emit(file_path)
 
+    def set_drum_preview_playing(self, playing: bool) -> None:
+        self.preview_drums_btn.setText("停止试听" if playing else "试听鼓点")
+
     def _on_export_drums_clicked(self) -> None:
         from core.paths import default_export_dir
 
@@ -805,6 +814,8 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.midi_table.setRowCount(0)
         self.rhythm_table.clearContents()
         self.export_drums_btn.setEnabled(False)
+        self.preview_drums_btn.setEnabled(False)
+        self.set_drum_preview_playing(False)
         self.rhythm_status.setText("分析含独立鼓轨的分轨结果后，这里会显示 16 步鼓点。")
         self.midi_info_lbl.setStyleSheet("")
         self.midi_info_lbl.setText(
@@ -872,6 +883,7 @@ class StemMixerWidget(QtWidgets.QWidget):
             self.rhythm_table.clearContents()
             has_hits = bool(report.drums.kick_times_sec or report.drums.snare_times_sec or report.drums.hihat_times_sec)
             self.export_drums_btn.setEnabled(has_hits)
+            self.preview_drums_btn.setEnabled(has_hits)
             self.rhythm_status.setText("16 步鼓点概览 · MIDI 保留原始击打时间。" if has_hits else "当前鼓轨未检测到鼓点。")
             for column, step in enumerate(report.drums.groove_16_step[:16]):
                 for row, hit in enumerate(("K", "S", "H")):
@@ -887,6 +899,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         else:
             self.rhythm_table.clearContents()
             self.export_drums_btn.setEnabled(False)
+            self.preview_drums_btn.setEnabled(False)
             self.rhythm_status.setText("当前结果没有独立鼓轨。")
         if report.melody is not None:
             low_m = self._tr_note(report.melody.lowest_note) or "-"
