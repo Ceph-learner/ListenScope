@@ -8,6 +8,8 @@ ListenScope 是 Windows 本地音乐分析与练习工作台。入口 [main.py](
 
 - [进程音频捕获](../audio/process_loopback.py)
 - [固定 PCM 环](../audio/ring_buffer.py)
+- 实时 Chroma 页的「练习和弦」根据最近和弦排列本地大小调模板，支持手动选调与 Capo 指型显示。
+
 - A/B 历史波形支持横向缩放。停止 A/B 后可点击「贴近零点」，在每个已选边界的 ±5 ms 内查找更安静的实际播放边缘。
 
 - 深度分轨的「鼓点」页支持导出独立鼓 MIDI，以及最多 8 秒合成试听。沿用检测的击打时间，可在 DAW 中选择鼓音源；映射见 [MIDI Association 打击乐说明](https://midi.org/general-midi-lite)。
