@@ -41,6 +41,17 @@ QPushButton#analysisAction:enabled {{ background: {colors["#28303B"]}; border-co
 QPushButton#analysisAction:hover:enabled {{ background: {colors["#1F6FEB"]}; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QSpinBox:focus {{ border: 1px solid {accent}; }}
 QLabel#settingsHeading {{ font-size: {appearance.font_size + 12}px; font-weight: 700; }}
+QLabel#analysisHeading {{ font-size: {appearance.font_size + 7}px; font-weight: 700; }}
+QFrame#analysisMetric {{ background: {surface}; border: 1px solid {rim}; border-radius: 8px; }}
+QFrame#analysisMetric QLabel {{ background: transparent; }}
+QFrame#analysisChart {{ background: {surface}; border: 1px solid {rim}; border-radius: 7px; }}
+QFrame#analysisChart QLabel {{ background: transparent; }}
+QLabel#analysisChartHeading {{ font-weight: 600; }}
+QLabel#analysisCaption {{ color: {colors["#B4BECB"]}; }}
+QLabel#analysisPitch {{ color: {accent}; font-size: {appearance.font_size + 15}px; font-weight: 700; }}
+QLabel#analysisValue {{ font-size: {appearance.font_size + 5}px; font-weight: 600; }}
+QProgressBar#analysisLevel {{ background: {colors["#1A1E24"]}; border: 0; border-radius: 2px; }}
+QProgressBar#analysisLevel::chunk {{ background: {accent}; border-radius: 2px; }}
 QLabel#settingsPageHeading {{ font-size: {appearance.font_size + 6}px; font-weight: 700; }}
 QLabel#settingsSubtitle {{ color: {colors["#B4BECB"]}; }}
 QWidget#settingsNavigation {{ background: {surface}; border: 1px solid {rim}; border-radius: 9px; }}
