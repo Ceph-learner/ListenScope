@@ -79,6 +79,25 @@ class FixedRingBuffer:
         with self._lock:
             return max(0, self._total_written_frames - self.capacity_frames)
 
+    def frame_state(self) -> tuple[int, int, int]:
+        """Return oldest frame, next frame, and capture generation together."""
+        with self._lock:
+            end = self._total_written_frames
+            return max(0, end - self.capacity_frames), end, self._generation
+
+    def range_has_audio(self, start: int, end: int, generation: int) -> bool:
+        """Check for any nonzero PCM without copying the whole selected interval."""
+        for cursor in range(start, end, 8192):
+            stop = min(end, cursor + 8192)
+            with self._lock:
+                oldest, newest, current = self.frame_state()
+                if current != generation or cursor < oldest or stop > newest:
+                    raise ValueError("检查期间所选历史音频已变化，请重新选择 A/B 区间。")
+                chunk = self._read_range_locked(cursor, stop)
+            if np.any(chunk):
+                return True
+        return False
+
     def clear(self) -> None:
         with self._lock:
             self._buffer.fill(0.0)

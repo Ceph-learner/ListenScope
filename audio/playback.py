@@ -116,6 +116,7 @@ class HistoryABPlayer:
 
         self._a_frame: int = 0
         self._b_frame: int = 0
+        self._range_generation = ring_buffer.frame_state()[2]
         self._cursor_frame: int = 0
         self._loop_enabled: bool = True
         self._speed: float = 1.0
@@ -161,14 +162,14 @@ class HistoryABPlayer:
     def select_recent_seconds(self, seconds: float) -> tuple[int, int]:
         """Select the latest N seconds currently retained in the 120s ring buffer."""
         sr = self.ring_buffer.sample_rate
-        newest = self.ring_buffer.total_written_frames
-        oldest = self.ring_buffer.oldest_abs_frame
+        oldest, newest, generation = self.ring_buffer.frame_state()
         req = max(1, int(round(seconds * sr)))
         a = max(oldest, newest - req)
         b = newest
         with self._lock:
             self._a_frame = a
             self._b_frame = b
+            self._range_generation = generation
             self._cursor_frame = a
             self._stretcher.reset(0.0)
             if self.metronome is not None:
@@ -178,13 +179,13 @@ class HistoryABPlayer:
         return a, b
 
     def set_ab_range(self, a_frame: int, b_frame: int) -> tuple[int, int]:
-        oldest = self.ring_buffer.oldest_abs_frame
-        newest = self.ring_buffer.total_written_frames
+        oldest, newest, generation = self.ring_buffer.frame_state()
         a = max(oldest, min(int(a_frame), newest))
         b = max(a, min(int(b_frame), newest))
         with self._lock:
             self._a_frame = a
             self._b_frame = b
+            self._range_generation = generation
             self._cursor_frame = a
             self._stretcher.reset(0.0)
             if self.metronome is not None:
@@ -217,13 +218,20 @@ class HistoryABPlayer:
 
     def start_playback(self, *, open_audio_device: bool = True, require_device: bool = False) -> str:
         """Start A/B playback and return user-facing QQ Music pause reminder."""
+        hint = AB_PAUSE_PLAYER_HINT
         with self._lock:
-            oldest = self.ring_buffer.oldest_abs_frame
+            oldest, newest, generation = self.ring_buffer.frame_state()
             if self._b_frame <= self._a_frame:
                 raise ValueError("请先在 120s 历史时间轴选择有效的 A/B 片段。")
+            if generation != self._range_generation:
+                raise ValueError("音频历史已重置，请重新选择 A/B 区间。")
             if self._b_frame <= oldest:
                 raise ValueError("所选 A/B 片段已滚出最近 120s 环形缓冲，请重新选择区间。")
+            if self._b_frame > newest:
+                raise ValueError("A/B 选区结束位置超出了当前历史音频，请重新选择区间。")
             effective_a = max(oldest, self._a_frame)
+            if not self._is_playing and not self.ring_buffer.range_has_audio(effective_a, self._b_frame, generation):
+                hint = "当前 A/B 选区的原始音频是静音。可拖动 A/B 边界，或重新选择有波形的片段。"
             if self._cursor_frame < effective_a or self._cursor_frame >= self._b_frame:
                 self._cursor_frame = effective_a
                 self._stretcher.reset(0.0)
@@ -236,7 +244,7 @@ class HistoryABPlayer:
 
         if open_audio_device:
             self._ensure_output_stream(require_device=require_device)
-        return AB_PAUSE_PLAYER_HINT
+        return hint
 
     def pause(self) -> None:
         with self._lock:
@@ -360,7 +368,10 @@ class HistoryABPlayer:
             if not self._is_playing or self._b_frame <= self._a_frame:
                 return out
 
-            oldest = self.ring_buffer.oldest_abs_frame
+            oldest, _, generation = self.ring_buffer.frame_state()
+            if generation != self._range_generation:
+                self._is_playing = False
+                return out
             a = max(oldest, self._a_frame)
             b = self._b_frame
             if b <= a:

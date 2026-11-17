@@ -21,7 +21,7 @@ import uuid
 import wave
 
 import numpy as np
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 _SRC_DIR = Path(__file__).resolve().parent
 if str(_SRC_DIR) not in sys.path:
@@ -1770,7 +1770,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--headless-smoke", action="store_true", help="短时运行后干净退出（测试用途）")
     args = parser.parse_args(argv)
 
+    if sys.platform == "win32":
+        import ctypes
+
+        set_app_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        set_app_id.argtypes = [ctypes.c_wchar_p]
+        set_app_id.restype = ctypes.c_long
+        set_app_id("ListenScope.Desktop")
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    app.setWindowIcon(QtGui.QIcon(str(get_bundle_root() / "ui" / "assets" / "listenscope.ico")))
     ctrl = ListenScopeController(
         use_mock_ai_for_demo=args.simulate,
         ai_python_executable=args.ai_python,
