@@ -1,5 +1,8 @@
 # 最新交接
 
+- 鼓点 MIDI 导出已在 `feature/drum-midi-export` 实现，代码证据 `72665d55937b0d4988a6e2c937c7d5a9bb12e3f6`。在「分轨混音 & MIDI 扒谱 → 分析和弦与节奏 → 鼓点」点击「导出鼓点 MIDI」。文件保留片段内的底鼓、军鼓和踩镲起始时间，用标准鼓通道、固定力度和短音符；速度未知时写 120 BPM，同时按该速度换算时间，实际击打秒数仍对齐原片段。
+- Windows Core 专项用 `QT_QPA_PLATFORM=offscreen`、显式依赖路径执行 `python -m pytest tests/test_phase11_workstation.py -k drum_midi -q --tb=short`，3 项通过。原生 UI 合成样例通过按钮导出 26 次击打，由 mido 回读。真实 DAW 鼓音源映射和听感待验收；可将样例文件拖入使用 GM 鼓组的轨道试听。下一步是鼓点试听。
+
 - 本轮在 `feature/ab-zero-crossing` 上加入 A/B「贴近零点」，代码证据为 `ac61cab13a4a952a4f237f52c7298cb78d1a44c7`。播放停止后，按钮只扫描两个边界各 ±5 ms 的原始 PCM；仅当实际会播放的边缘样本在各声道中的最大振幅变小时才移动边界。超时或被覆盖的选区需要重选；拖动、缩放和实时刷新沿用原逻辑。
 - 原生 Qt 离屏预览使用合成反相立体声，验证了按钮入口、两个绝对帧各左移 1 ms、波形选区同步，以及循环读取的半开边界。Windows 复测用 `QT_QPA_PLATFORM=offscreen` 和当前环境的依赖路径，再运行 `python -m pytest -q --tb=short`。目标机听感待验收：导入有声素材、缩放历史波形、选一段并试听，再停止点「贴近零点」后比较接缝。后续可做鼓点试听与独立鼓 MIDI。
 
