@@ -31,6 +31,7 @@ from ui.chroma_widget import (
     transpose_note_name,
 )
 from ui.help_badge import HelpBadge
+from ui.marathon_style import TelemetryHeader, apply_marathon_plot_theme, get_marathon_palette
 
 
 def _fmt_sec(sec: float) -> str:
@@ -58,7 +59,7 @@ class _StemTrackRow(QtWidgets.QFrame):
         self.setProperty("trackCard", True)
 
         row = QtWidgets.QHBoxLayout(self)
-        row.setContentsMargins(8, 6, 8, 6)
+        row.setContentsMargins(10, 6, 10, 6)
         row.setSpacing(8)
 
         # Left column: stem label & duration
@@ -73,11 +74,13 @@ class _StemTrackRow(QtWidgets.QFrame):
 
         # Mute / Solo / Volume
         self.mute_btn = QtWidgets.QPushButton("M")
+        self.mute_btn.setObjectName("stemMuteBtn")
         self.mute_btn.setCheckable(True)
         self.mute_btn.setFixedWidth(32)
         self.mute_btn.toggled.connect(lambda checked: self.mute_changed.emit(self.stem_name, checked))
 
         self.solo_btn = QtWidgets.QPushButton("S")
+        self.solo_btn.setObjectName("stemSoloBtn")
         self.solo_btn.setCheckable(True)
         self.solo_btn.setFixedWidth(32)
         self.solo_btn.toggled.connect(lambda checked: self.solo_changed.emit(self.stem_name, checked))
@@ -94,15 +97,15 @@ class _StemTrackRow(QtWidgets.QFrame):
 
         # Waveform preview plot
         self.wave_plot = pg.PlotWidget()
-        self.wave_plot.setMaximumHeight(56)
-        self.wave_plot.setMinimumHeight(46)
-        self.wave_plot.setBackground("#14161A")
+        self.wave_plot.setMaximumHeight(54)
+        self.wave_plot.setMinimumHeight(44)
+        self.wave_plot.setBackground("#F8FAFC")
         self.wave_plot.setYRange(-1.0, 1.0)
         self.wave_plot.hideAxis("bottom")
         self.wave_plot.hideAxis("left")
         self.wave_plot.setMouseEnabled(x=False, y=False)
-        self._max_curve = self.wave_plot.plot(pen=pg.mkPen("#7EE2B8", width=1.1))
-        self._min_curve = self.wave_plot.plot(pen=pg.mkPen("#7EE2B8", width=1.1))
+        self._max_curve = self.wave_plot.plot(pen=pg.mkPen("#0F766E", width=1.1))
+        self._min_curve = self.wave_plot.plot(pen=pg.mkPen("#0F766E", width=1.1))
         row.addWidget(self.wave_plot, 1)
 
         # Bridge actions
@@ -110,14 +113,26 @@ class _StemTrackRow(QtWidgets.QFrame):
         analyze_btn.setToolTip("将此分轨前 <=30s 载入实时频谱/和弦视图（会清空当前实时缓冲）")
         analyze_btn.clicked.connect(lambda: self.send_to_analysis_requested.emit(self.stem_name, self.stem_path))
         midi_btn = QtWidgets.QPushButton("转 MIDI")
+        midi_btn.setObjectName("marathonPrimaryBtn")
         midi_btn.clicked.connect(lambda: self.transcribe_midi_requested.emit(self.stem_name, self.stem_path))
         row.addWidget(analyze_btn)
         row.addWidget(midi_btn)
 
-    def apply_theme(self, appearance: Appearance, *, system_is_dark: Optional[bool] = None) -> None:
-        apply_plot_appearance(self.wave_plot, appearance, system_is_dark=system_is_dark)
-        _, _, accent = appearance.effective_colors(system_is_dark=system_is_dark)
-        pen = pg.mkPen(accent, width=1.1)
+    def apply_theme(
+        self,
+        appearance: Appearance,
+        *,
+        system_is_dark: Optional[bool] = None,
+        marathon_variant: Optional[str] = None,
+    ) -> None:
+        if marathon_variant in ("light", "dark"):
+            p = get_marathon_palette(marathon_variant)
+            apply_marathon_plot_theme(self.wave_plot, appearance, marathon_variant)
+            pen = pg.mkPen(p.plot_wave, width=1.1)
+        else:
+            apply_plot_appearance(self.wave_plot, appearance, system_is_dark=system_is_dark)
+            _, _, accent = appearance.effective_colors(system_is_dark=system_is_dark)
+            pen = pg.mkPen(accent, width=1.1)
         self._max_curve.setPen(pen)
         self._min_curve.setPen(pen)
 
@@ -163,6 +178,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.mixer_engine = mixer_engine
         self.plot_appearance = Appearance()
         self._system_is_dark: Optional[bool] = None
+        self._marathon_variant: Optional[str] = None
         self._rows: dict[str, _StemTrackRow] = {}
         self._stem_paths: dict[str, str] = {}
         self._piano_roll_item: Optional[pg.BarGraphItem] = None
@@ -177,10 +193,13 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._cached_hud_txt: str = ""
 
         root = QtWidgets.QVBoxLayout(self)
-        root.setSpacing(8)
+        root.setContentsMargins(10, 8, 10, 10)
+        root.setSpacing(7)
+
+        root.addWidget(TelemetryHeader("STEM WORKSTATION // MIX & MIDI", "分轨混音 · 深度扒谱 · MIDI 转录"))
 
         # AI Job status & progress bar
-        job_box = QtWidgets.QGroupBox("分轨任务")
+        job_box = QtWidgets.QGroupBox("AI SEPARATION // 分轨任务队列")
         job_l = QtWidgets.QHBoxLayout(job_box)
         self.job_status_lbl = QtWidgets.QLabel("空闲：请在下方 120s 历史时间轴选择片段并启动 2-Stem 或 4-Stem 分轨")
         self.job_status_lbl.setWordWrap(True)
@@ -197,7 +216,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         root.addWidget(job_box)
 
         # OOM Recovery Choice Banner (hidden unless OOM occurs)
-        self.oom_banner = QtWidgets.QGroupBox("⚠️ 显存 / 内存不足 (GPU OOM) 恢复选项")
+        self.oom_banner = QtWidgets.QGroupBox("[GUARDRAIL] 显存 / 内存不足 (GPU OOM) 恢复选项")
         self.oom_banner.setObjectName("oomBanner")
         oom_l = QtWidgets.QHBoxLayout(self.oom_banner)
         self.oom_msg_lbl = QtWidgets.QLabel("分离触发 OOM，已安全清理残留内存与临时文件，请选择处理方式：")
@@ -337,6 +356,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.seek_slider.sliderReleased.connect(self._on_seek_released)
         self.seek_slider.valueChanged.connect(self._on_seek_value_changed)
         self.time_lbl = QtWidgets.QLabel("00:00.0 / 00:00.0")
+        self.time_lbl.setObjectName("monoTelemetry")
         self.time_lbl.setMinimumWidth(115)
         scrub_bar.addWidget(self.seek_slider, 1)
         scrub_bar.addWidget(self.time_lbl)
@@ -361,6 +381,8 @@ class StemMixerWidget(QtWidgets.QWidget):
         # Sub-tab 1: Deep Stem Arrangement & Chord Progression Timeline (non-destructive CPU analysis)
         deep_tab = QtWidgets.QWidget()
         deep_l = QtWidgets.QVBoxLayout(deep_tab)
+        deep_l.setContentsMargins(6, 3, 6, 2)
+        deep_l.setSpacing(3)
         analysis_actions = QtWidgets.QHBoxLayout()
         for control in (self.deep_analyze_btn, self.sevenths_chk):
             analysis_actions.addWidget(control)
@@ -377,9 +399,14 @@ class StemMixerWidget(QtWidgets.QWidget):
             "分轨完成后，可在这里分析和弦、调性、贝斯音符和鼓点。"
         )
         self.deep_summary_lbl.setWordWrap(True)
+        self.deep_summary_lbl.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
         self.deep_summary_lbl.setObjectName("bannerNotice")
         set_widget_tone(self.deep_summary_lbl, "info")
         self.chord_timeline_table = QtWidgets.QTableWidget(0, 6)
+        self.chord_timeline_table.setMinimumHeight(48)
         self.chord_timeline_table.setHorizontalHeaderLabels(
             ["开始 (s)", "结束 (s)", "和弦候选", "第二候选", "相关度", "稳定度"]
         )
@@ -390,33 +417,33 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.chord_timeline_table.cellClicked.connect(self._on_chord_row_clicked)
         deep_l.addWidget(self.deep_summary_lbl)
         deep_l.addWidget(self.chord_timeline_table, 1)
-        self.analysis_tabs.addTab(deep_tab, "和弦与节奏")
+        self.analysis_tabs.addTab(deep_tab, "// 01 和弦与节奏")
 
         # Sub-tab 2: Piano Roll (PyQtGraph horizontal bar visualizer + synchronized playhead cursor + click-to-seek)
         pr_tab = QtWidgets.QWidget()
         pr_l = QtWidgets.QVBoxLayout(pr_tab)
-        self.piano_roll_plot = pg.PlotWidget(title="MIDI 钢琴卷帘预览 (Pitch vs Time · 单击画面可跳转播放位置)")
-        self.piano_roll_plot.setBackground("#14161A")
-        self.piano_roll_plot.showGrid(x=True, y=True, alpha=0.25)
+        self.piano_roll_plot = pg.PlotWidget(title="PIANO ROLL // MIDI 钢琴卷帘预览 (单击可跳转播放)")
+        self.piano_roll_plot.setBackground("#F8FAFC")
+        self.piano_roll_plot.showGrid(x=True, y=True, alpha=0.22)
         self.piano_roll_plot.setLabel("bottom", "Time", units="s")
         self.piano_roll_plot.setLabel("left", "Pitch")
         self._piano_roll_cursor = pg.InfiniteLine(
             pos=0.0,
             angle=90,
             movable=False,
-            pen=pg.mkPen("#FF6B6B", width=1.6),
+            pen=pg.mkPen("#EF4444", width=1.6),
         )
         self._piano_roll_cursor.setVisible(False)
         self._piano_roll_cursor.setZValue(20)
         self.piano_roll_plot.addItem(self._piano_roll_cursor)
         self.piano_roll_plot.scene().sigMouseClicked.connect(self._on_piano_roll_clicked)
         pr_l.addWidget(self.piano_roll_plot)
-        self.analysis_tabs.addTab(pr_tab, "MIDI 卷帘")
+        self.analysis_tabs.addTab(pr_tab, "// 02 MIDI 卷帘")
 
         # Sub-tab 3: MIDI Table + Save As
         midi_tab = QtWidgets.QWidget()
         midi_l = QtWidgets.QVBoxLayout(midi_tab)
-        midi_hdr = QtWidgets.QHBoxLayout()
+        midi_actions = QtWidgets.QHBoxLayout()
         self.midi_info_lbl = QtWidgets.QLabel(
             "尚未转录。点轨道右侧「转 MIDI」，或打开已有单轨 WAV。"
         )
@@ -427,19 +454,21 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.midi_settings_btn = QtWidgets.QPushButton("MIDI 环境设置")
         self.midi_settings_btn.clicked.connect(self.midi_settings_requested.emit)
         self.save_midi_btn = QtWidgets.QPushButton("另存 MIDI (.mid)")
+        self.save_midi_btn.setObjectName("marathonPrimaryBtn")
         self.save_midi_btn.setEnabled(False)
         self.save_midi_btn.clicked.connect(self._on_save_midi_clicked)
-        midi_hdr.addWidget(self.midi_info_lbl, 1)
-        midi_hdr.addWidget(self.midi_open_stem_btn)
-        midi_hdr.addWidget(
+        midi_actions.addWidget(self.midi_open_stem_btn)
+        midi_actions.addWidget(
             HelpBadge(
                 "Cubase 兼容单轨 MIDI",
                 "所有导出的 MIDI 均符合标准格式 0 (480 TPB、Tick 0 插入拍号/调号/轨道名与 Controller Reset)，并自动修剪重叠音符，可直接拖入 Cubase / Nuendo。",
             )
         )
-        midi_hdr.addWidget(self.midi_settings_btn)
-        midi_hdr.addWidget(self.save_midi_btn)
-        midi_l.addLayout(midi_hdr)
+        midi_actions.addWidget(self.midi_settings_btn)
+        midi_actions.addStretch(1)
+        midi_actions.addWidget(self.save_midi_btn)
+        midi_l.addLayout(midi_actions)
+        midi_l.addWidget(self.midi_info_lbl)
 
         self.midi_table = QtWidgets.QTableWidget(0, 5)
         self.midi_table.setHorizontalHeaderLabels(["音符", "MIDI 编号", "开始 (s)", "结束 (s)", "力度"])
@@ -448,7 +477,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.midi_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.midi_table.cellClicked.connect(self._on_midi_row_clicked)
         midi_l.addWidget(self.midi_table)
-        self.analysis_tabs.addTab(midi_tab, "MIDI 音符")
+        self.analysis_tabs.addTab(midi_tab, "// 03 MIDI 音符")
 
         rhythm_tab = QtWidgets.QWidget()
         rhythm_layout = QtWidgets.QVBoxLayout(rhythm_tab)
@@ -462,6 +491,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.preview_drums_btn.clicked.connect(self.drum_preview_requested.emit)
         rhythm_header.addWidget(self.preview_drums_btn)
         self.export_drums_btn = QtWidgets.QPushButton("导出鼓点 MIDI")
+        self.export_drums_btn.setObjectName("marathonPrimaryBtn")
         self.export_drums_btn.setEnabled(False)
         self.export_drums_btn.setToolTip("导出检测到的底鼓、军鼓和踩镲，保留原片段中的击打时间，可直接拖入 Cubase。")
         self.export_drums_btn.clicked.connect(self._on_export_drums_clicked)
@@ -474,7 +504,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.rhythm_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.rhythm_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         rhythm_layout.addWidget(self.rhythm_table)
-        self.analysis_tabs.addTab(rhythm_tab, "鼓点")
+        self.analysis_tabs.addTab(rhythm_tab, "// 04 16 步鼓点")
 
         splitter.addWidget(self.analysis_tabs)
         splitter.setChildrenCollapsible(False)
@@ -496,18 +526,33 @@ class StemMixerWidget(QtWidgets.QWidget):
             "practice": [630, 500],
         }[layout])
 
-    def apply_theme(self, appearance: Appearance, *, system_is_dark: Optional[bool] = None) -> None:
+    def apply_theme(
+        self,
+        appearance: Appearance,
+        *,
+        system_is_dark: Optional[bool] = None,
+        marathon_variant: Optional[str] = None,
+    ) -> None:
         self.plot_appearance = appearance
         self._system_is_dark = system_is_dark
+        self._marathon_variant = marathon_variant
         for row in self._rows.values():
-            row.apply_theme(appearance, system_is_dark=system_is_dark)
-        apply_plot_appearance(self.piano_roll_plot, appearance, system_is_dark=system_is_dark)
-        mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
-        _, _, accent = appearance.effective_colors(system_is_dark=system_is_dark)
-        self._piano_roll_cursor.setPen(pg.mkPen("#DC2626" if mode == "light" else "#FF6B6B", width=1.6))
-        if self._piano_roll_item is not None:
-            self._piano_roll_item.setOpts(brush=accent, pen=pg.mkPen(accent, width=0.8))
-        dot_color = QtGui.QColor(accent)
+            row.apply_theme(appearance, system_is_dark=system_is_dark, marathon_variant=marathon_variant)
+        if marathon_variant in ("light", "dark"):
+            p = get_marathon_palette(marathon_variant)
+            apply_marathon_plot_theme(self.piano_roll_plot, appearance, marathon_variant)
+            self._piano_roll_cursor.setPen(pg.mkPen(p.plot_pr_cursor, width=1.6))
+            if self._piano_roll_item is not None:
+                self._piano_roll_item.setOpts(brush=p.accent, pen=pg.mkPen(p.accent_strong, width=0.8))
+            dot_color = QtGui.QColor(p.accent)
+        else:
+            apply_plot_appearance(self.piano_roll_plot, appearance, system_is_dark=system_is_dark)
+            mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
+            _, _, accent = appearance.effective_colors(system_is_dark=system_is_dark)
+            self._piano_roll_cursor.setPen(pg.mkPen("#DC2626" if mode == "light" else "#FF6B6B", width=1.6))
+            if self._piano_roll_item is not None:
+                self._piano_roll_item.setOpts(brush=accent, pen=pg.mkPen(accent, width=0.8))
+            dot_color = QtGui.QColor(accent)
         for r in range(self.rhythm_table.rowCount()):
             for c in range(self.rhythm_table.columnCount()):
                 item = self.rhythm_table.item(r, c)
@@ -779,7 +824,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         set_widget_tone(self.midi_info_lbl, "info")
         if midi_python and Path(midi_python).exists():
             self.midi_info_lbl.setText(
-                f"⏳ 正在通过独立 MIDI 解释器 ({midi_python}) 对 `{self._last_midi_stem_name}` 执行 Spotify Basic Pitch CPU 转录..."
+                f"[BUSY] 正在通过独立 MIDI 解释器 ({midi_python}) 对 `{self._last_midi_stem_name}` 执行 Spotify Basic Pitch CPU 转录..."
             )
         else:
             self.midi_info_lbl.setText(
@@ -789,7 +834,7 @@ class StemMixerWidget(QtWidgets.QWidget):
     def set_midi_error(self, message: str) -> None:
         self.save_midi_btn.setEnabled(False)
         set_widget_tone(self.midi_info_lbl, "error")
-        self.midi_info_lbl.setText(f"❌ {message}")
+        self.midi_info_lbl.setText(f"[ERR] {message}")
 
     def _sync_preset_availability(self, track_names) -> None:
         names = {name.lower() for name in track_names}
@@ -831,13 +876,13 @@ class StemMixerWidget(QtWidgets.QWidget):
         if res.state == AIJobState.COMPLETED:
             self.job_progress.setValue(100)
             self.job_status_lbl.setText(
-                f"✅ 分轨完成 ({res.model_id} | {res.device_used} | 用时 {res.elapsed_sec:.2f}s | 峰值 Worker RAM={res.peak_ram_mb:.1f} MB)"
+                f"[OK] 分轨完成 ({res.model_id} | {res.device_used} | 用时 {res.elapsed_sec:.2f}s | 峰值 Worker RAM={res.peak_ram_mb:.1f} MB)"
             )
             self.oom_banner.setVisible(False)
             self.load_stem_paths(res.stem_paths)
         elif res.state == AIJobState.OOM_ERROR:
             self.job_progress.setValue(0)
-            self.job_status_lbl.setText(f"⚠️ GPU OOM: {res.error}")
+            self.job_status_lbl.setText(f"[WARN] GPU OOM: {res.error}")
             self.oom_msg_lbl.setText(res.error or "显存/内存不足，请选择安全恢复策略：")
             self.oom_banner.setVisible(True)
         else:
@@ -866,7 +911,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         if self._piano_roll_item is not None:
             self.piano_roll_plot.removeItem(self._piano_roll_item)
             self._piano_roll_item = None
-        self.piano_roll_plot.setTitle("MIDI 钢琴卷帘预览 (Pitch vs Time · 单击画面可跳转播放位置)")
+        self.piano_roll_plot.setTitle("PIANO ROLL // MIDI 钢琴卷帘预览 (单击可跳转播放)")
         self.midi_table.setRowCount(0)
         self.rhythm_table.clearContents()
         self.export_drums_btn.setEnabled(False)
@@ -902,7 +947,11 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         for name, state in tracks.items():
             row = _StemTrackRow(name, str(state.path), state.duration_sec)
-            row.apply_theme(self.plot_appearance, system_is_dark=self._system_is_dark)
+            row.apply_theme(
+                self.plot_appearance,
+                system_is_dark=self._system_is_dark,
+                marathon_variant=self._marathon_variant,
+            )
             mins, maxs = self.mixer_engine.get_stem_waveform_envelope(name)
             row.set_waveform(mins, maxs)
             row.mute_changed.connect(self.mixer_engine.set_mute)
@@ -955,16 +1004,19 @@ class StemMixerWidget(QtWidgets.QWidget):
             roots_b = ", ".join(self._tr_note(r) for r in report.bass.root_pitch_classes) or "-"
             if report.bass.modulation_detected:
                 mod_flags.append(report.bass.modulation_note or "贝斯段内调性/最低音区发生转移")
-            mod_suffix = f" | ⚠️ 疑似转调: {'；'.join(mod_flags)}" if mod_flags else ""
+            mod_suffix = f" | [INFO] 疑似转调: {'；'.join(mod_flags)}" if mod_flags else ""
             parts.append(
                 f"贝斯: 最低 {low_disp} ~ 最高 {high_disp} | "
                 f"核心根音 [{roots_b}] | 音符数={len(report.bass.notes)}{mod_suffix}"
             )
         if report.bass is None or not report.bass.notes:
             if mod_flags:
-                parts.append(f"⚠️ 疑似转调: {'；'.join(mod_flags)}")
+                parts.append(f"[INFO] 疑似转调: {'；'.join(mod_flags)}")
 
-        _, _, accent = self.plot_appearance.effective_colors(system_is_dark=self._system_is_dark)
+        if self._marathon_variant in ("light", "dark"):
+            accent = get_marathon_palette(self._marathon_variant).accent
+        else:
+            _, _, accent = self.plot_appearance.effective_colors(system_is_dark=self._system_is_dark)
         if report.drums is not None:
             self.rhythm_table.clearContents()
             has_hits = bool(report.drums.kick_times_sec or report.drums.snare_times_sec or report.drums.hihat_times_sec)
@@ -1033,10 +1085,10 @@ class StemMixerWidget(QtWidgets.QWidget):
             algo_desc = "Spotify Basic Pitch CPU (basic-pitch)"
             set_widget_tone(self.midi_info_lbl, "ok")
         else:
-            algo_desc = f"⚠️ 轻量回退算法 ({backend}，非 Spotify Basic Pitch)"
+            algo_desc = f"[FALLBACK] 轻量回退算法 ({backend}，非 Spotify Basic Pitch)"
             set_widget_tone(self.midi_info_lbl, "warn")
         self.piano_roll_plot.setTitle(
-            f"MIDI 钢琴卷帘预览 ({result.source_stem_name} · 算法: {algo_desc} · 单击画面可跳转播放位置)"
+            f"PIANO ROLL // {result.source_stem_name} · {algo_desc} (单击可跳转播放)"
         )
         warn = f"\n说明: {result.warning}" if result.warning else ""
         self.midi_info_lbl.setText(
@@ -1062,7 +1114,14 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         pr_notes = result.notes[:600]
         if pr_notes:
-            _, _, accent = self.plot_appearance.effective_colors(system_is_dark=self._system_is_dark)
+            if self._marathon_variant in ("light", "dark"):
+                mp = get_marathon_palette(self._marathon_variant)
+                bar_brush = mp.accent
+                bar_pen = pg.mkPen(mp.accent_strong, width=0.8)
+            else:
+                _, _, accent = self.plot_appearance.effective_colors(system_is_dark=self._system_is_dark)
+                bar_brush = accent
+                bar_pen = pg.mkPen(accent, width=0.8)
             starts = np.array([float(n.start_sec) for n in pr_notes], dtype=np.float32)
             widths = np.array([max(0.04, float(n.end_sec - n.start_sec)) for n in pr_notes], dtype=np.float32)
             pitches = np.array([float(n.pitch_midi) for n in pr_notes], dtype=np.float32)
@@ -1071,8 +1130,8 @@ class StemMixerWidget(QtWidgets.QWidget):
                 width=widths,
                 y=pitches,
                 height=0.72,
-                brush=accent,
-                pen=pg.mkPen(accent, width=0.8),
+                brush=bar_brush,
+                pen=bar_pen,
             )
             self.piano_roll_plot.addItem(self._piano_roll_item)
 

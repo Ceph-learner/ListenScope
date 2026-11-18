@@ -29,8 +29,14 @@ from core.system_probe import (
     probe_external_ai_environment,
     probe_external_midi_environment,
 )
-from ui.appearance import set_widget_tone
+from ui.appearance import detect_system_is_dark, set_widget_tone
 from ui.help_badge import HelpBadge, wrap_with_help
+from ui.marathon_style import (
+    TelemetryHeader,
+    get_marathon_palette,
+    marathon_stylesheet,
+    resolve_marathon_variant,
+)
 
 SETTINGS_CATEGORIES = {
     "appearance": ("外观与布局", "切换工作区、黑夜/白天/跟随系统主题、字体字号与数据路径"),
@@ -39,11 +45,18 @@ SETTINGS_CATEGORIES = {
     "status": ("系统诊断", "查看硬件、捕获能力和运行环境"),
 }
 
+SETTINGS_EYEBROWS = {
+    "appearance": "CONFIG // 01 · APPEARANCE & STORAGE",
+    "resources": "CONFIG // 02 · GUARDRAILS & CHUNKING",
+    "midi": "CONFIG // 03 · RUNTIME ENVIRONMENTS",
+    "status": "CONFIG // 04 · HARDWARE DIAGNOSTICS",
+}
 
-def _category_icon(name: str) -> QtGui.QPixmap:
+
+def _category_icon(name: str, color: str = "#7EE2B8") -> QtGui.QPixmap:
     path = get_bundle_root() / "ui" / "assets" / "settings" / f"{name}.svg"
     try:
-        svg = path.read_bytes().replace(b"currentColor", b"#7EE2B8")
+        svg = path.read_bytes().replace(b"currentColor", color.encode("ascii"))
     except OSError:
         return QtGui.QPixmap()
     renderer = QtSvg.QSvgRenderer(QtCore.QByteArray(svg))
@@ -115,12 +128,25 @@ class SettingsDialog(QtWidgets.QDialog):
         ai_python_executable: str = "",
         midi_python_executable: str = "",
         appearance: Appearance = Appearance(),
+        marathon_variant: Optional[str] = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope 设置")
         self.resize(840, 710)
 
+        if marathon_variant is not None:
+            resolved_variant: Optional[str] = marathon_variant or None
+        elif parent is not None and hasattr(parent, "_marathon_variant"):
+            resolved_variant = getattr(parent, "_marathon_variant")
+        else:
+            resolved_variant = resolve_marathon_variant(
+                appearance,
+                system_is_dark=detect_system_is_dark(),
+            )
+
+        self._appearance = appearance
+        self._marathon_variant: Optional[str] = resolved_variant
         self._report = hardware_report
         self._updated_limits: Optional[ResourceLimits] = None
         self._updated_ai_config: Optional[AIConfig] = None
@@ -135,26 +161,30 @@ class SettingsDialog(QtWidgets.QDialog):
         self._bootstrap_finished.connect(self._on_bootstrap_finished, QtCore.Qt.ConnectionType.QueuedConnection)
 
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(22, 18, 22, 16)
-        root.setSpacing(14)
-        title = QtWidgets.QLabel("设置")
-        title.setObjectName("settingsHeading")
-        root.addWidget(title)
+        root.setContentsMargins(20, 16, 20, 14)
+        root.setSpacing(12)
+        self._header = TelemetryHeader(
+            "SYSTEM PREFERENCES // TELEMETRY CONFIG",
+            "系统设置与运行环境管理",
+            badge_text="PORTABLE // LOCAL",
+        )
+        root.addWidget(self._header)
 
         body = QtWidgets.QHBoxLayout()
         body.setSpacing(16)
         navigation = QtWidgets.QWidget()
         navigation.setObjectName("settingsNavigation")
         navigation.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground)
-        navigation.setFixedWidth(166)
+        navigation.setFixedWidth(172)
         nav_layout = QtWidgets.QVBoxLayout(navigation)
         nav_layout.setContentsMargins(8, 8, 8, 8)
         nav_layout.setSpacing(5)
         self._nav_group = QtWidgets.QButtonGroup(self)
         self._nav_group.setExclusive(True)
         self._category_buttons = {}
+        icon_color = self._icon_color(appearance, resolved_variant)
         for key, (label, description) in SETTINGS_CATEGORIES.items():
-            button = QtWidgets.QPushButton(QtGui.QIcon(_category_icon(key)), label)
+            button = QtWidgets.QPushButton(QtGui.QIcon(_category_icon(key, color=icon_color)), label)
             button.setObjectName("settingsNavButton")
             button.setAccessibleDescription(description)
             button.setCheckable(True)
@@ -170,12 +200,15 @@ class SettingsDialog(QtWidgets.QDialog):
         body.addWidget(navigation)
 
         details = QtWidgets.QVBoxLayout()
-        details.setSpacing(8)
+        details.setSpacing(6)
+        self._page_eyebrow = QtWidgets.QLabel()
+        self._page_eyebrow.setObjectName("telemetryEyebrow")
         self._title = QtWidgets.QLabel()
         self._title.setObjectName("settingsPageHeading")
         self._subtitle = QtWidgets.QLabel()
         self._subtitle.setObjectName("settingsSubtitle")
         self._subtitle.setWordWrap(True)
+        details.addWidget(self._page_eyebrow)
         details.addWidget(self._title)
         details.addWidget(self._subtitle)
         self._pages = QtWidgets.QStackedWidget()
@@ -191,7 +224,7 @@ class SettingsDialog(QtWidgets.QDialog):
         appearance_layout.setContentsMargins(0, 4, 0, 0)
         appearance_layout.setSpacing(12)
 
-        appearance_box = QtWidgets.QGroupBox("当前外观与字体配置")
+        appearance_box = QtWidgets.QGroupBox("APPEARANCE // 当前外观与字体配置")
         appearance_form = QtWidgets.QFormLayout(appearance_box)
         appearance_form.setVerticalSpacing(12)
         self._theme_summary = QtWidgets.QLabel()
@@ -213,7 +246,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         appearance_layout.addWidget(appearance_box)
 
-        storage_box = QtWidgets.QGroupBox("同级目录保存位置（默认不写入 C 盘系统目录）")
+        storage_box = QtWidgets.QGroupBox("PORTABLE STORAGE // 同级目录保存位置（默认不写入 C 盘）")
         storage_form = QtWidgets.QFormLayout(storage_box)
         storage_form.setVerticalSpacing(10)
         app_root = get_app_root()
@@ -288,10 +321,15 @@ class SettingsDialog(QtWidgets.QDialog):
 
         # Page 3: ResourceLimits & AIConfig
         cfg_tab = QtWidgets.QWidget()
-        form = QtWidgets.QFormLayout(cfg_tab)
+        cfg_outer = QtWidgets.QVBoxLayout(cfg_tab)
+        cfg_outer.setContentsMargins(0, 4, 0, 0)
+        cfg_outer.setSpacing(12)
+
+        guard_box = QtWidgets.QGroupBox("GUARDRAILS // 8GB 显存与 16GB 系统内存保护阈值")
+        form = QtWidgets.QFormLayout(guard_box)
         form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(12)
+        form.setVerticalSpacing(11)
 
         self.min_ram_spin = QtWidgets.QDoubleSpinBox()
         self.min_ram_spin.setRange(2560, 32768)
@@ -348,7 +386,14 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("GPU 2-Stem 最低空闲显存 (min_vram_2stem):", self.vram_2s_spin)
         form.addRow("GPU 4-Stem 最低空闲显存 (min_vram_4stem):", self.vram_4s_spin)
         form.addRow("桌面/QQ音乐保留最低空闲显存 (critical_vram_free):", self.crit_vram_spin)
-        form.addRow(
+        cfg_outer.addWidget(guard_box)
+
+        chunk_box = QtWidgets.QGroupBox("CHUNKING & MODELS // 流式分块与实验模型")
+        chunk_form = QtWidgets.QFormLayout(chunk_box)
+        chunk_form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
+        chunk_form.setHorizontalSpacing(18)
+        chunk_form.setVerticalSpacing(11)
+        chunk_form.addRow(
             "离线音频流式分块长度:",
             wrap_with_help(
                 self.chunk_sec_spin,
@@ -356,7 +401,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 "长音频会切分为固定秒数重叠分块依次送入 AI 子进程，防止 8GB 显存 / 16GB 内存峰值溢出；实测推荐 6.0s。",
             )[0],
         )
-        form.addRow(
+        chunk_form.addRow(
             "HTDemucs 4-Stem 模型分段:",
             wrap_with_help(
                 self.demucs_seg_spin,
@@ -364,7 +409,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 "仅控制 4 轨 HTDemucs 单段推理窗口长度（4–10s，实测默认 6s）。若偶发显存紧张会自动回落，不影响 MDX 二轨。",
             )[0],
         )
-        form.addRow("高显存模型解锁:", self.roformer_chk)
+        chunk_form.addRow("高显存模型解锁:", self.roformer_chk)
+        cfg_outer.addWidget(chunk_box)
+        cfg_outer.addStretch(1)
         self._add_page("resources", cfg_tab, scroll=True)
 
         # Page 4: Turnkey AI & MIDI Environment + Auto-Bootstrap
@@ -373,7 +420,7 @@ class SettingsDialog(QtWidgets.QDialog):
         env_layout.setContentsMargins(0, 4, 0, 0)
         env_layout.setSpacing(14)
 
-        bootstrap_group = QtWidgets.QGroupBox("零配置集成 / 一键修复本地运行环境")
+        bootstrap_group = QtWidgets.QGroupBox("TURNKEY BOOTSTRAP // 零配置集成与一键修复运行环境")
         bootstrap_layout = QtWidgets.QVBoxLayout(bootstrap_group)
         bootstrap_layout.setSpacing(8)
         ff_path = find_ffmpeg_executable()
@@ -462,8 +509,8 @@ class SettingsDialog(QtWidgets.QDialog):
         set_widget_tone(self.midi_probe_result_lbl, "info")
 
         for gtitle, glabel, controls, feedback in (
-            ("分轨环境", "AI Worker Python", py_row, self.ai_probe_result_lbl),
-            ("转录环境", "MIDI Python 3.11", midi_py_row, self.midi_probe_result_lbl),
+            ("AI WORKER // 分轨运行环境", "AI Worker Python", py_row, self.ai_probe_result_lbl),
+            ("MIDI WORKER // 转录运行环境", "MIDI Python 3.11", midi_py_row, self.midi_probe_result_lbl),
         ):
             group = QtWidgets.QGroupBox(gtitle)
             section = QtWidgets.QFormLayout(group)
@@ -493,8 +540,36 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._orig_limits = resource_limits
         self._orig_ai_cfg = ai_config
+        self.apply_skin(appearance, marathon_variant=self._marathon_variant or "")
         self.open_category("appearance")
         self._category_buttons["appearance"].setFocus()
+
+    @staticmethod
+    def _icon_color(appearance: Appearance, marathon_variant: Optional[str]) -> str:
+        if marathon_variant == "light":
+            return get_marathon_palette("light").accent_strong
+        if marathon_variant == "dark":
+            return get_marathon_palette("dark").accent_hover
+        _, _, accent = appearance.effective_colors(system_is_dark=detect_system_is_dark())
+        return accent
+
+    def apply_skin(self, appearance: Appearance, *, marathon_variant: Optional[str] = None) -> None:
+        self._appearance = appearance
+        if marathon_variant is not None:
+            self._marathon_variant = marathon_variant or None
+        else:
+            self._marathon_variant = resolve_marathon_variant(
+                appearance,
+                system_is_dark=detect_system_is_dark(),
+            )
+        icon_color = self._icon_color(appearance, self._marathon_variant)
+        for key, btn in self._category_buttons.items():
+            btn.setIcon(QtGui.QIcon(_category_icon(key, color=icon_color)))
+        if self.parent() is None:
+            if self._marathon_variant in ("light", "dark"):
+                self.setStyleSheet(marathon_stylesheet(appearance, self._marathon_variant))
+            else:
+                self.setStyleSheet("")
 
     def _add_page(self, key: str, widget: QtWidgets.QWidget, *, scroll: bool = False) -> None:
         if scroll:
@@ -526,6 +601,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._category_buttons[key].setChecked(True)
         self._pages.setCurrentWidget(self._page_map[key])
         title, subtitle = SETTINGS_CATEGORIES[key]
+        self._page_eyebrow.setText(SETTINGS_EYEBROWS.get(key, "CONFIG // TELEMETRY"))
         self._title.setText(title)
         self._subtitle.setText(subtitle)
 
@@ -547,7 +623,7 @@ class SettingsDialog(QtWidgets.QDialog):
             warn_text = r.gpu_ai_block_reason or ""
             if not r.is_windows:
                 warn_text = (
-                    f"⚠️ 当前在 {r.os_system} 运行：WASAPI Process Loopback 与 RTX 5060 Ti CUDA 未在 Windows 真机验证。\n"
+                    f"[WARN] 当前在 {r.os_system} 运行：WASAPI Process Loopback 与 RTX 5060 Ti CUDA 未在 Windows 真机验证。\n"
                     + warn_text
                 )
             self.status_alert_lbl.setText(warn_text.strip())
@@ -572,7 +648,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if sys.platform != "win32":
             set_widget_tone(self.bootstrap_status_lbl, "warn")
             self.bootstrap_status_lbl.setText(
-                "⚠️ 当前非 Windows 系统，不能直接执行 Windows 一键脚本 `scripts/setup_windows.ps1`；"
+                "[WARN] 当前非 Windows 系统，不能直接执行 Windows 一键脚本 `scripts/setup_windows.ps1`；"
                 "在 Windows 11 本机上点击此按钮即可自动安装到软件同级目录。"
             )
             return
@@ -582,13 +658,13 @@ class SettingsDialog(QtWidgets.QDialog):
             script_path = get_app_root() / "scripts" / "setup_windows.ps1"
         if not script_path.exists():
             set_widget_tone(self.bootstrap_status_lbl, "error")
-            self.bootstrap_status_lbl.setText(f"❌ 找不到初始化脚本: {script_path}")
+            self.bootstrap_status_lbl.setText(f"[ERR] 找不到初始化脚本: {script_path}")
             return
 
         pwsh_exe = shutil.which("pwsh") or shutil.which("powershell")
         if not pwsh_exe:
             set_widget_tone(self.bootstrap_status_lbl, "error")
-            self.bootstrap_status_lbl.setText("❌ 找不到 PowerShell (`pwsh` / `powershell`)。")
+            self.bootstrap_status_lbl.setText("[ERR] 找不到 PowerShell (`pwsh` / `powershell`)。")
             return
 
         app_root = get_app_root()
@@ -619,7 +695,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setup_all_btn.setEnabled(False)
         self.setup_midi_only_btn.setEnabled(False)
         set_widget_tone(self.bootstrap_status_lbl, "info")
-        self.bootstrap_status_lbl.setText("⏳ 正在执行一键环境初始化，请稍候（将在软件同级目录建立隔离环境）...")
+        self.bootstrap_status_lbl.setText("[BUSY] 正在执行一键环境初始化，请稍候（将在软件同级目录建立隔离环境）...")
 
         def _worker() -> None:
             last_lines: list[str] = []
@@ -649,20 +725,20 @@ class SettingsDialog(QtWidgets.QDialog):
                 rc = proc.wait()
                 if not self._dialog_closed:
                     if rc == 0:
-                        self._bootstrap_finished.emit(True, "✅ 一键环境初始化完成，正在自动识别并验证解释器...")
+                        self._bootstrap_finished.emit(True, "[OK] 一键环境初始化完成，正在自动识别并验证解释器...")
                     else:
                         tail = "\n".join(last_lines[-4:])
-                        self._bootstrap_finished.emit(False, f"❌ 初始化失败 (exit={rc}):\n{tail}")
+                        self._bootstrap_finished.emit(False, f"[ERR] 初始化失败 (exit={rc}):\n{tail}")
             except Exception as exc:
                 if not self._dialog_closed:
-                    self._bootstrap_finished.emit(False, f"❌ 启动初始化脚本失败: {exc}")
+                    self._bootstrap_finished.emit(False, f"[ERR] 启动初始化脚本失败: {exc}")
 
         threading.Thread(target=_worker, name="ListenScope-TurnkeySetup", daemon=True).start()
 
     @QtCore.Slot(str)
     def _on_bootstrap_progress(self, tail: str) -> None:
         if not self._dialog_closed:
-            self.bootstrap_status_lbl.setText(f"⏳ 初始化进度:\n{tail}")
+            self.bootstrap_status_lbl.setText(f"[BUSY] 初始化进度:\n{tail}")
 
     @QtCore.Slot(bool, str)
     def _on_bootstrap_finished(self, ok: bool, message: str) -> None:
@@ -718,7 +794,7 @@ class SettingsDialog(QtWidgets.QDialog):
         target_py = self.ai_python_edit.text().strip()
         self.verify_ai_env_btn.setEnabled(False)
         set_widget_tone(self.ai_probe_result_lbl, "info")
-        self.ai_probe_result_lbl.setText("⏳ 正在启动子进程检测 AI Python 环境 (CUDA / sm_120 / ONNX / Demucs / FFmpeg)...")
+        self.ai_probe_result_lbl.setText("[BUSY] 正在启动子进程检测 AI Python 环境 (CUDA / sm_120 / ONNX / Demucs / FFmpeg)...")
 
         def _worker() -> None:
             res = probe_external_ai_environment(target_py)
@@ -735,7 +811,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.verify_midi_env_btn.setEnabled(False)
         set_widget_tone(self.midi_probe_result_lbl, "info")
         self.midi_probe_result_lbl.setText(
-            "⏳ 正在启动子进程检测独立 CPU MIDI 环境 (Basic Pitch / TensorFlow / pkg_resources / mido)..."
+            "[BUSY] 正在启动子进程检测独立 CPU MIDI 环境 (Basic Pitch / TensorFlow / pkg_resources / mido)..."
         )
 
         def _worker() -> None:
@@ -756,7 +832,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if not isinstance(result, dict) or not result.get("ok"):
             self._verified_ai_probe = None
             err = result.get("error", "未知错误") if isinstance(result, dict) else str(result)
-            self.ai_probe_result_lbl.setText(f"❌ 检测失败: {err}")
+            self.ai_probe_result_lbl.setText(f"[ERR] 检测失败: {err}")
             set_widget_tone(self.ai_probe_result_lbl, "error")
             return
 
@@ -802,7 +878,7 @@ class SettingsDialog(QtWidgets.QDialog):
             err = result.get("error", "未知错误") if isinstance(result, dict) else str(result)
             guide = result.get("setup_guide", MIDI_ENV_SETUP_GUIDE) if isinstance(result, dict) else MIDI_ENV_SETUP_GUIDE
             msg = err if guide in err else f"{err}\n{guide}"
-            self.midi_probe_result_lbl.setText(f"❌ MIDI 环境不可用: {msg}")
+            self.midi_probe_result_lbl.setText(f"[ERR] MIDI 环境不可用: {msg}")
             set_widget_tone(self.midi_probe_result_lbl, "error")
             return
 

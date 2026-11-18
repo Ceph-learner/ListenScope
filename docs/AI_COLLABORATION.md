@@ -199,3 +199,13 @@ Command Code GOAT `deepseek/deepseek-v4.1-flash` 23.2 秒，输入 12,993，输�
 - **采纳设计**：`ChordPracticeDialog` 新增 `_PracticeTableDelegate` 剥离第 0 行焦点缩进并统一左/居中对齐；`analysis/stem_analyzer.py` 实现 `28–350 Hz` FFT-YIN + 2 倍谐波抑制 + 半程转调检测；抽取共享 `analysis/midi_common.py` 统一三类导出的 Cubase SMF Type-0 (`480 TPB`)、等音规范化 `key_signature`、Controller Reset 与防音符粘连；`core/appearance.py` / `ui/appearance.py` 接入黑夜/白天/跟随系统、字体扫描、实时预览与恢复默认；`core/paths.py` 与 `scripts/installer.iss` / `setup_windows.ps1` / `build_windows.ps1` 实现同级便携存储、零配置运行时探测与 Inno Setup 6 安装模板。
 - **离屏预览与复核修正的 5 项缺陷**：通过 PySide6 `offscreen` 截图与定向测试先后发现并修复 `SettingsDialog.update_appearance_summary` 对 `THEME_MODES` 字符串做 `[0]` 切片导致仅显示首字的问题、1280px 宽度下顶部 `ResourceMonitorBar` 文本截断、Tab 标签 `&` 误渲染助记下划线、`midi_table` 窄视口横向滚动溢出，以及 Light Lenso 模式下 Chroma 顶部三卡片底行文字垂直裁剪。
 - **验证与待补项**：云端 Linux `QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 共 **188 通过、6 跳过**（6 项为 Windows WASAPI / WinRT / PowerShell 专属测试），同步核对 5 张原生长离屏预览图；`ISCC.exe` 编译与干净非 C 盘安装、Cubase 实际拖入、Windows 11 系统主题实时切换、真实声卡与 RTX 5060 Ti 8GB 真机分轨均留待目标机复测。
+
+## 2026-11-18 · 「马拉松」主题集成与隔离扁平控件重塑
+
+本轮在云端 Linux 环境基于 `main` (`2a9c335`, PR #23) 于分支 `design/marathon-ui-preview` 进行，未调用外部 OpenCode / Command Code CLI；先输出独立的 Marathon 双模原型供用户评审，再正式集成进设置预设并在用户指出原生 Fusion 控件存在 Win98/XP 式 3D 凸起后完成严格隔离重塑（代码证据提交 `549aecf`）。
+
+- **采纳设计与隔离策略**：
+  1. 在 [`core/appearance.py`](../core/appearance.py) 新增第 5 档预设 `marathon`（黑夜遥测 `#0B1016` / 临床冷白 `#EEF2F6`，信号青绿 `#00A878`，禁用暖黄/琥珀色），仅当 `preset == "marathon"` 且未覆写自定义颜色时启用 [`ui/marathon_style.py`](../ui/marathon_style.py)（`ChamferBadge` 切角铭牌、`TelemetryHeader` 双语标题头、顶栏 `临床冷白 / 暗夜遥测` 快切胶囊并写回 `settings.json`，以及切回 `经典`/`Lenso` 时的完整回退规则）。
+  2. 将扁平化 `QComboBox`（无边框透明 `::drop-down` + 自定义矢量箭头）、`QSpinBox`/`QDoubleSpinBox`、`QGroupBox` 内嵌左绿杠标题、`QPushButton` 统一高度基线、`QSlider`、`QCheckBox`/`QRadioButton` 与 `QScrollArea`/`QScrollBar` 全部隔离在 [`_marathon_controls_qss`](../ui/marathon_style.py#L343) 与随包 SVG 资产（`ui/assets/marathon_*.svg`，同步收录于 [`packaging/listenscope_core.spec`](../packaging/listenscope_core.spec)），彻底消除 Fusion 3D 凸起斜角且零影响其他主题。
+- **离屏视觉核对与顺带修正**：审阅 10 张 `PySide6` `offscreen` 截图期间发现分轨混音底栏 `deep_summary_lbl`（`Melody (vocals)` 行）在 `870 px` 高度下存在底部 3–6 px 裁切，遂在 [`ui/mixer_widget.py`](../ui/mixer_widget.py) 调整子页布局内距/间距与 `chord_timeline_table.setMinimumHeight(48)` 解决；其余 1280×800 窄窗、设置/外观/和弦练习弹窗及经典回退对照均核验无异常。
+- **验证与待补项**：代码提交 `549aecf` 上运行 `QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 共 **`189 passed, 6 skipped`**（其中定向外观与主题回归 `12 passed`）；Windows PyInstaller 打包 exe 对 `marathon_*.svg` 的路径加载、实机 `125%/150%` DPI 缩放及原 PR #23 待机实测项留待目标机补验。
