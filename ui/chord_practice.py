@@ -6,6 +6,7 @@ from collections.abc import Callable
 from math import isfinite
 from pathlib import Path
 import re
+from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
 
@@ -22,10 +23,12 @@ from analysis.chord_practice import (
 )
 from analysis.chords import transpose_chord_symbol, transpose_key_label
 from audio.drum_preview import DrumPreviewPlayer
+from core.appearance import Appearance
 from core.models import KeyEstimate
 from core.paths import default_export_dir
 from ui.appearance import set_widget_tone
 from ui.help_badge import HelpBadge
+from ui.marathon_style import TelemetryHeader, marathon_stylesheet
 
 
 class _PracticeTableDelegate(QtWidgets.QStyledItemDelegate):
@@ -54,11 +57,14 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         detected_bpm: float | None = None,
         preview_player: DrumPreviewPlayer | None = None,
         before_play: Callable[[], str | None] | None = None,
+        marathon_variant: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("练习和弦")
-        self.resize(740, 510)
+        self.setWindowTitle("练习和弦 // CHORD PRACTICE")
+        self.resize(760, 530)
         self.setMinimumSize(640, 440)
+        if parent is None and marathon_variant in ("light", "dark"):
+            self.setStyleSheet(marathon_stylesheet(Appearance(), marathon_variant))
 
         self._raw_recent = tuple(recent)
         self._transpose = int(transpose)
@@ -87,24 +93,25 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         self._snapshot_card.setObjectName("practiceCard")
         snap_layout = QtWidgets.QVBoxLayout(self._snapshot_card)
         snap_layout.setContentsMargins(12, 9, 12, 9)
-        snap_layout.setSpacing(4)
+        snap_layout.setSpacing(5)
 
-        snap_header = QtWidgets.QHBoxLayout()
-        snap_title = QtWidgets.QLabel("原曲快照参考")
-        snap_title.setObjectName("practiceSectionTitle")
-        snap_note = QtWidgets.QLabel("模板独立于原曲检测 · 仅参考打开窗口时的最近和弦")
+        capo_badge = f"CAPO // {self._transpose:+d} ST" if self._transpose else "CONCERT // PITCH"
+        self._snap_header = TelemetryHeader(
+            "CHORD PRACTICE // SNAPSHOT",
+            "原曲快照参考",
+            badge_text=capo_badge,
+        )
+        snap_note = QtWidgets.QLabel("仅参考打开时最近和弦")
         snap_note.setObjectName("chromaCaption")
-        snap_header.addWidget(snap_title)
-        snap_header.addStretch(1)
-        snap_header.addWidget(snap_note)
-        snap_layout.addLayout(snap_header)
+        self._snap_header.add_right_widget(snap_note)
+        snap_layout.addWidget(self._snap_header)
 
         key_text = (
             f"{estimate.primary}（稳定度: {estimate.stability}）"
             if estimate is not None and estimate.primary not in ("", "Unknown", "Insufficient")
             else "未检测到稳定调性"
         )
-        mod_text = " · ⚠️ 检测到可能转调，建议对比原曲确认调性" if (estimate is not None and estimate.modulation_hint) else ""
+        mod_text = " · [WARN] 检测到可能转调，建议对比原曲确认调性" if (estimate is not None and estimate.modulation_hint) else ""
         det_bpm_text = (
             f" · 检测速度: {float(detected_bpm):.1f} BPM"
             if detected_bpm is not None and isfinite(float(detected_bpm)) and float(detected_bpm) > 0
@@ -207,12 +214,12 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         footer = QtWidgets.QHBoxLayout()
         footer.setSpacing(8)
         self._preview_btn = QtWidgets.QPushButton("试听进行")
-        self._preview_btn.setObjectName("analysisAction")
         self._preview_btn.setAutoDefault(False)
         self._preview_btn.setToolTip("按当前速度与实音口径在本地合成试听所选和弦进行")
         self._preview_btn.clicked.connect(self._on_preview_clicked)
 
         self._export_midi_btn = QtWidgets.QPushButton("导出进行 MIDI")
+        self._export_midi_btn.setObjectName("marathonPrimaryBtn")
         self._export_midi_btn.setAutoDefault(False)
         self._export_midi_btn.setToolTip("将所选进行按当前速度、调号与实音口径导出为 Cubase 兼容标准 MIDI (.mid)")
         self._export_midi_btn.clicked.connect(self._on_export_midi_clicked)

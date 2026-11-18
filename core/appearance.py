@@ -9,12 +9,14 @@ PRESETS = {
     "lenso": ("Lenso", "#131B2B", "#EFF5FF", "#A3C6FF"),
     "codex": ("Codex", "#141417", "#ECECF0", "#ACAEFF"),
     "claude": ("Claude Code", "#201B18", "#F1E5D8", "#DF9B7B"),
+    "marathon": ("马拉松", "#0B1016", "#E8EEF5", "#00A878"),
 }
 LIGHT_PRESETS = {
     "classic": ("经典 · 白天", "#F4F6FA", "#181D25", "#0E8A6D"),
     "lenso": ("Lenso · 白天", "#EEF4FC", "#152238", "#2563EB"),
     "codex": ("Codex · 白天", "#F5F5F8", "#18181F", "#4F46E5"),
     "claude": ("Claude Code · 白天", "#FAF5F0", "#2A211B", "#B45309"),
+    "marathon": ("马拉松 · 白天", "#EEF2F6", "#090D14", "#00A878"),
 }
 THEME_MODES = {
     "dark": "黑夜",

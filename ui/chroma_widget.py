@@ -21,9 +21,15 @@ from analysis.chroma import PITCH_CLASSES
 from audio.drum_preview import DrumPreviewPlayer
 from audio.metronome import TapTempoTracker
 from core.models import AnalysisSnapshot
-from ui.appearance import set_widget_tone
+from ui.appearance import apply_plot_appearance, set_widget_tone
 from ui.chord_practice import ChordPracticeDialog
 from ui.help_badge import HelpBadge
+from ui.marathon_style import (
+    TelemetryHeader,
+    apply_marathon_plot_theme,
+    get_marathon_palette,
+    marathon_colormap_lut,
+)
 
 
 TRANSPOSE_PRESETS: list[tuple[str, int]] = [
@@ -45,19 +51,19 @@ TRANSPOSE_PRESETS: list[tuple[str, int]] = [
 class TuningCentsBar(QtWidgets.QWidget):
     """Lightweight horizontal -50c..+50c pitch-accuracy needle indicator with smooth glide animation."""
 
-    COLOR_IN_TUNE = "#2EC27E"
-    COLOR_SLIGHT = "#F5A623"
-    COLOR_OFF = "#FF6B6B"
-    COLOR_IDLE = "#5A6370"
+    COLOR_IN_TUNE = "#00A878"
+    COLOR_SLIGHT = "#0284C7"
+    COLOR_OFF = "#EF4444"
+    COLOR_IDLE = "#64748B"
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._has_signal: bool = False
         self._cents: float = 0.0
         self._display_cents: float = 0.0
-        self._track_bg: str = "#1C2026"
-        self._track_border: str = "#2C323C"
-        self._center_tick: str = "#9AA4B2"
+        self._track_bg: str = "#E2E8F0"
+        self._track_border: str = "#CBD5E1"
+        self._center_tick: str = "#334155"
         self._color_in_tune: str = self.COLOR_IN_TUNE
         self._color_slight: str = self.COLOR_SLIGHT
         self._color_off: str = self.COLOR_OFF
@@ -70,7 +76,7 @@ class TuningCentsBar(QtWidgets.QWidget):
 
         self.setFixedHeight(18)
         self.setMinimumWidth(140)
-        self.setToolTip("实时主音高音准偏离条 (-50 ~ +50 cents；绿色 ±10c 为准音区间)")
+        self.setToolTip("实时主音高音准偏离条 (-50 ~ +50 cents；青绿色 ±10c 为准音区间，科技蓝 ±25c 微偏)")
 
     def _on_anim_value(self, value: object) -> None:
         try:
@@ -85,10 +91,10 @@ class TuningCentsBar(QtWidgets.QWidget):
         track_bg: str,
         track_border: str,
         center_tick: str,
-        in_tune: str = "#2EC27E",
-        slight: str = "#F5A623",
-        off: str = "#FF6B6B",
-        idle: str = "#5A6370",
+        in_tune: str = "#00A878",
+        slight: str = "#0284C7",
+        off: str = "#EF4444",
+        idle: str = "#64748B",
     ) -> None:
         self._track_bg = track_bg
         self._track_border = track_border
@@ -168,19 +174,19 @@ class TuningCentsBar(QtWidgets.QWidget):
         track = QtCore.QRectF(pad, 3.0, max(1.0, rect.width() - 2 * pad), max(4.0, rect.height() - 6.0))
         p.setPen(QtGui.QPen(QtGui.QColor(self._track_border), 1.0))
         p.setBrush(QtGui.QColor(self._track_bg))
-        p.drawRoundedRect(track, 4.0, 4.0)
+        p.drawRoundedRect(track, 3.0, 3.0)
 
-        # Green center ±10 cents band
+        # Signal cyan-green center ±10 cents zone
         band_w = track.width() * 0.20
         center_x = track.center().x()
         band_rect = QtCore.QRectF(center_x - band_w * 0.5, track.top() + 1.0, band_w, max(2.0, track.height() - 2.0))
         in_tune_col = QtGui.QColor(self._color_in_tune)
-        in_tune_col.setAlpha(48)
+        in_tune_col.setAlpha(44)
         p.setPen(QtCore.Qt.PenStyle.NoPen)
         p.setBrush(in_tune_col)
         p.drawRect(band_rect)
 
-        # Center 0c tick & side ticks
+        # Center 0c tick
         p.setPen(QtGui.QPen(QtGui.QColor(self._center_tick), 1.0))
         p.drawLine(QtCore.QPointF(center_x, track.top() + 1.0), QtCore.QPointF(center_x, track.bottom() - 1.0))
 
@@ -188,11 +194,10 @@ class TuningCentsBar(QtWidgets.QWidget):
             ratio = (self._display_cents + 50.0) / 100.0
             nx = track.left() + ratio * track.width()
             col = QtGui.QColor(self.zone_color)
-            p.setPen(QtGui.QPen(col, 2.0))
-            p.drawLine(QtCore.QPointF(nx, track.top() + 1.0), QtCore.QPointF(nx, track.bottom() - 1.0))
+            p.setPen(QtGui.QPen(col, 1.0))
             p.setBrush(col)
-            p.setPen(QtCore.Qt.PenStyle.NoPen)
-            p.drawEllipse(QtCore.QPointF(nx, track.center().y()), 4.0, 4.0)
+            needle = QtCore.QRectF(nx - 2.0, track.top() + 1.0, 4.0, max(2.0, track.height() - 2.0))
+            p.drawRoundedRect(needle, 1.0, 1.0)
 
         p.end()
 
@@ -221,9 +226,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._practice_preview_player: DrumPreviewPlayer | None = None
         self._practice_before_play: Callable[[], str | None] | None = None
         self._active_practice_dialog: ChordPracticeDialog | None = None
+        self._default_chroma_lut: np.ndarray | None = None
 
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
+        root.setContentsMargins(10, 8, 10, 10)
         root.setSpacing(8)
 
         # Harmonic summary cards (top)
@@ -231,12 +237,15 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         cards.setSpacing(8)
 
         # Chord card
-        chord_box = QtWidgets.QGroupBox("和弦推测 (Major / Minor)")
+        chord_box = QtWidgets.QFrame()
+        chord_box.setProperty("marathonCard", True)
+        chord_box.setProperty("accentRail", "primary")
         chord_box.setToolTip("12 Major / 12 Minor / N / Unknown")
         chord_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         chord_l = QtWidgets.QVBoxLayout(chord_box)
         chord_l.setContentsMargins(10, 8, 10, 8)
         chord_l.setSpacing(4)
+        chord_l.addWidget(TelemetryHeader("CHORD // 01", "和弦推测", badge_text="MAJ / MIN"))
         self.chord_primary_lbl = QtWidgets.QLabel("N (静音)")
         self.chord_primary_lbl.setObjectName("chromaPrimary")
         self.chord_tones_lbl = QtWidgets.QLabel("构成音: -")
@@ -259,12 +268,15 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         cards.addWidget(chord_box, 3)
 
         # Key card
-        key_box = QtWidgets.QGroupBox("调性推测 (K-S 滑动窗口)")
+        key_box = QtWidgets.QFrame()
+        key_box.setProperty("marathonCard", True)
+        key_box.setProperty("accentRail", "secondary")
         key_box.setToolTip("Krumhansl-Schmuckler 滑动窗口")
         key_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         key_l = QtWidgets.QVBoxLayout(key_box)
         key_l.setContentsMargins(10, 8, 10, 8)
         key_l.setSpacing(4)
+        key_l.addWidget(TelemetryHeader("TONALITY // 02", "调性推测", badge_text="K-S WINDOW"))
         self.key_primary_lbl = QtWidgets.QLabel("Unknown")
         self.key_primary_lbl.setObjectName("chromaSecondaryHero")
         self.key_secondary_lbl = QtWidgets.QLabel("第二候选: -")
@@ -287,11 +299,14 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         cards.addWidget(key_box, 3)
 
         # BPM + Pitch + CPU Practice Metronome card
-        rhythm_box = QtWidgets.QGroupBox("BPM · 主音高 · 纯 CPU 练习节拍器")
+        rhythm_box = QtWidgets.QFrame()
+        rhythm_box.setProperty("marathonCard", True)
+        rhythm_box.setProperty("accentRail", "obsidian")
         rhythm_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         rhythm_l = QtWidgets.QVBoxLayout(rhythm_box)
         rhythm_l.setContentsMargins(10, 8, 10, 8)
         rhythm_l.setSpacing(4)
+        rhythm_l.addWidget(TelemetryHeader("TEMPO & PITCH // 03", "节拍 · 音高 · CPU 节拍器", badge_text="SYNTH CLICK"))
 
         self.bpm_lbl = QtWidgets.QLabel("BPM: Unknown")
         self.bpm_lbl.setObjectName("chromaWarnHero")
@@ -459,23 +474,24 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._chroma_bar_heights = np.zeros(12, dtype=np.float32)
         self._label_cache: dict[int, str] = {}
 
-        self.chroma_bar_plot = pg.PlotWidget(title="实时 12-Bin Chroma 分布")
-        self.chroma_bar_plot.setBackground("#14161A")
+        self.chroma_bar_plot = pg.PlotWidget(title="12-BIN CHROMA // 实时色度分布")
+        self.chroma_bar_plot.setBackground("#F8FAFC")
         self.chroma_bar_plot.setYRange(0.0, 1.05)
-        self.chroma_bar_plot.showGrid(x=False, y=True, alpha=0.25)
+        self.chroma_bar_plot.showGrid(x=False, y=True, alpha=0.22)
         ax = self.chroma_bar_plot.getAxis("bottom")
         ax.setTicks([[(i, name) for i, name in enumerate(PITCH_CLASSES)]])
         self._bar_item = pg.BarGraphItem(
             x=np.arange(12, dtype=np.float32),
             height=self._chroma_bar_heights,
             width=0.65,
-            brush="#4EA8DE",
+            brush="#00A878",
+            pen=pg.mkPen("#008F66", width=0.8),
         )
         self.chroma_bar_plot.addItem(self._bar_item)
         splitter.addWidget(self.chroma_bar_plot)
 
-        self.chroma_hist_plot = pg.PlotWidget(title="有界 Chroma 时序热图 (最多保留 120s)")
-        self.chroma_hist_plot.setBackground("#14161A")
+        self.chroma_hist_plot = pg.PlotWidget(title="CHROMA HEATMAP // 有界时序热图 (120s)")
+        self.chroma_hist_plot.setBackground("#F8FAFC")
         ay = self.chroma_hist_plot.getAxis("left")
         note_font = QtGui.QFont(self.font())
         note_font.setPixelSize(10)
@@ -490,7 +506,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         except Exception:
             cmap = None
         if cmap is not None:
-            self._chroma_img.setLookupTable(cmap.getLookupTable(0.0, 1.0, 256))
+            self._default_chroma_lut = cmap.getLookupTable(0.0, 1.0, 256)
+        self._chroma_img.setLookupTable(marathon_colormap_lut("chroma", "light"))
         self.chroma_hist_plot.addItem(self._chroma_img)
         splitter.addWidget(self.chroma_hist_plot)
 
@@ -705,7 +722,32 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self._label_cache[key] = text
             label.setText(text)
 
-    def apply_theme(self, appearance, *, system_is_dark: bool | None = None) -> None:
+    def apply_theme(
+        self,
+        appearance,
+        *,
+        system_is_dark: bool | None = None,
+        marathon_variant: str | None = None,
+    ) -> None:
+        if marathon_variant in ("light", "dark"):
+            p = get_marathon_palette(marathon_variant)
+            for plot in (self.chroma_bar_plot, self.chroma_hist_plot):
+                apply_marathon_plot_theme(plot, appearance, marathon_variant)
+            self.tuning_bar.set_theme_colors(
+                track_bg=p.cents_track_bg,
+                track_border=p.cents_track_bd,
+                center_tick=p.cents_center_tick,
+                in_tune=p.cents_in_tune,
+                slight=p.cents_slight,
+                off=p.cents_off,
+                idle=p.cents_idle,
+            )
+            self._bar_item.setOpts(brush=p.accent, pen=pg.mkPen(p.accent_strong, width=0.8))
+            self._chroma_img.setLookupTable(marathon_colormap_lut("chroma", marathon_variant))
+            return
+
+        for plot in (self.chroma_bar_plot, self.chroma_hist_plot):
+            apply_plot_appearance(plot, appearance, system_is_dark=system_is_dark)
         mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
         bg, fg, accent = appearance.effective_colors(system_is_dark=system_is_dark)
         bg_c, fg_c = QtGui.QColor(bg), QtGui.QColor(fg)
@@ -739,8 +781,14 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 track_bg=track_bg,
                 track_border=border_c,
                 center_tick=center_c,
+                in_tune="#2EC27E",
+                slight="#F5A623",
+                off="#E03E3E",
+                idle="#6B7480",
             )
-        self._bar_item.setOpts(brush=accent)
+        self._bar_item.setOpts(brush=accent, pen=pg.mkPen(accent, width=0.8))
+        if self._default_chroma_lut is not None:
+            self._chroma_img.setLookupTable(self._default_chroma_lut)
 
     def _on_reset_clicked(self) -> None:
         self.clear_progression()

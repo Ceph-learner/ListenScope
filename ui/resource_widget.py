@@ -11,6 +11,7 @@ from core.logging import PerformanceRecord
 from core.models import ResourceSnapshot, ResourceStatus
 from core.paths import default_export_dir
 from ui.appearance import set_widget_tone
+from ui.marathon_style import TelemetryHeader
 
 
 def _status_to_tone(status: ResourceStatus) -> str:
@@ -32,7 +33,9 @@ class ResourceMonitorBar(QtWidgets.QWidget):
         layout.setSpacing(8)
 
         self.ram_label = QtWidgets.QLabel("RAM: -")
+        self.ram_label.setObjectName("monoTelemetry")
         self.vram_label = QtWidgets.QLabel("VRAM: -")
+        self.vram_label.setObjectName("monoTelemetry")
         self.status_badge = QtWidgets.QLabel("Normal")
         self.status_badge.setObjectName("statusBadge")
         set_widget_tone(self.status_badge, "normal")
@@ -80,10 +83,12 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         self._last_log_sig: Optional[tuple[int, str]] = None
 
         root = QtWidgets.QVBoxLayout(self)
-        root.setSpacing(10)
+        root.setContentsMargins(10, 8, 10, 10)
+        root.setSpacing(8)
+        root.addWidget(TelemetryHeader("SYSTEM TELEMETRY // 8GB GUARDRAIL", "硬件资源遥测 · 性能日志 · 诊断包"))
 
         # Telemetry grid card
-        grid_group = QtWidgets.QGroupBox("实时资源监控 (主进程 RAM / AI Worker RAM / 系统 RAM / RTX 5060 Ti 8GB VRAM)")
+        grid_group = QtWidgets.QGroupBox("MEMORY + VRAM GRID // 实时资源监控 (主 RAM / AI RAM / RTX 5060 Ti 8GB VRAM)")
         grid = QtWidgets.QGridLayout(grid_group)
 
         self._fields: dict[str, QtWidgets.QLabel] = {}
@@ -107,7 +112,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
                 val_lbl.setObjectName("statusBadge")
                 set_widget_tone(val_lbl, "normal")
             else:
-                val_lbl.setStyleSheet("font-weight: 600;")
+                val_lbl.setObjectName("monoTelemetry")
             cell = QtWidgets.QHBoxLayout()
             cell.addWidget(title_lbl)
             cell.addWidget(val_lbl, 1)
@@ -122,7 +127,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         root.addWidget(grid_group)
 
         # Performance log table
-        perf_group = QtWidgets.QGroupBox("本地 AI 性能记录 (logs/performance/)")
+        perf_group = QtWidgets.QGroupBox("PERFORMANCE LEDGER // 本地 AI 性能记录 (logs/performance/)")
         perf_layout = QtWidgets.QVBoxLayout(perf_group)
         self.perf_table = QtWidgets.QTableWidget(0, 9)
         self.perf_table.setHorizontalHeaderLabels(
@@ -134,7 +139,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         root.addWidget(perf_group, 2)
 
         # Bounded diagnostic log viewer + one-click ZIP bundle export
-        log_group = QtWidgets.QGroupBox("有界运行日志 (仅保留最近 500 条)")
+        log_group = QtWidgets.QGroupBox("BOUNDED DIAGNOSTIC LOG // 有界运行日志 (仅保留最近 500 条)")
         log_layout = QtWidgets.QVBoxLayout(log_group)
         diag_bar = QtWidgets.QHBoxLayout()
         diag_note = QtWidgets.QLabel("日志与性能摘要严格有界；如在 Windows 遇到 CUDA/WASAPI 故障可一键导出脱敏诊断包：")
@@ -147,6 +152,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         log_layout.addLayout(diag_bar)
 
         self.log_text = QtWidgets.QPlainTextEdit()
+        self.log_text.setObjectName("diagnosticLogStream")
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumBlockCount(500)
         log_layout.addWidget(self.log_text)

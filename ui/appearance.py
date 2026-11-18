@@ -17,6 +17,11 @@ from core.appearance import (
     THEME_MODES,
 )
 from ui.help_badge import HelpBadge
+from ui.marathon_style import (
+    is_marathon_eligible,
+    marathon_stylesheet,
+    resolve_marathon_variant,
+)
 
 _CACHED_OS_FONTS: Optional[tuple[str, ...]] = None
 
@@ -180,6 +185,15 @@ QGroupBox QLabel, QFrame[trackCard=true] QLabel, QFrame#practiceCard QLabel {{ b
 QPushButton#analysisAction:enabled {{ background: {sel_bg}; border-color: {accent}; font-weight: 600; color: {foreground}; }}
 QPushButton#analysisAction:hover:enabled {{ background: {checked_bg}; }}
 QPushButton#analysisAction:checked:enabled {{ background: {checked_bg}; border-color: {accent}; }}
+QPushButton#emergencyStopBtn {{
+    background-color: #B81D24;
+    color: #FFFFFF;
+    border: 1px solid #FF6B6B;
+    font-weight: 700;
+    padding: 5px 12px;
+    border-radius: 5px;
+}}
+QPushButton#emergencyStopBtn:hover {{ background-color: #D9262E; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTableWidget:focus, QToolButton#helpBadge:focus {{
     border: 1px solid {accent};
 }}
@@ -372,6 +386,66 @@ QPushButton#settingsSave {{
     font-weight: 700; padding: 7px 18px;
 }}
 QPushButton#settingsSave:hover, QPushButton#settingsSave:focus {{ background: {checked_bg}; }}
+QFrame#marathonTopbar {{
+    background: {surface};
+    border: 1px solid {rim};
+    border-left: 3px solid {accent};
+    border-radius: 7px;
+}}
+QFrame#telemetryHeader {{ background: transparent; }}
+QFrame#telemetryHeader[divider="true"] {{ border-bottom: 1px solid {hover}; }}
+QFrame#marathonTopbar QLabel, QFrame[marathonCard="true"] QLabel, QFrame#telemetryHeader QLabel {{
+    background: transparent;
+}}
+QLabel#telemetryEyebrow {{
+    color: {accent};
+    font-size: {max(9, appearance.font_size - 2)}px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+}}
+QLabel#telemetryTitle {{
+    color: {foreground};
+    font-size: {appearance.font_size + 2}px;
+    font-weight: 700;
+}}
+QLabel#telemetryPill {{
+    background: {sunk};
+    color: {subtle_fg};
+    border: 1px solid {rim};
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-size: {max(10, appearance.font_size - 1)}px;
+    font-weight: 600;
+}}
+QFrame[marathonCard="true"] {{
+    background: {surface};
+    border: 1px solid {rim};
+    border-radius: 7px;
+}}
+QFrame#marathonDivider {{
+    background: {rim};
+    min-height: 1px;
+    max-height: 1px;
+}}
+QPushButton#marathonPrimaryBtn:enabled {{
+    background: {sel_bg};
+    border-color: {accent};
+    font-weight: 600;
+    color: {foreground};
+}}
+QPushButton#marathonPrimaryBtn:hover:enabled {{ background: {checked_bg}; }}
+QPushButton#marathonPrimaryBtn:checked:enabled {{
+    background: {checked_bg};
+    border-color: {accent};
+}}
+QPlainTextEdit#diagnosticLogStream {{
+    background-color: {sunk};
+    color: {foreground};
+    border: 1px solid {rim};
+    font-family: "Cascadia Code", "Consolas", "DejaVu Sans Mono", monospace;
+    font-size: {max(10, appearance.font_size - 1)}px;
+}}
+QLabel#monoTelemetry {{ font-weight: 600; color: {foreground}; }}
 """
     if appearance.scope == "off":
         return qss
@@ -442,6 +516,11 @@ class AppearanceDialog(QtWidgets.QDialog):
             self._presets.addButton(button)
             button.clicked.connect(lambda _checked, key=key: self._apply_preset(key))
             button.setProperty("preset", key)
+            if key == "marathon":
+                button.setToolTip(
+                    "马拉松工业临床视觉风格：45° 切角标识、双语遥测标题栏与 1px 瑞士精密网格；"
+                    "配合上方「黑夜 / 白天 / 跟随系统」切换暗夜遥测与临床冷白，选中后主窗口顶栏也可一键切换。"
+                )
             presets.addWidget(button)
         root.addLayout(presets)
 
@@ -673,9 +752,14 @@ class AppearanceDialog(QtWidgets.QDialog):
         for slider in self._sliders.values():
             slider.setEnabled(appearance.scope != "off")
             slider.setToolTip(f"{slider.value()}%")
-        self._sample.setStyleSheet(
-            appearance_stylesheet(self._base_stylesheet, appearance, system_is_dark=self._system_is_dark)
-        )
+        if is_marathon_eligible(appearance):
+            variant = resolve_marathon_variant(appearance, system_is_dark=self._system_is_dark) or "dark"
+            sample_qss = marathon_stylesheet(appearance, variant)
+        else:
+            sample_qss = appearance_stylesheet(
+                self._base_stylesheet, appearance, system_is_dark=self._system_is_dark
+            )
+        self._sample.setStyleSheet(sample_qss)
         valid_colors = all(field.hasAcceptableInput() for field in self._colors.values())
         self._buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setEnabled(valid_colors)
         if emit_preview and valid_colors and self._on_preview is not None and self._live_preview_chk.isChecked():

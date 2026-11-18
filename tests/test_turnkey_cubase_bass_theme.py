@@ -384,3 +384,155 @@ def test_settings_dialog_turnkey_storage_and_help_badges():
     finally:
         dlg.close()
         app.processEvents()
+
+
+def test_marathon_preset_integration_topbar_sync_persistence_and_packaging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.appearance import PRESETS
+    from ui.marathon_style import is_marathon_eligible, resolve_marathon_variant
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    # 1. Core preset registry keeps classic [0] and lenso [1] while adding marathon
+    preset_keys = list(PRESETS.keys())
+    assert preset_keys[0] == "classic"
+    assert preset_keys[1] == "lenso"
+    assert "marathon" in PRESETS
+
+    m_dark = Appearance(preset="marathon", theme_mode="dark")
+    m_light = Appearance(preset="marathon", theme_mode="light")
+    m_sys = Appearance(preset="marathon", theme_mode="system")
+    assert m_dark.effective_colors() == ("#0B1016", "#E8EEF5", "#00A878")
+    assert m_light.effective_colors() == ("#EEF2F6", "#090D14", "#00A878")
+    assert m_sys.effective_colors(system_is_dark=False) == ("#EEF2F6", "#090D14", "#00A878")
+
+    assert is_marathon_eligible(m_dark) is True
+    assert is_marathon_eligible(Appearance(preset="classic")) is False
+    assert is_marathon_eligible(Appearance(preset="marathon", accent="#123456")) is False
+    assert resolve_marathon_variant(m_dark) == "dark"
+    assert resolve_marathon_variant(m_light) == "light"
+    assert resolve_marathon_variant(m_sys, system_is_dark=False) == "light"
+    assert resolve_marathon_variant(m_sys, system_is_dark=True) == "dark"
+    assert resolve_marathon_variant(Appearance(preset="lenso")) is None
+
+    # 2. AppearanceDialog lists Marathon preset, renders Marathon sample CSS, and cancels cleanly
+    previews: list[Appearance] = []
+    initial = Appearance(preset="classic", theme_mode="dark")
+    dlg = AppearanceDialog(initial, DARK_STYLESHEET, on_preview=previews.append, system_is_dark=True)
+    marathon_btn = next(b for b in dlg._presets.buttons() if b.property("preset") == "marathon")
+    assert marathon_btn.text() == "马拉松"
+    marathon_btn.click()
+    assert dlg.values().preset == "marathon"
+    assert "#0B1016" in dlg._sample.styleSheet()
+    assert "#00A878" in dlg._sample.styleSheet()
+    dlg.done(QtWidgets.QDialog.DialogCode.Rejected)
+    assert previews[-1] == initial
+
+    # 3. SettingsDialog honors dark Marathon variant and resets cleanly when switching off Marathon
+    s_dlg = SettingsDialog(
+        probe_system(),
+        ResourceLimits(),
+        AIConfig(),
+        appearance=Appearance(preset="marathon", theme_mode="dark"),
+    )
+    try:
+        assert s_dlg._marathon_variant == "dark"
+        assert "马拉松 · 黑夜" in s_dlg._theme_summary.text()
+        assert "#0B1016" in s_dlg.styleSheet()
+        s_dlg.apply_skin(Appearance(preset="classic", theme_mode="dark"))
+        assert s_dlg._marathon_variant is None
+        assert s_dlg.styleSheet() == ""
+    finally:
+        s_dlg.close()
+        app.processEvents()
+
+    # 4. Full MainWindow + Controller integration: Classic -> Marathon Light -> Topbar Dark pill -> System follow -> Lenso
+    controller = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path)
+    try:
+        w = controller.window
+        assert w._marathon_variant is None
+        assert w._skin_switcher.isVisible() is False
+        assert w._skin_badge.text() == "THEME // CLASSIC"
+
+        # Accept Marathon Light via AppearanceDialog
+        class FakeMarathonLightDialog(AppearanceDialog):
+            def exec(self) -> int:  # type: ignore[override]
+                next(b for b in self._presets.buttons() if b.property("preset") == "marathon").click()
+                self._theme_mode_buttons["light"].click()
+                return QtWidgets.QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr("ui.main_window.AppearanceDialog", FakeMarathonLightDialog)
+        w.open_appearance_dialog()
+
+        assert w._marathon_variant == "light"
+        assert w._skin_switcher.isHidden() is False
+        assert w._pill_light.isChecked() is True
+        assert w._pill_dark.isChecked() is False
+        assert w._skin_badge.text() == "MARATHON // CLINICAL"
+        assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#F8FAFC"
+        saved = load_settings(controller._settings_path).appearance
+        assert saved.preset == "marathon"
+        assert saved.theme_mode == "light"
+
+        # Topbar quick switch pill flips to Obsidian Dark and persists theme_mode="dark"
+        w._pill_dark.click()
+        assert w._marathon_variant == "dark"
+        assert w._pill_dark.isChecked() is True
+        assert w._skin_badge.text() == "MARATHON // OBSIDIAN"
+        assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#0E141C"
+        saved_dark = load_settings(controller._settings_path).appearance
+        assert saved_dark.preset == "marathon"
+        assert saved_dark.theme_mode == "dark"
+
+        # Follow-system in Marathon mode tracks Windows colorScheme changes
+        w.apply_appearance(Appearance(preset="marathon", theme_mode="system"))
+        monkeypatch.setattr("ui.main_window.detect_system_is_dark", lambda *_a, **_k: False)
+        w._system_is_dark = True
+        w._on_system_color_scheme_changed(QtCore.Qt.ColorScheme.Light)
+        assert w._marathon_variant == "light"
+        assert w._pill_light.isChecked() is True
+
+        # Switch back to Lenso Light cleanly hides topbar switcher & restores non-Marathon plots
+        w.apply_appearance(Appearance(preset="lenso", theme_mode="light"))
+        assert w._marathon_variant is None
+        assert w._skin_switcher.isVisible() is False
+        assert w._skin_badge.text() == "THEME // LENSO"
+        assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#EEF4FC"
+        assert w.findChildren(QtWidgets.QGraphicsEffect) == []
+    finally:
+        controller.shutdown()
+        controller.window.close()
+        app.processEvents()
+
+    # 5. Marathon flat controls QSS & PyInstaller spec SVG assets
+    from ui.appearance import appearance_stylesheet
+    from ui.marathon_style import marathon_stylesheet
+
+    qss_light = marathon_stylesheet(m_light, "light")
+    qss_dark = marathon_stylesheet(m_dark, "dark")
+    for qss in (qss_light, qss_dark):
+        assert "QComboBox::drop-down" in qss
+        assert "QComboBox::down-arrow" in qss
+        assert "QSpinBox::up-button" in qss
+        assert "QSpinBox::down-button" in qss
+        assert "QScrollArea" in qss
+    assert "marathon_chevron_down_light.svg" in qss_light
+    assert "marathon_chevron_up_light.svg" in qss_light
+    assert "marathon_chevron_down_dark.svg" in qss_dark
+    assert "marathon_chevron_up_dark.svg" in qss_dark
+    # Classic stylesheet must stay completely untouched by Marathon-only chevron SVGs
+    classic_qss = appearance_stylesheet(DARK_STYLESHEET, Appearance())
+    assert "marathon_chevron_" not in classic_qss
+
+    root = Path(__file__).resolve().parent.parent
+    spec_txt = (root / "packaging" / "listenscope_core.spec").read_text(encoding="utf-8")
+    for svg_name in (
+        "marathon_check.svg",
+        "marathon_chevron_down_light.svg",
+        "marathon_chevron_down_dark.svg",
+        "marathon_chevron_up_light.svg",
+        "marathon_chevron_up_dark.svg",
+    ):
+        assert (root / "ui" / "assets" / svg_name).is_file()
+        assert svg_name in spec_txt
