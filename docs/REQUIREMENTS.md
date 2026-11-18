@@ -24,4 +24,10 @@
 | 脱敏诊断 ZIP 导出 | 仅自动化 | [diagnostics.py](../core/diagnostics.py)。 |
 | 近实时二轨分离（实验，默认关闭） | 未通过目标机验收 | 第五轮启动即触发内存保护，没有听到输出。监听要求按进程环回，退回系统环回时保留基础分析并拒绝监听。见 [CURRENT_STATE](CURRENT_STATE.md)。 |
 | Chroma 纵轴标签与相对调性的和弦级数显示 | 已实现，待目标机复测 | 热图纵轴缩小音名标签。当前和弦按检测到的大调或自然小调显示级数，如 C 大调下 `Am` 显示 `vi`，Capo 移调后级数保持。 |
+| 练习和弦弹窗 Row 0 对齐、合成试听与 `.mid` 导出 | 仅自动化 | [ui/chord_practice.py](../ui/chord_practice.py)、[analysis/chord_practice.py](../analysis/chord_practice.py)；覆盖 24 调、Capo 换算、互斥试听，待目标机声卡试听与 DAW 导入。 |
+| 贝斯 FFT-YIN 最低音（含 `B0`/`E1` 防 8 度跃变）、MIDI 编号与转调提示 | 仅自动化 | [`analyze_bass_stem`](../analysis/stem_analyzer.py)、[mixer_widget.py](../ui/mixer_widget.py)、[test_turnkey_cubase_bass_theme.py](../tests/test_turnkey_cubase_bass_theme.py)；真实曲库贝斯分轨待目标机验证。 |
+| 全路径 MIDI 规范化兼容 Steinberg Cubase (SMF Type-0 / `480 TPB`) | 仅自动化 | [midi_common.py](../analysis/midi_common.py) 覆盖和弦、鼓点及单轨转录；需在 Cubase 内拖入复验轨名、调号、CC 复位与无音符粘连。 |
+| 黑夜 / 白天 / 跟随系统主题、本机字体扫描（`11–20 px` 实时预览）与恢复默认 | 仅自动化 | [core/appearance.py](../core/appearance.py)、[ui/appearance.py](../ui/appearance.py) 与图表高对比配色；Windows 11 系统主题实时切换及真机字体/DPI 待实测。 |
+| 轻量动效（`TuningCentsBar`）、`[?]` 悬浮/点击说明与切页/缓存防卡顿优化 | 仅自动化 | [help_badge.py](../ui/help_badge.py)、[chroma_widget.py](../ui/chroma_widget.py)；全程零 `QGraphicsEffect`，目标机连续刷新与 DPI 待复测。 |
+| 同级便携存储、免手工探测运行时、`setup_windows.ps1 -SkipCore` 与 Inno Setup 安装包 | 仅自动化 | [core/paths.py](../core/paths.py)、[installer.iss](../scripts/installer.iss)、[build_windows.ps1](../scripts/build_windows.ps1)；Windows `ISCC.exe` 编译与干净非 C 盘安装待实测。 |
 | 自动化 CI | 已提供 Linux offscreen pytest 工作流 | 见 [DEVELOPMENT](DEVELOPMENT.md)；Windows 实测仍需手动执行。 |
