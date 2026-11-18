@@ -25,7 +25,10 @@ GPU 分轨和 CPU MIDI 各用独立环境（Core 仍保持零 Torch/CUDA/TF，�
 
 ## 当前验证基线
 
-- **`v0.2.1` 开发分支（`feat/acid-telemetry-v2-release`，基于 PR #24 合入后 `main`）云端 Linux 离屏验证**：在 Debian 12 / Python 3.11.2 / PySide6 6.8.3 / pyqtgraph 0.14.0 下运行 `QT_QPA_PLATFORM=offscreen pytest -q --tb=short`，全量 **`189 passed, 6 skipped`**（6 项为 Windows PowerShell / setup 专属测试），含定向回归 [`test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packaging`](../tests/test_turnkey_cubase_bass_theme.py) 与全仓库商标词正则扫描校验；已逐张目检真实 PySide6 离屏截图（`ACID & VOID` Tab 1–4、1280×800 窄窗与 `[STATIC_LOCK: ON]`、顶栏实测点击切入 `CLINICAL_LIGHT` 临床浅色、设置外观/MIDI 滚动区、外观/和弦练习弹窗与经典暗黑回退对照），并修正顶栏徽章 CSS 特异性掩蔽及 `SettingsDialog` 滚动区白底缺陷；GitHub Actions 新增 [release-windows.yml](../.github/workflows/release-windows.yml) 用于 Windows x64 Core 打包、便携重定位冒烟与 Inno Setup Release 生成，真机 Windows 11 音频/GPU/DAW/高 DPI 验收待目标机按 [HANDOFF](HANDOFF.md) 补测。
+- **PR #26 预发布验证基线（`fix/settings-dialog-compact-width` · `9bf7a43`，基于 PR #25 `f22ae12`）**：
+  - 修复 [`TelemetryHeader`](../ui/acid_style.py) 与 [`SettingsDialog`](../ui/settings_dialog.py) 标题标签在 Windows 离屏等宽回退字体下撑宽至 `708px` 的问题，确保 `560×500` 紧凑窗口与 Acid Dark/Classic 切换正常。
+  - **云端 Linux 本地（Debian 12 · Python 3.11.2 · PySide6 6.8.3 · offscreen）**：全量 **`189 passed, 6 skipped`**；已完成 `Acid Telemetry v2` 14 张及 `560×500` 等宽回退窄窗离屏截图目检，全仓库商标词正则扫描仅命中合法迁移别名与测试断言。
+  - **GitHub Actions 双端 CI（均运行于 `9bf7a43`）**：Ubuntu 24.04 `tests.yml`（Run `44339863394`）**`195 passed`**；`windows-latest` `release-windows.yml`（Run `44339675131`）**`195 passed`**，PyInstaller 随包 `acid_*.svg` 资产校验通过、重定位 `ListenScope.exe --simulate --headless-smoke` 返回 `ExitCode=0`、`ListenScope-Core-Windows-x64-Portable.zip` 与 `ISCC.exe` 安装包 `ListenScope-Setup-Windows-x64.exe` 生成及 `SHA256SUMS.txt` 校验完成。真机 Windows 11 音频/GPU/DAW/高 DPI 验收待目标机按 [HANDOFF](HANDOFF.md) 补测。
 - **PR #24 合入基线（历史档案）**：PR #24 完成第 5 档双模工业主题首次集成与隔离扁平控件重塑（`189 passed, 6 skipped`）。
 - **PR #23 合并前云端基线（`2a9c335`，历史参照）**：`QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 共 `188 passed, 6 skipped`。
 
