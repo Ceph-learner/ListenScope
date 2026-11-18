@@ -341,8 +341,16 @@ class TelemetryHeader(QtWidgets.QFrame):
 
         self.eyebrow_lbl = QtWidgets.QLabel(eyebrow.upper())
         self.eyebrow_lbl.setObjectName("telemetryEyebrow")
+        self.eyebrow_lbl.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self.title_lbl = QtWidgets.QLabel(title)
         self.title_lbl.setObjectName("telemetryTitle")
+        self.title_lbl.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
 
         stack.addWidget(self.eyebrow_lbl)
         stack.addWidget(self.title_lbl)
