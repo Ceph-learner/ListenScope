@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 import math
+from typing import Optional
 
 import numpy as np
 import pyqtgraph as pg
@@ -24,11 +25,13 @@ from core.models import AnalysisSnapshot
 from ui.appearance import apply_plot_appearance, set_widget_tone
 from ui.chord_practice import ChordPracticeDialog
 from ui.help_badge import HelpBadge
-from ui.marathon_style import (
+from ui.acid_style import (
+    AcidGraphicOverlay,
+    DotMatrixWidget,
     TelemetryHeader,
-    apply_marathon_plot_theme,
-    get_marathon_palette,
-    marathon_colormap_lut,
+    acid_colormap_lut,
+    apply_acid_plot_theme,
+    get_acid_palette,
 )
 
 
@@ -227,6 +230,9 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._practice_before_play: Callable[[], str | None] | None = None
         self._active_practice_dialog: ChordPracticeDialog | None = None
         self._default_chroma_lut: np.ndarray | None = None
+        self._acid_variant: Optional[str] = None
+        self._acid_overlays: list[AcidGraphicOverlay] = []
+        self._dot_matrices: list[DotMatrixWidget] = []
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 10)
@@ -238,7 +244,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         # Chord card
         chord_box = QtWidgets.QFrame()
-        chord_box.setProperty("marathonCard", True)
+        chord_box.setProperty("acidCard", True)
         chord_box.setProperty("accentRail", "primary")
         chord_box.setToolTip("12 Major / 12 Minor / N / Unknown")
         chord_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
@@ -246,8 +252,21 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         chord_l.setContentsMargins(10, 8, 10, 8)
         chord_l.setSpacing(4)
         chord_l.addWidget(TelemetryHeader("CHORD // 01", "和弦推测", badge_text="MAJ / MIN"))
+        chord_hero_row = QtWidgets.QHBoxLayout()
+        chord_hero_row.setContentsMargins(0, 0, 0, 0)
+        chord_hero_row.setSpacing(8)
         self.chord_primary_lbl = QtWidgets.QLabel("N (静音)")
         self.chord_primary_lbl.setObjectName("chromaPrimary")
+        self.chord_echo_lbl = QtWidgets.QLabel("")
+        self.chord_echo_lbl.setObjectName("chromaEcho")
+        self.chord_echo_lbl.setVisible(False)
+        self._chord_dots = DotMatrixWidget(0, 5)
+        self._chord_dots.setVisible(False)
+        self._dot_matrices.append(self._chord_dots)
+        chord_hero_row.addWidget(self.chord_primary_lbl)
+        chord_hero_row.addWidget(self.chord_echo_lbl)
+        chord_hero_row.addStretch(1)
+        chord_hero_row.addWidget(self._chord_dots)
         self.chord_tones_lbl = QtWidgets.QLabel("构成音: -")
         self.chord_tones_lbl.setObjectName("chromaSubtle")
         self.chord_degree_lbl = QtWidgets.QLabel("相对级数: -")
@@ -259,17 +278,20 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chord_stability_lbl.setObjectName("chromaCaption")
         self.chord_stability_lbl.setWordWrap(True)
         self.chord_stability_lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
-        chord_l.addWidget(self.chord_primary_lbl)
+        chord_l.addLayout(chord_hero_row)
         chord_l.addWidget(self.chord_tones_lbl)
         chord_l.addWidget(self.chord_degree_lbl)
         chord_l.addWidget(self.chord_secondary_lbl)
         chord_l.addWidget(self.chord_stability_lbl)
         chord_l.addStretch(1)
+        chord_ov = AcidGraphicOverlay(chord_box, stencil="01")
+        chord_ov.setVisible(False)
+        self._acid_overlays.append(chord_ov)
         cards.addWidget(chord_box, 3)
 
         # Key card
         key_box = QtWidgets.QFrame()
-        key_box.setProperty("marathonCard", True)
+        key_box.setProperty("acidCard", True)
         key_box.setProperty("accentRail", "secondary")
         key_box.setToolTip("Krumhansl-Schmuckler 滑动窗口")
         key_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
@@ -277,8 +299,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         key_l.setContentsMargins(10, 8, 10, 8)
         key_l.setSpacing(4)
         key_l.addWidget(TelemetryHeader("TONALITY // 02", "调性推测", badge_text="K-S WINDOW"))
+        key_hero_row = QtWidgets.QHBoxLayout()
+        key_hero_row.setContentsMargins(0, 0, 0, 0)
+        key_hero_row.setSpacing(8)
         self.key_primary_lbl = QtWidgets.QLabel("Unknown")
         self.key_primary_lbl.setObjectName("chromaSecondaryHero")
+        self._key_dots = DotMatrixWidget(0, 5)
+        self._key_dots.setVisible(False)
+        self._dot_matrices.append(self._key_dots)
+        key_hero_row.addWidget(self.key_primary_lbl, 1)
+        key_hero_row.addWidget(self._key_dots)
         self.key_secondary_lbl = QtWidgets.QLabel("第二候选: -")
         self.key_secondary_lbl.setObjectName("chromaSubtle")
         self.key_relation_lbl = QtWidgets.QLabel("稳定度: Insufficient | 关系说明: 等待音频")
@@ -291,16 +321,19 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.key_sig_note_lbl.setWordWrap(True)
         self.key_sig_note_lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         self.key_sig_note_lbl.setObjectName("chromaCaption")
-        key_l.addWidget(self.key_primary_lbl)
+        key_l.addLayout(key_hero_row)
         key_l.addWidget(self.key_secondary_lbl)
         key_l.addWidget(self.key_relation_lbl)
         key_l.addWidget(self.key_sig_note_lbl)
         key_l.addStretch(1)
+        key_ov = AcidGraphicOverlay(key_box, stencil="02")
+        key_ov.setVisible(False)
+        self._acid_overlays.append(key_ov)
         cards.addWidget(key_box, 3)
 
         # BPM + Pitch + CPU Practice Metronome card
         rhythm_box = QtWidgets.QFrame()
-        rhythm_box.setProperty("marathonCard", True)
+        rhythm_box.setProperty("acidCard", True)
         rhythm_box.setProperty("accentRail", "obsidian")
         rhythm_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         rhythm_l = QtWidgets.QVBoxLayout(rhythm_box)
@@ -308,8 +341,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         rhythm_l.setSpacing(4)
         rhythm_l.addWidget(TelemetryHeader("TEMPO & PITCH // 03", "节拍 · 音高 · CPU 节拍器", badge_text="SYNTH CLICK"))
 
+        bpm_hero_row = QtWidgets.QHBoxLayout()
+        bpm_hero_row.setContentsMargins(0, 0, 0, 0)
+        bpm_hero_row.setSpacing(8)
         self.bpm_lbl = QtWidgets.QLabel("BPM: Unknown")
         self.bpm_lbl.setObjectName("chromaWarnHero")
+        self._bpm_dots = DotMatrixWidget(0, 5)
+        self._bpm_dots.setVisible(False)
+        self._dot_matrices.append(self._bpm_dots)
+        bpm_hero_row.addWidget(self.bpm_lbl, 1)
+        bpm_hero_row.addWidget(self._bpm_dots)
         self.bpm_stab_lbl = QtWidgets.QLabel("节拍稳定度: Unknown")
         self.bpm_stab_lbl.setObjectName("chromaCaption")
         self.bpm_stab_lbl.setWordWrap(True)
@@ -393,12 +434,15 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.tap_status_lbl.setObjectName("chromaCaption")
         met_row2.addWidget(self.tap_status_lbl, 1)
 
-        rhythm_l.addWidget(self.bpm_lbl)
+        rhythm_l.addLayout(bpm_hero_row)
         rhythm_l.addWidget(self.bpm_stab_lbl)
         rhythm_l.addLayout(pitch_row)
         rhythm_l.addLayout(met_row)
         rhythm_l.addLayout(met_row2)
         rhythm_l.addStretch(1)
+        rhythm_ov = AcidGraphicOverlay(rhythm_box, stencil="03")
+        rhythm_ov.setVisible(False)
+        self._acid_overlays.append(rhythm_ov)
         cards.addWidget(rhythm_box, 4)
 
         root.addLayout(cards)
@@ -507,7 +551,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             cmap = None
         if cmap is not None:
             self._default_chroma_lut = cmap.getLookupTable(0.0, 1.0, 256)
-        self._chroma_img.setLookupTable(marathon_colormap_lut("chroma", "light"))
+        self._chroma_img.setLookupTable(acid_colormap_lut("chroma", "light"))
         self.chroma_hist_plot.addItem(self._chroma_img)
         splitter.addWidget(self.chroma_hist_plot)
 
@@ -623,6 +667,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             detected_bpm=self._latest_detected_bpm,
             preview_player=self._practice_preview_player,
             before_play=self._practice_before_play,
+            acid_variant=self._acid_variant,
         )
         self._active_practice_dialog = dialog
         if modal:
@@ -727,12 +772,36 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         appearance,
         *,
         system_is_dark: bool | None = None,
-        marathon_variant: str | None = None,
+        acid_variant: str | None = None,
     ) -> None:
-        if marathon_variant in ("light", "dark"):
-            p = get_marathon_palette(marathon_variant)
+        self._acid_variant = acid_variant if acid_variant in ("light", "dark") else None
+        is_acid = self._acid_variant in ("light", "dark")
+        self.chord_echo_lbl.setVisible(is_acid)
+        for dm in self._dot_matrices:
+            dm.setVisible(is_acid)
+        for ov in self._acid_overlays:
+            ov.setVisible(is_acid)
+        self.practice_chords_btn.setText("CHORD_PRACTICE // OPEN" if is_acid else "练习和弦")
+        self.reset_harmony_btn.setText("RESET // TRACK" if is_acid else "换歌重置 (和弦/调性/BPM)")
+
+        if is_acid:
+            variant = self._acid_variant or "dark"
+            p = get_acid_palette(variant)
+            if variant == "dark":
+                cross = QtGui.QColor(241, 242, 236, 65)
+                stencil = QtGui.QColor(241, 242, 236, 15)
+                checker = QtGui.QColor(206, 255, 24, 190)
+            else:
+                cross = QtGui.QColor(9, 13, 20, 52)
+                stencil = QtGui.QColor(9, 13, 20, 12)
+                checker = QtGui.QColor(0, 168, 120, 175)
+            for ov in self._acid_overlays:
+                ov.set_colors(cross, stencil, checker)
+                ov.raise_()
+            for dm in self._dot_matrices:
+                dm.set_state(dm.filled_count, color=p.accent)
             for plot in (self.chroma_bar_plot, self.chroma_hist_plot):
-                apply_marathon_plot_theme(plot, appearance, marathon_variant)
+                apply_acid_plot_theme(plot, appearance, variant)
             self.tuning_bar.set_theme_colors(
                 track_bg=p.cents_track_bg,
                 track_border=p.cents_track_bd,
@@ -743,7 +812,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 idle=p.cents_idle,
             )
             self._bar_item.setOpts(brush=p.accent, pen=pg.mkPen(p.accent_strong, width=0.8))
-            self._chroma_img.setLookupTable(marathon_colormap_lut("chroma", marathon_variant))
+            self._chroma_img.setLookupTable(acid_colormap_lut("chroma", variant))
             return
 
         for plot in (self.chroma_bar_plot, self.chroma_hist_plot):
@@ -803,6 +872,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._set_cached_text(self.tap_status_lbl, "")
         self._set_cached_text(self.chord_progression_lbl, "最近和弦进行 (最多 12 步): -")
         self._set_cached_text(self.chord_primary_lbl, "N (静音)")
+        self._set_cached_text(self.chord_echo_lbl, "")
         self._set_cached_text(self.chord_tones_lbl, "构成音: -")
         self._set_cached_text(self.chord_degree_lbl, "相对级数: -")
         self._set_cached_text(self.chord_secondary_lbl, "第二候选: -")
@@ -814,6 +884,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._set_cached_text(self.bpm_lbl, "BPM: Unknown")
         self._set_cached_text(self.bpm_stab_lbl, "节拍稳定度: Unknown")
         self._set_cached_text(self.pitch_lbl, "主音高: -")
+        for dm in self._dot_matrices:
+            dm.set_state(0)
         self.tuning_bar.set_pitch(None, 0.0)
         try:
             self._chroma_img.clear()
@@ -823,6 +895,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     def _render_harmonic_labels(self, snap: AnalysisSnapshot) -> None:
         semi = self._transpose_semitones
         ch = snap.chord
+        ky = snap.key
+        degree = "-" if ch.is_silent else chord_scale_degree(ch.primary, ky.primary)
         if semi == 0 or ch.is_silent:
             disp_chord = ch.primary
             disp_sec = ch.secondary
@@ -834,6 +908,11 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 self.chord_primary_lbl,
                 f"{disp_chord} (实音 {ch.primary})" if disp_chord != ch.primary else disp_chord,
             )
+        echo_txt = "" if ch.is_silent else (f"{disp_chord} // {degree}" if degree != "-" else disp_chord)
+        self._set_cached_text(self.chord_echo_lbl, echo_txt)
+        chord_pips = 0 if ch.is_silent else {"High": 4, "Medium": 3, "Low": 2}.get(ch.stability, 1)
+        self._chord_dots.set_state(chord_pips)
+
         tones = "-" if ch.is_silent else spell_chord_tones(disp_chord)
         self._set_cached_text(self.chord_tones_lbl, f"构成音: {tones}")
         self._set_cached_text(self.chord_secondary_lbl, f"第二候选: {disp_sec}")
@@ -842,9 +921,13 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             f"稳定度: {ch.stability} | 相关 {ch.correlation:.2f} | 差 {ch.margin:.2f}",
         )
 
-        ky = snap.key
-        degree = "-" if ch.is_silent else chord_scale_degree(ch.primary, ky.primary)
         self._set_cached_text(self.chord_degree_lbl, f"相对级数: {degree}")
+        key_pips = (
+            0
+            if ky.primary in ("", "Unknown", "Insufficient")
+            else {"High": 4, "Medium": 3, "Low": 2}.get(ky.stability, 1)
+        )
+        self._key_dots.set_state(key_pips)
         if semi == 0:
             self._set_cached_text(self.key_primary_lbl, ky.primary)
             self._set_cached_text(self.key_secondary_lbl, f"第二候选: {ky.secondary}")
@@ -901,6 +984,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self._render_recent_progression()
 
         tp = snap.tempo
+        bpm_pips = 0 if tp.bpm is None else {"High": 4, "Medium": 3, "Low": 2}.get(tp.stability, 1)
+        self._bpm_dots.set_state(bpm_pips)
         if tp.bpm is not None:
             self._latest_detected_bpm = float(tp.bpm)
             if not self.adopt_bpm_btn.isEnabled():

@@ -9,14 +9,17 @@ PRESETS = {
     "lenso": ("Lenso", "#131B2B", "#EFF5FF", "#A3C6FF"),
     "codex": ("Codex", "#141417", "#ECECF0", "#ACAEFF"),
     "claude": ("Claude Code", "#201B18", "#F1E5D8", "#DF9B7B"),
-    "marathon": ("马拉松", "#0B1016", "#E8EEF5", "#00A878"),
+    "acid_telemetry": ("酸性遥测", "#0B0D0F", "#F1F2EC", "#CEFF18"),
 }
 LIGHT_PRESETS = {
     "classic": ("经典 · 白天", "#F4F6FA", "#181D25", "#0E8A6D"),
     "lenso": ("Lenso · 白天", "#EEF4FC", "#152238", "#2563EB"),
     "codex": ("Codex · 白天", "#F5F5F8", "#18181F", "#4F46E5"),
     "claude": ("Claude Code · 白天", "#FAF5F0", "#2A211B", "#B45309"),
-    "marathon": ("马拉松 · 白天", "#EEF2F6", "#090D14", "#00A878"),
+    "acid_telemetry": ("酸性遥测 · 白天", "#EEF2F6", "#090D14", "#00A878"),
+}
+_PRESET_ALIASES = {
+    "marathon": "acid_telemetry",
 }
 THEME_MODES = {
     "dark": "黑夜",
@@ -76,8 +79,11 @@ class Appearance:
     def from_mapping(cls, raw):
         if not isinstance(raw, dict):
             return cls()
+        raw_preset = raw.get("preset")
+        if isinstance(raw_preset, str):
+            raw_preset = _PRESET_ALIASES.get(raw_preset, raw_preset)
         return cls(
-            preset=_choice(raw.get("preset"), PRESETS, "classic"),
+            preset=_choice(raw_preset, PRESETS, "classic"),
             font_size=_number(raw.get("font_size"), 11, 20, 12),
             background=_color(raw.get("background")),
             text=_color(raw.get("text")),

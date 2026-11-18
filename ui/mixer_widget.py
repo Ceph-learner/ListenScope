@@ -31,7 +31,7 @@ from ui.chroma_widget import (
     transpose_note_name,
 )
 from ui.help_badge import HelpBadge
-from ui.marathon_style import TelemetryHeader, apply_marathon_plot_theme, get_marathon_palette
+from ui.acid_style import TelemetryHeader, apply_acid_plot_theme, get_acid_palette
 
 
 def _fmt_sec(sec: float) -> str:
@@ -113,7 +113,7 @@ class _StemTrackRow(QtWidgets.QFrame):
         analyze_btn.setToolTip("将此分轨前 <=30s 载入实时频谱/和弦视图（会清空当前实时缓冲）")
         analyze_btn.clicked.connect(lambda: self.send_to_analysis_requested.emit(self.stem_name, self.stem_path))
         midi_btn = QtWidgets.QPushButton("转 MIDI")
-        midi_btn.setObjectName("marathonPrimaryBtn")
+        midi_btn.setObjectName("acidPrimaryBtn")
         midi_btn.clicked.connect(lambda: self.transcribe_midi_requested.emit(self.stem_name, self.stem_path))
         row.addWidget(analyze_btn)
         row.addWidget(midi_btn)
@@ -123,11 +123,11 @@ class _StemTrackRow(QtWidgets.QFrame):
         appearance: Appearance,
         *,
         system_is_dark: Optional[bool] = None,
-        marathon_variant: Optional[str] = None,
+        acid_variant: Optional[str] = None,
     ) -> None:
-        if marathon_variant in ("light", "dark"):
-            p = get_marathon_palette(marathon_variant)
-            apply_marathon_plot_theme(self.wave_plot, appearance, marathon_variant)
+        if acid_variant in ("light", "dark"):
+            p = get_acid_palette(acid_variant)
+            apply_acid_plot_theme(self.wave_plot, appearance, acid_variant)
             pen = pg.mkPen(p.plot_wave, width=1.1)
         else:
             apply_plot_appearance(self.wave_plot, appearance, system_is_dark=system_is_dark)
@@ -178,7 +178,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.mixer_engine = mixer_engine
         self.plot_appearance = Appearance()
         self._system_is_dark: Optional[bool] = None
-        self._marathon_variant: Optional[str] = None
+        self._acid_variant: Optional[str] = None
         self._rows: dict[str, _StemTrackRow] = {}
         self._stem_paths: dict[str, str] = {}
         self._piano_roll_item: Optional[pg.BarGraphItem] = None
@@ -454,7 +454,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.midi_settings_btn = QtWidgets.QPushButton("MIDI 环境设置")
         self.midi_settings_btn.clicked.connect(self.midi_settings_requested.emit)
         self.save_midi_btn = QtWidgets.QPushButton("另存 MIDI (.mid)")
-        self.save_midi_btn.setObjectName("marathonPrimaryBtn")
+        self.save_midi_btn.setObjectName("acidPrimaryBtn")
         self.save_midi_btn.setEnabled(False)
         self.save_midi_btn.clicked.connect(self._on_save_midi_clicked)
         midi_actions.addWidget(self.midi_open_stem_btn)
@@ -491,7 +491,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.preview_drums_btn.clicked.connect(self.drum_preview_requested.emit)
         rhythm_header.addWidget(self.preview_drums_btn)
         self.export_drums_btn = QtWidgets.QPushButton("导出鼓点 MIDI")
-        self.export_drums_btn.setObjectName("marathonPrimaryBtn")
+        self.export_drums_btn.setObjectName("acidPrimaryBtn")
         self.export_drums_btn.setEnabled(False)
         self.export_drums_btn.setToolTip("导出检测到的底鼓、军鼓和踩镲，保留原片段中的击打时间，可直接拖入 Cubase。")
         self.export_drums_btn.clicked.connect(self._on_export_drums_clicked)
@@ -531,16 +531,16 @@ class StemMixerWidget(QtWidgets.QWidget):
         appearance: Appearance,
         *,
         system_is_dark: Optional[bool] = None,
-        marathon_variant: Optional[str] = None,
+        acid_variant: Optional[str] = None,
     ) -> None:
         self.plot_appearance = appearance
         self._system_is_dark = system_is_dark
-        self._marathon_variant = marathon_variant
+        self._acid_variant = acid_variant
         for row in self._rows.values():
-            row.apply_theme(appearance, system_is_dark=system_is_dark, marathon_variant=marathon_variant)
-        if marathon_variant in ("light", "dark"):
-            p = get_marathon_palette(marathon_variant)
-            apply_marathon_plot_theme(self.piano_roll_plot, appearance, marathon_variant)
+            row.apply_theme(appearance, system_is_dark=system_is_dark, acid_variant=acid_variant)
+        if acid_variant in ("light", "dark"):
+            p = get_acid_palette(acid_variant)
+            apply_acid_plot_theme(self.piano_roll_plot, appearance, acid_variant)
             self._piano_roll_cursor.setPen(pg.mkPen(p.plot_pr_cursor, width=1.6))
             if self._piano_roll_item is not None:
                 self._piano_roll_item.setOpts(brush=p.accent, pen=pg.mkPen(p.accent_strong, width=0.8))
@@ -950,7 +950,7 @@ class StemMixerWidget(QtWidgets.QWidget):
             row.apply_theme(
                 self.plot_appearance,
                 system_is_dark=self._system_is_dark,
-                marathon_variant=self._marathon_variant,
+                acid_variant=self._acid_variant,
             )
             mins, maxs = self.mixer_engine.get_stem_waveform_envelope(name)
             row.set_waveform(mins, maxs)
@@ -1013,8 +1013,8 @@ class StemMixerWidget(QtWidgets.QWidget):
             if mod_flags:
                 parts.append(f"[INFO] 疑似转调: {'；'.join(mod_flags)}")
 
-        if self._marathon_variant in ("light", "dark"):
-            accent = get_marathon_palette(self._marathon_variant).accent
+        if self._acid_variant in ("light", "dark"):
+            accent = get_acid_palette(self._acid_variant).accent
         else:
             _, _, accent = self.plot_appearance.effective_colors(system_is_dark=self._system_is_dark)
         if report.drums is not None:
@@ -1114,10 +1114,10 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         pr_notes = result.notes[:600]
         if pr_notes:
-            if self._marathon_variant in ("light", "dark"):
-                mp = get_marathon_palette(self._marathon_variant)
-                bar_brush = mp.accent
-                bar_pen = pg.mkPen(mp.accent_strong, width=0.8)
+            if self._acid_variant in ("light", "dark"):
+                ap = get_acid_palette(self._acid_variant)
+                bar_brush = ap.accent
+                bar_pen = pg.mkPen(ap.accent_strong, width=0.8)
             else:
                 _, _, accent = self.plot_appearance.effective_colors(system_is_dark=self._system_is_dark)
                 bar_brush = accent

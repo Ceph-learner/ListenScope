@@ -26,9 +26,9 @@ from audio.drum_preview import DrumPreviewPlayer
 from core.appearance import Appearance
 from core.models import KeyEstimate
 from core.paths import default_export_dir
+from ui.acid_style import TelemetryHeader, acid_stylesheet
 from ui.appearance import set_widget_tone
 from ui.help_badge import HelpBadge
-from ui.marathon_style import TelemetryHeader, marathon_stylesheet
 
 
 class _PracticeTableDelegate(QtWidgets.QStyledItemDelegate):
@@ -57,14 +57,14 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         detected_bpm: float | None = None,
         preview_player: DrumPreviewPlayer | None = None,
         before_play: Callable[[], str | None] | None = None,
-        marathon_variant: Optional[str] = None,
+        acid_variant: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("练习和弦 // CHORD PRACTICE")
         self.resize(760, 530)
         self.setMinimumSize(640, 440)
-        if parent is None and marathon_variant in ("light", "dark"):
-            self.setStyleSheet(marathon_stylesheet(Appearance(), marathon_variant))
+        if parent is None and acid_variant in ("light", "dark"):
+            self.setStyleSheet(acid_stylesheet(Appearance(), acid_variant))
 
         self._raw_recent = tuple(recent)
         self._transpose = int(transpose)
@@ -101,8 +101,9 @@ class ChordPracticeDialog(QtWidgets.QDialog):
             "原曲快照参考",
             badge_text=capo_badge,
         )
-        snap_note = QtWidgets.QLabel("仅参考打开时最近和弦")
+        snap_note = QtWidgets.QLabel("SNAPSHOT_ONLY")
         snap_note.setObjectName("chromaCaption")
+        snap_note.setToolTip("仅参考打开「练习和弦」对话框时采集到的最近和弦与调性快照")
         self._snap_header.add_right_widget(snap_note)
         snap_layout.addWidget(self._snap_header)
 
@@ -175,6 +176,7 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         self._results.setObjectName("practiceTable")
         self._results.setAccessibleName("和弦练习模板")
         self._results.setItemDelegate(_PracticeTableDelegate(self._results))
+        self._results.setWordWrap(False)
         chords_col_title = "和弦（指型）" if self._transpose else "和弦"
         self._results.setHorizontalHeaderLabels(["罗马级数", chords_col_title, "最近和弦匹配"])
         for col, align in (
@@ -219,7 +221,7 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         self._preview_btn.clicked.connect(self._on_preview_clicked)
 
         self._export_midi_btn = QtWidgets.QPushButton("导出进行 MIDI")
-        self._export_midi_btn.setObjectName("marathonPrimaryBtn")
+        self._export_midi_btn.setObjectName("acidPrimaryBtn")
         self._export_midi_btn.setAutoDefault(False)
         self._export_midi_btn.setToolTip("将所选进行按当前速度、调号与实音口径导出为 Cubase 兼容标准 MIDI (.mid)")
         self._export_midi_btn.clicked.connect(self._on_export_midi_clicked)

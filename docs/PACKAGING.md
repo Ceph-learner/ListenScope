@@ -149,7 +149,8 @@ E:\LS-midi\.venv-midi\Scripts\python.exe scripts\check_env.py --json --check-mid
   ```powershell
   .\.venv-core\Scripts\python.exe main.py --ai-python .\.venv-ai\Scripts\python.exe --midi-python E:\LS-midi\.venv-midi\Scripts\python.exe
   ```
-- **打包目录运行**: `dist\ListenScopeCore\ListenScope.exe`（[`listenscope_core.spec`](../packaging/listenscope_core.spec) 已同步打包 `requirements-ai.txt`、`constraints-ai-cu128.txt`、`requirements-midi.txt`、`winrt` 运行时、`ui/assets/marathon_*.svg` 马拉松控件图标与全部 Worker/Probe 模块）。首次运行支持自动扫描同级运行时、通过 `--ai-python` / `--midi-python` 传入，或在 **设置 -> AI 与 MIDI 环境** 一键自动配置、验证并保存至同级 `settings.json`（重启 `ListenScope.exe` 后自动保留）。
+- **打包目录运行**: `dist\ListenScopeCore\ListenScope.exe`（[`listenscope_core.spec`](../packaging/listenscope_core.spec) 已同步打包 `requirements-ai.txt`、`constraints-ai-cu128.txt`、`requirements-midi.txt`、`winrt` 运行时、`ui/assets/acid_*.svg` 酸性遥测扁平控件图标与全部 Worker/Probe 模块）。首次运行支持自动扫描同级运行时、通过 `--ai-python` / `--midi-python` 传入，或在 **设置 -> AI 与 MIDI 环境** 一键自动配置、验证并保存至同级 `settings.json`（重启 `ListenScope.exe` 后自动保留）。
+- **自动化 Windows Core Release 流水线（[.github/workflows/release-windows.yml](../.github/workflows/release-windows.yml)）**：推送 `v*` 标签或手动触发 `workflow_dispatch` 时，在 `windows-latest` 执行 `pytest` 全量回归 -> `PyInstaller` 打包 Core -> 复制至独立临时目录运行 `--simulate --headless-smoke` 校验 -> 生成 `ListenScope-Core-Windows-x64-Portable.zip` 与 Inno Setup 6 单文件安装包 `ListenScope-Setup-Windows-x64.exe` -> 输出 `SHA256SUMS.txt` 并发布 GitHub Release（严格仅含 Core 主程序，AI/MIDI 运行时仍按三环境隔离按需在设置内安装）。
 
 ### Windows 真机音频设备与现场排障说明
 

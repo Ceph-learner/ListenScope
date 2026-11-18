@@ -31,11 +31,11 @@ from core.system_probe import (
 )
 from ui.appearance import detect_system_is_dark, set_widget_tone
 from ui.help_badge import HelpBadge, wrap_with_help
-from ui.marathon_style import (
+from ui.acid_style import (
     TelemetryHeader,
-    get_marathon_palette,
-    marathon_stylesheet,
-    resolve_marathon_variant,
+    acid_stylesheet,
+    get_acid_palette,
+    resolve_acid_variant,
 )
 
 SETTINGS_CATEGORIES = {
@@ -128,25 +128,25 @@ class SettingsDialog(QtWidgets.QDialog):
         ai_python_executable: str = "",
         midi_python_executable: str = "",
         appearance: Appearance = Appearance(),
-        marathon_variant: Optional[str] = None,
+        acid_variant: Optional[str] = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope 设置")
         self.resize(840, 710)
 
-        if marathon_variant is not None:
-            resolved_variant: Optional[str] = marathon_variant or None
-        elif parent is not None and hasattr(parent, "_marathon_variant"):
-            resolved_variant = getattr(parent, "_marathon_variant")
+        if acid_variant is not None:
+            resolved_variant: Optional[str] = acid_variant or None
+        elif parent is not None and hasattr(parent, "_acid_variant"):
+            resolved_variant = getattr(parent, "_acid_variant")
         else:
-            resolved_variant = resolve_marathon_variant(
+            resolved_variant = resolve_acid_variant(
                 appearance,
                 system_is_dark=detect_system_is_dark(),
             )
 
         self._appearance = appearance
-        self._marathon_variant: Optional[str] = resolved_variant
+        self._acid_variant: Optional[str] = resolved_variant
         self._report = hardware_report
         self._updated_limits: Optional[ResourceLimits] = None
         self._updated_ai_config: Optional[AIConfig] = None
@@ -540,43 +540,47 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._orig_limits = resource_limits
         self._orig_ai_cfg = ai_config
-        self.apply_skin(appearance, marathon_variant=self._marathon_variant or "")
+        self.apply_skin(appearance, acid_variant=self._acid_variant or "")
         self.open_category("appearance")
         self._category_buttons["appearance"].setFocus()
 
     @staticmethod
-    def _icon_color(appearance: Appearance, marathon_variant: Optional[str]) -> str:
-        if marathon_variant == "light":
-            return get_marathon_palette("light").accent_strong
-        if marathon_variant == "dark":
-            return get_marathon_palette("dark").accent_hover
+    def _icon_color(appearance: Appearance, acid_variant: Optional[str]) -> str:
+        if acid_variant == "light":
+            return get_acid_palette("light").accent_strong
+        if acid_variant == "dark":
+            return get_acid_palette("dark").accent
         _, _, accent = appearance.effective_colors(system_is_dark=detect_system_is_dark())
         return accent
 
-    def apply_skin(self, appearance: Appearance, *, marathon_variant: Optional[str] = None) -> None:
+    def apply_skin(self, appearance: Appearance, *, acid_variant: Optional[str] = None) -> None:
         self._appearance = appearance
-        if marathon_variant is not None:
-            self._marathon_variant = marathon_variant or None
+        if acid_variant is not None:
+            self._acid_variant = acid_variant or None
         else:
-            self._marathon_variant = resolve_marathon_variant(
+            self._acid_variant = resolve_acid_variant(
                 appearance,
                 system_is_dark=detect_system_is_dark(),
             )
-        icon_color = self._icon_color(appearance, self._marathon_variant)
+        icon_color = self._icon_color(appearance, self._acid_variant)
         for key, btn in self._category_buttons.items():
             btn.setIcon(QtGui.QIcon(_category_icon(key, color=icon_color)))
         if self.parent() is None:
-            if self._marathon_variant in ("light", "dark"):
-                self.setStyleSheet(marathon_stylesheet(appearance, self._marathon_variant))
+            if self._acid_variant in ("light", "dark"):
+                self.setStyleSheet(acid_stylesheet(appearance, self._acid_variant))
             else:
                 self.setStyleSheet("")
 
     def _add_page(self, key: str, widget: QtWidgets.QWidget, *, scroll: bool = False) -> None:
         if scroll:
+            widget.setObjectName("settingsScrollPage")
             area = QtWidgets.QScrollArea()
+            area.setObjectName("settingsScrollArea")
             area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
             area.setWidgetResizable(True)
+            area.viewport().setAutoFillBackground(False)
             area.setWidget(widget)
+            widget.setAutoFillBackground(False)
             widget = area
         self._page_map[key] = widget
         self._pages.addWidget(widget)

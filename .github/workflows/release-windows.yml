@@ -1,0 +1,221 @@
+name: release-windows
+
+# Automated Windows x64 Core release build:
+#   - Installs Windows Core dependencies + PyInstaller + pytest (no PyTorch / CUDA / TensorFlow bundled)
+#   - Runs Windows offscreen pytest regression suite
+#   - Packages `dist\ListenScopeCore\ListenScope.exe` via packaging\listenscope_core.spec
+#   - Smoke-tests a relocated copy of the frozen exe (`--simulate --headless-smoke`) without polluting dist/
+#   - Creates portable archive `ListenScope-Core-Windows-x64-Portable.zip`
+#   - Compiles Inno Setup 6 installer `ListenScope-Setup-Windows-x64.exe`
+#   - Generates `SHA256SUMS.txt` and publishes GitHub Release on `v*` tag pushes
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional version tag override when running manually (e.g. v0.2.1)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-core:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: "x64"
+          cache: pip
+          cache-dependency-path: |
+            requirements-core.txt
+            requirements-windows.txt
+
+      - name: Resolve application version
+        run: |
+          $pyVersion = python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text('utf-8'))['project']['version'])"
+          $pyVersion = $pyVersion.Trim()
+          if (-not $pyVersion) {
+            throw "Failed to read project.version from pyproject.toml"
+          }
+          $tagName = "${{ github.ref_name }}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.release_tag }}".Trim()) {
+            $tagName = "${{ inputs.release_tag }}".Trim()
+          }
+          if ($tagName -match '^v(\d+\.\d+\.\d+(?:[-+].+)?)$') {
+            $tagVersion = $Matches[1]
+            if ("${{ github.ref_type }}" -eq "tag" -and $tagVersion -ne $pyVersion) {
+              throw "Tag '$tagName' ($tagVersion) does not match pyproject.toml version ($pyVersion)"
+            }
+          }
+          "APP_VERSION=$pyVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_TAG=v$pyVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Resolved APP_VERSION=$pyVersion RELEASE_TAG=v$pyVersion"
+
+      - name: Install Windows Core dependencies and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-windows.txt pyinstaller pytest
+
+      - name: Run Windows offscreen pytest suite
+        run: |
+          python -m pytest -v --tb=short -o faulthandler_timeout=60
+
+      - name: Build Core executable via PyInstaller
+        run: |
+          python -m PyInstaller packaging\listenscope_core.spec --noconfirm --clean
+          $exe = Join-Path $PWD "dist\ListenScopeCore\ListenScope.exe"
+          if (-not (Test-Path $exe)) {
+            throw "PyInstaller finished without producing $exe"
+          }
+          $assetBase = if (Test-Path "dist\ListenScopeCore\_internal\ui\assets") {
+            "dist\ListenScopeCore\_internal\ui\assets"
+          } else {
+            "dist\ListenScopeCore\ui\assets"
+          }
+          foreach ($asset in @(
+            "listenscope.ico",
+            "acid_check_dark.svg",
+            "acid_check_light.svg",
+            "acid_chevron_down_dark.svg",
+            "acid_chevron_down_light.svg",
+            "acid_chevron_up_dark.svg",
+            "acid_chevron_up_light.svg"
+          )) {
+            $p = Join-Path $assetBase $asset
+            if (-not (Test-Path $p)) {
+              throw "Missing bundled UI asset in frozen package: $p"
+            }
+          }
+
+      - name: Smoke test relocated frozen Core executable
+        run: |
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "listenscope-smoke\ListenScopeCore"
+          if (Test-Path $smokeRoot) {
+            Remove-Item -Recurse -Force $smokeRoot
+          }
+          Copy-Item -Path "dist\ListenScopeCore" -Destination $smokeRoot -Recurse -Force
+          $smokeExe = Join-Path $smokeRoot "ListenScope.exe"
+          $proc = Start-Process -FilePath $smokeExe -ArgumentList @("--simulate", "--headless-smoke") -WorkingDirectory $smokeRoot -PassThru
+          if (-not $proc.WaitForExit(45000)) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            throw "Frozen ListenScope.exe --simulate --headless-smoke timed out after 45s"
+          }
+          if ($proc.ExitCode -ne 0) {
+            throw "Frozen ListenScope.exe smoke test exited with code $($proc.ExitCode)"
+          }
+          Write-Host "Relocated frozen smoke test passed (ExitCode=0)"
+
+      - name: Package Portable Core ZIP
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist\release" | Out-Null
+          $zipPath = "dist\release\ListenScope-Core-Windows-x64-Portable.zip"
+          if (Test-Path $zipPath) {
+            Remove-Item -Force $zipPath
+          }
+          Compress-Archive -Path "dist\ListenScopeCore\*" -DestinationPath $zipPath -CompressionLevel Optimal
+          if (-not (Test-Path $zipPath)) {
+            throw "Failed to create $zipPath"
+          }
+
+      - name: Ensure Inno Setup 6 and compile Setup installer
+        run: |
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $iscc = $cmd.Source }
+          }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = @(
+              "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+              "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+            ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc -or -not (Test-Path $iscc)) {
+            throw "Inno Setup 6 compiler (ISCC.exe) not found after choco install"
+          }
+          & $iscc "/DMyAppVersion=$($env:APP_VERSION)" "scripts\installer.iss"
+          if ($LASTEXITCODE -ne 0) {
+            throw "ISCC.exe failed with exit code $LASTEXITCODE"
+          }
+          $setupSrc = "dist\installer\ListenScope-Setup-Windows-x64.exe"
+          if (-not (Test-Path $setupSrc)) {
+            throw "Expected installer missing: $setupSrc"
+          }
+          Copy-Item -Path $setupSrc -Destination "dist\release\ListenScope-Setup-Windows-x64.exe" -Force
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          $files = @(
+            "ListenScope-Setup-Windows-x64.exe",
+            "ListenScope-Core-Windows-x64-Portable.zip"
+          )
+          $lines = foreach ($name in $files) {
+            $full = Join-Path "dist\release" $name
+            $hash = (Get-FileHash -Path $full -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $name"
+          }
+          $lines | Set-Content -Path "dist\release\SHA256SUMS.txt" -Encoding ascii
+          Get-Content "dist\release\SHA256SUMS.txt"
+
+      - name: Upload Release build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: listenscope-windows-core-${{ env.APP_VERSION }}
+          path: |
+            dist/release/ListenScope-Setup-Windows-x64.exe
+            dist/release/ListenScope-Core-Windows-x64-Portable.zip
+            dist/release/SHA256SUMS.txt
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $notesLines = @(
+            "## ListenScope $tag (Windows x64 Core)",
+            "",
+            "### 本版亮点",
+            "- **Acid Telemetry v2（酸性遥测）视觉重塑**：新增第 5 档无圆角建筑式工业预设（``ACID & VOID`` 暗夜 ``#0B0D0F`` / 酸性青柠 ``#CEFF18`` / 电光钴蓝 ``#2211FF`` 与 ``CLINICAL_LIGHT`` 临床浅色 ``#EEF2F6`` / 实验室翡翠 ``#00A878``），搭配底部 **Clinical Paper 对比扩展坞（``#historyPaperDock``）**、45° 警示斜纹 ``HazardStripeBar``、动态 5 点信号置信矩阵、卡片角落准星/棋盘格/序号水印与底部交互式 ``[STATIC_LOCK]`` 条码带；支持经典 / Lenso / Codex / Claude Code 无串色切换及旧预设配置静默兼容迁移。",
+            "- **核心功能集**：QQ 音乐等应用 WASAPI 按进程捕获、120s 零溢出环形缓冲、实时频谱 / Chroma / 24 调练习和弦试听与 ``.mid`` 导出、FFT-YIN 贝斯最低音与转调提示、Cubase 兼容 SMF Type-0 (``480 TPB``) MIDI 导出、同级目录便携存储（默认不写 ``C:\``）与免管理员非 ``C:`` 盘智能安装。",
+            "",
+            "### 下载说明（Core 版架构边界）",
+            "- **``ListenScope-Setup-Windows-x64.exe``**：Inno Setup 6 单文件安装版（免管理员，默认优先安装至 ``D:\ListenScope`` / ``E:\ListenScope`` 并保留升级后 ``exports\``）。",
+            "- **``ListenScope-Core-Windows-x64-Portable.zip``**：解压即用的绿色便携目录（内含 ``ListenScope.exe`` 与随包 UI SVG 资产）。",
+            "- **三环境隔离提示**：Release 安装包仅打包轻量 **Core 主程序（GUI + WASAPI 捕获 + CPU 实时分析，不捆绑 PyTorch / CUDA / TensorFlow，保持 <1GB RAM）**；如需 GPU AI 分轨或 Basic Pitch 单轨转 MIDI，可在「设置 → AI 与 MIDI 环境」点击一键自动配置，或手动执行 ``scripts\setup_windows.ps1`` 建立 ``.venv-ai`` 与短路径 ``.venv-midi``。",
+            "",
+            "### 已在 CI 验证 vs. 需实机验收项",
+            "- **CI 自动通过**：Linux 离屏全量测试、Windows x64 offscreen ``pytest`` 全量测试、PyInstaller 打包资产核验、便携重定位执行 ``--simulate --headless-smoke`` 退出码校验、``ISCC.exe`` 安装包编译及 ``SHA256SUMS.txt`` 校验生成。",
+            "- **仍需在个人 Windows 11 真机复测**：实际桌面音频 WASAPI 捕获与声卡试听、RTX 5060 Ti 8GB VRAM / 16GB RAM 下真实歌曲 2-Stem/4-Stem AI 分轨与 SMTC 切歌重置、三类 ``.mid`` 拖入 Steinberg Cubase 验证、以及 ``ListenScope-Setup-Windows-x64.exe`` 双击安装与不同 DPI 缩放下 SVG 控件渲染。"
+          )
+          $notesFile = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          $notesLines | Set-Content -Path $notesFile -Encoding utf8
+          gh release create $tag `
+            "dist\release\ListenScope-Setup-Windows-x64.exe" `
+            "dist\release\ListenScope-Core-Windows-x64-Portable.zip" `
+            "dist\release\SHA256SUMS.txt" `
+            --title "ListenScope $tag (Windows x64 Core)" `
+            --notes-file $notesFile

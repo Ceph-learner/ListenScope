@@ -386,117 +386,195 @@ def test_settings_dialog_turnkey_storage_and_help_badges():
         app.processEvents()
 
 
-def test_marathon_preset_integration_topbar_sync_persistence_and_packaging(
+def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packaging(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import re
     from core.appearance import PRESETS
-    from ui.marathon_style import is_marathon_eligible, resolve_marathon_variant
+    from core.models import AnalysisSnapshot, ChordEstimate, PitchEstimate
+    from ui.acid_style import (
+        AcidGraphicOverlay,
+        DotMatrixWidget,
+        acid_stylesheet,
+        is_acid_eligible,
+        resolve_acid_variant,
+    )
+    from ui.appearance import appearance_stylesheet
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
-    # 1. Core preset registry keeps classic [0] and lenso [1] while adding marathon
+    # 1. Core preset registry keeps classic [0] and lenso [1], adds acid_telemetry, and migrates legacy preset name silently
     preset_keys = list(PRESETS.keys())
     assert preset_keys[0] == "classic"
     assert preset_keys[1] == "lenso"
-    assert "marathon" in PRESETS
+    assert "acid_telemetry" in PRESETS
+    assert Appearance.from_mapping({"preset": "marathon"}).preset == "acid_telemetry"
 
-    m_dark = Appearance(preset="marathon", theme_mode="dark")
-    m_light = Appearance(preset="marathon", theme_mode="light")
-    m_sys = Appearance(preset="marathon", theme_mode="system")
-    assert m_dark.effective_colors() == ("#0B1016", "#E8EEF5", "#00A878")
+    m_dark = Appearance(preset="acid_telemetry", theme_mode="dark")
+    m_light = Appearance(preset="acid_telemetry", theme_mode="light")
+    m_sys = Appearance(preset="acid_telemetry", theme_mode="system")
+    assert m_dark.effective_colors() == ("#0B0D0F", "#F1F2EC", "#CEFF18")
     assert m_light.effective_colors() == ("#EEF2F6", "#090D14", "#00A878")
     assert m_sys.effective_colors(system_is_dark=False) == ("#EEF2F6", "#090D14", "#00A878")
 
-    assert is_marathon_eligible(m_dark) is True
-    assert is_marathon_eligible(Appearance(preset="classic")) is False
-    assert is_marathon_eligible(Appearance(preset="marathon", accent="#123456")) is False
-    assert resolve_marathon_variant(m_dark) == "dark"
-    assert resolve_marathon_variant(m_light) == "light"
-    assert resolve_marathon_variant(m_sys, system_is_dark=False) == "light"
-    assert resolve_marathon_variant(m_sys, system_is_dark=True) == "dark"
-    assert resolve_marathon_variant(Appearance(preset="lenso")) is None
+    assert is_acid_eligible(m_dark) is True
+    assert is_acid_eligible(Appearance(preset="classic")) is False
+    assert is_acid_eligible(Appearance(preset="acid_telemetry", accent="#123456")) is False
+    assert resolve_acid_variant(m_dark) == "dark"
+    assert resolve_acid_variant(m_light) == "light"
+    assert resolve_acid_variant(m_sys, system_is_dark=False) == "light"
+    assert resolve_acid_variant(m_sys, system_is_dark=True) == "dark"
+    assert resolve_acid_variant(Appearance(preset="lenso")) is None
 
-    # 2. AppearanceDialog lists Marathon preset, renders Marathon sample CSS, and cancels cleanly
+    # 2. AppearanceDialog lists Acid Telemetry preset, renders Acid sample CSS, and cancels cleanly
     previews: list[Appearance] = []
     initial = Appearance(preset="classic", theme_mode="dark")
     dlg = AppearanceDialog(initial, DARK_STYLESHEET, on_preview=previews.append, system_is_dark=True)
-    marathon_btn = next(b for b in dlg._presets.buttons() if b.property("preset") == "marathon")
-    assert marathon_btn.text() == "马拉松"
-    marathon_btn.click()
-    assert dlg.values().preset == "marathon"
-    assert "#0B1016" in dlg._sample.styleSheet()
-    assert "#00A878" in dlg._sample.styleSheet()
+    acid_btn = next(b for b in dlg._presets.buttons() if b.property("preset") == "acid_telemetry")
+    assert acid_btn.text() == "酸性遥测"
+    acid_btn.click()
+    assert dlg.values().preset == "acid_telemetry"
+    assert "#0B0D0F" in dlg._sample.styleSheet()
+    assert "#CEFF18" in dlg._sample.styleSheet()
     dlg.done(QtWidgets.QDialog.DialogCode.Rejected)
     assert previews[-1] == initial
 
-    # 3. SettingsDialog honors dark Marathon variant and resets cleanly when switching off Marathon
+    # 3. SettingsDialog honors dark Acid Telemetry variant and resets cleanly when switching off
     s_dlg = SettingsDialog(
         probe_system(),
         ResourceLimits(),
         AIConfig(),
-        appearance=Appearance(preset="marathon", theme_mode="dark"),
+        appearance=Appearance(preset="acid_telemetry", theme_mode="dark"),
     )
     try:
-        assert s_dlg._marathon_variant == "dark"
-        assert "马拉松 · 黑夜" in s_dlg._theme_summary.text()
-        assert "#0B1016" in s_dlg.styleSheet()
+        assert s_dlg._acid_variant == "dark"
+        assert "酸性遥测 · 黑夜" in s_dlg._theme_summary.text()
+        assert "#0B0D0F" in s_dlg.styleSheet()
+        scroll_pages = s_dlg.findChildren(QtWidgets.QWidget, "settingsScrollPage")
+        assert len(scroll_pages) == 3
+        assert all(not p.autoFillBackground() for p in scroll_pages)
         s_dlg.apply_skin(Appearance(preset="classic", theme_mode="dark"))
-        assert s_dlg._marathon_variant is None
+        assert s_dlg._acid_variant is None
         assert s_dlg.styleSheet() == ""
     finally:
         s_dlg.close()
         app.processEvents()
 
-    # 4. Full MainWindow + Controller integration: Classic -> Marathon Light -> Topbar Dark pill -> System follow -> Lenso
+    # 4. Full MainWindow + Controller integration: Classic -> Clinical Light -> Topbar Acid Dark -> Static Lock -> Follow System -> Lenso
     controller = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path)
     try:
         w = controller.window
-        assert w._marathon_variant is None
+        assert w._acid_variant is None
         assert w._skin_switcher.isVisible() is False
+        assert w._hazard_bar.isVisible() is False
+        assert w._acid_footer.isVisible() is False
+        assert w.chroma_widget.chord_echo_lbl.isVisible() is False
+        assert w._history_box.objectName() == ""
         assert w._skin_badge.text() == "THEME // CLASSIC"
 
-        # Accept Marathon Light via AppearanceDialog
-        class FakeMarathonLightDialog(AppearanceDialog):
+        # Accept Clinical Light via AppearanceDialog
+        class FakeAcidLightDialog(AppearanceDialog):
             def exec(self) -> int:  # type: ignore[override]
-                next(b for b in self._presets.buttons() if b.property("preset") == "marathon").click()
+                next(b for b in self._presets.buttons() if b.property("preset") == "acid_telemetry").click()
                 self._theme_mode_buttons["light"].click()
                 return QtWidgets.QDialog.DialogCode.Accepted
 
-        monkeypatch.setattr("ui.main_window.AppearanceDialog", FakeMarathonLightDialog)
+        monkeypatch.setattr("ui.main_window.AppearanceDialog", FakeAcidLightDialog)
         w.open_appearance_dialog()
 
-        assert w._marathon_variant == "light"
+        assert w._acid_variant == "light"
         assert w._skin_switcher.isHidden() is False
+        assert w._hazard_bar.isHidden() is False
+        assert w._acid_footer.isHidden() is False
         assert w._pill_light.isChecked() is True
         assert w._pill_dark.isChecked() is False
-        assert w._skin_badge.text() == "MARATHON // CLINICAL"
+        assert w._skin_badge.text() == "ACID // CLINICAL_LIGHT"
         assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#F8FAFC"
         saved = load_settings(controller._settings_path).appearance
-        assert saved.preset == "marathon"
+        assert saved.preset == "acid_telemetry"
         assert saved.theme_mode == "light"
 
-        # Topbar quick switch pill flips to Obsidian Dark and persists theme_mode="dark"
+        # Topbar quick switch pill flips to Acid & Void v2 Dark with Clinical Paper Dock and persists theme_mode="dark"
         w._pill_dark.click()
-        assert w._marathon_variant == "dark"
+        assert w._acid_variant == "dark"
         assert w._pill_dark.isChecked() is True
-        assert w._skin_badge.text() == "MARATHON // OBSIDIAN"
-        assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#0E141C"
+        assert w._skin_badge.text() == "ACID // VOID_V2"
+        assert w._history_box.objectName() == "historyPaperDock"
+        assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#F4F5F2"
+        assert w.tabs.tabText(0) == "// 01 SPECTRUM"
+        assert w.tabs.tabText(1) == "// 02 CHROMA & HARMONY"
+        assert w.chroma_widget.chord_echo_lbl.isHidden() is False
+        assert all(dm.isHidden() is False for dm in w.chroma_widget.findChildren(DotMatrixWidget))
+        assert all(ov.isHidden() is False for ov in w.chroma_widget.findChildren(AcidGraphicOverlay))
         saved_dark = load_settings(controller._settings_path).appearance
-        assert saved_dark.preset == "marathon"
+        assert saved_dark.preset == "acid_telemetry"
         assert saved_dark.theme_mode == "dark"
 
-        # Follow-system in Marathon mode tracks Windows colorScheme changes
-        w.apply_appearance(Appearance(preset="marathon", theme_mode="system"))
+        # Programmatic short aliases ("light"/"dark") match pill behavior
+        w.set_acid_skin("light")
+        assert w._acid_variant == "light"
+        w.set_acid_skin("dark")
+        assert w._acid_variant == "dark"
+
+        # [STATIC_LOCK] freezes analysis snapshot updates until unlocked
+        snap_am = AnalysisSnapshot(
+            timestamp=1.0,
+            waveform_min=[-0.3, -0.2],
+            waveform_max=[0.3, 0.2],
+            fft_freqs_hz=[100.0, 1000.0],
+            fft_db=[-35.0, -24.0],
+            log_freqs_hz=[100.0, 1000.0],
+            log_spectrum_db=[-35.0, -24.0],
+            chroma_12=[0.1] * 12,
+            chord=ChordEstimate("Am", "C", "High", 0.9, 0.25, False),
+            key=KeyEstimate("A minor", "C major", "High", 0.92, 0.2),
+            tempo=TempoEstimate(120.0, "High", 0.8),
+            pitch=PitchEstimate(440.0, "A4", 0.0, 0.95),
+            rms_dbfs=-18.0,
+            peak_dbfs=-6.0,
+            window_seconds=2.0,
+        )
+        snap_c = replace(
+            snap_am,
+            timestamp=2.0,
+            chord=ChordEstimate("C", "G", "High", 0.92, 0.3, False),
+            pitch=PitchEstimate(261.63, "C4", 0.0, 0.96),
+        )
+        w.update_analysis_snapshot(snap_am, None, None)
+        assert w.chroma_widget.chord_primary_lbl.text() == "Am"
+        assert "Am" in w.chroma_widget.chord_echo_lbl.text()
+
+        w._acid_footer.lock_btn.click()
+        assert w._static_lock is True
+        assert w._acid_footer.lock_btn.text() == "[STATIC_LOCK: ON]"
+        w.update_analysis_snapshot(snap_c, None, None)
+        assert w.chroma_widget.chord_primary_lbl.text() == "Am"  # remains frozen while locked
+
+        w._acid_footer.lock_btn.click()
+        assert w._static_lock is False
+        assert w._acid_footer.lock_btn.text() == "[STATIC_LOCK: OFF]"
+        w.update_analysis_snapshot(snap_c, None, None)
+        assert w.chroma_widget.chord_primary_lbl.text() == "C"
+
+        # Follow-system in Acid Telemetry mode tracks Windows colorScheme changes
+        w.apply_appearance(Appearance(preset="acid_telemetry", theme_mode="system"))
         monkeypatch.setattr("ui.main_window.detect_system_is_dark", lambda *_a, **_k: False)
         w._system_is_dark = True
         w._on_system_color_scheme_changed(QtCore.Qt.ColorScheme.Light)
-        assert w._marathon_variant == "light"
+        assert w._acid_variant == "light"
         assert w._pill_light.isChecked() is True
 
-        # Switch back to Lenso Light cleanly hides topbar switcher & restores non-Marathon plots
+        # Switch back to Lenso Light cleanly hides topbar switcher/chrome & restores classic Chinese tabs & plots
         w.apply_appearance(Appearance(preset="lenso", theme_mode="light"))
-        assert w._marathon_variant is None
+        assert w._acid_variant is None
         assert w._skin_switcher.isVisible() is False
+        assert w._hazard_bar.isVisible() is False
+        assert w._acid_footer.isVisible() is False
+        assert w.chroma_widget.chord_echo_lbl.isVisible() is False
+        assert all(dm.isVisible() is False for dm in w.chroma_widget.findChildren(DotMatrixWidget))
+        assert all(ov.isVisible() is False for ov in w.chroma_widget.findChildren(AcidGraphicOverlay))
+        assert w._history_box.objectName() == ""
+        assert w.tabs.tabText(0) == "// 01 实时频谱与波形"
         assert w._skin_badge.text() == "THEME // LENSO"
         assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#EEF4FC"
         assert w.findChildren(QtWidgets.QGraphicsEffect) == []
@@ -505,34 +583,54 @@ def test_marathon_preset_integration_topbar_sync_persistence_and_packaging(
         controller.window.close()
         app.processEvents()
 
-    # 5. Marathon flat controls QSS & PyInstaller spec SVG assets
-    from ui.appearance import appearance_stylesheet
-    from ui.marathon_style import marathon_stylesheet
+    # 5. ChordPracticeDialog SNAPSHOT_ONLY & Acid skin isolation
+    est = KeyEstimate("C major", "A minor", "High", 0.91, 0.22)
+    c_dlg = ChordPracticeDialog(["C", "G", "Am"], est, 0, acid_variant="dark")
+    try:
+        assert c_dlg._results.rowHeight(0) == c_dlg._results.rowHeight(1)
+        assert any(lbl.text() == "SNAPSHOT_ONLY" for lbl in c_dlg.findChildren(QtWidgets.QLabel))
+    finally:
+        c_dlg.close()
+        app.processEvents()
 
-    qss_light = marathon_stylesheet(m_light, "light")
-    qss_dark = marathon_stylesheet(m_dark, "dark")
+    # 6. Acid flat controls QSS, PyInstaller spec SVG assets, and IP scrub in ui/ + docs/
+    qss_light = acid_stylesheet(m_light, "light")
+    qss_dark = acid_stylesheet(m_dark, "dark")
     for qss in (qss_light, qss_dark):
         assert "QComboBox::drop-down" in qss
         assert "QComboBox::down-arrow" in qss
         assert "QSpinBox::up-button" in qss
         assert "QSpinBox::down-button" in qss
         assert "QScrollArea" in qss
-    assert "marathon_chevron_down_light.svg" in qss_light
-    assert "marathon_chevron_up_light.svg" in qss_light
-    assert "marathon_chevron_down_dark.svg" in qss_dark
-    assert "marathon_chevron_up_dark.svg" in qss_dark
-    # Classic stylesheet must stay completely untouched by Marathon-only chevron SVGs
+        assert "QWidget#settingsScrollPage" in qss
+        assert "QFrame#acidTopbar QLabel" not in qss
+        assert "QGroupBox#historyPaperDock" in qss
+    assert "acid_chevron_down_light.svg" in qss_light
+    assert "acid_chevron_up_light.svg" in qss_light
+    assert "acid_check_light.svg" in qss_light
+    assert "acid_chevron_down_dark.svg" in qss_dark
+    assert "acid_chevron_up_dark.svg" in qss_dark
+    assert "acid_check_dark.svg" in qss_dark
+
+    # Classic stylesheet must stay completely untouched by Acid-only chevron SVGs
     classic_qss = appearance_stylesheet(DARK_STYLESHEET, Appearance())
-    assert "marathon_chevron_" not in classic_qss
+    assert "acid_chevron_" not in classic_qss
 
     root = Path(__file__).resolve().parent.parent
     spec_txt = (root / "packaging" / "listenscope_core.spec").read_text(encoding="utf-8")
     for svg_name in (
-        "marathon_check.svg",
-        "marathon_chevron_down_light.svg",
-        "marathon_chevron_down_dark.svg",
-        "marathon_chevron_up_light.svg",
-        "marathon_chevron_up_dark.svg",
+        "acid_check_dark.svg",
+        "acid_check_light.svg",
+        "acid_chevron_down_light.svg",
+        "acid_chevron_down_dark.svg",
+        "acid_chevron_up_light.svg",
+        "acid_chevron_up_dark.svg",
     ):
         assert (root / "ui" / "assets" / svg_name).is_file()
         assert svg_name in spec_txt
+
+    forbidden = re.compile(r"marathon|nucaloric|\bm5\b|马拉松", re.IGNORECASE)
+    for py_file in sorted((root / "ui").glob("*.py")):
+        assert not forbidden.search(py_file.read_text(encoding="utf-8")), f"Unexpected legacy term in {py_file.name}"
+    for doc_file in [root / "README.md", root / "DESIGN.md", *sorted((root / "docs").glob("*.md"))]:
+        assert not forbidden.search(doc_file.read_text(encoding="utf-8")), f"Unexpected legacy term in {doc_file.name}"

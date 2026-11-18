@@ -9,7 +9,9 @@
 ;   - Preserves user `exports\` on uninstall / upgrade.
 
 #define MyAppName "ListenScope"
-#define MyAppVersion "0.2.0"
+#ifndef MyAppVersion
+#define MyAppVersion "0.2.1"
+#endif
 #define MyAppPublisher "ListenScope Project"
 #define MyAppExeName "ListenScope.exe"
 #define MySourceDir "..\dist\ListenScopeCore"

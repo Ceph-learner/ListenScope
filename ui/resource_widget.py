@@ -11,7 +11,7 @@ from core.logging import PerformanceRecord
 from core.models import ResourceSnapshot, ResourceStatus
 from core.paths import default_export_dir
 from ui.appearance import set_widget_tone
-from ui.marathon_style import TelemetryHeader
+from ui.acid_style import TelemetryHeader
 
 
 def _status_to_tone(status: ResourceStatus) -> str:
@@ -117,6 +117,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
             cell.addWidget(title_lbl)
             cell.addWidget(val_lbl, 1)
             holder = QtWidgets.QWidget()
+            holder.setObjectName("telemetryCell")
             holder.setLayout(cell)
             grid.addWidget(holder, r, c)
             self._fields[key] = val_lbl

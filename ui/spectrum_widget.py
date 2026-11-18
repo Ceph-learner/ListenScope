@@ -13,11 +13,11 @@ from core.appearance import ANALYSIS_LAYOUTS, Appearance
 from core.models import AnalysisSnapshot
 from ui.appearance import apply_plot_appearance
 from ui.help_badge import HelpBadge
-from ui.marathon_style import (
+from ui.acid_style import (
     TelemetryHeader,
-    apply_marathon_plot_theme,
-    get_marathon_palette,
-    marathon_colormap_lut,
+    acid_colormap_lut,
+    apply_acid_plot_theme,
+    get_acid_palette,
 )
 
 ANALYSIS_VIEWS = {
@@ -151,7 +151,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             cmap = None
         if cmap is not None:
             self._default_spec_lut = cmap.getLookupTable(0.0, 1.0, 256)
-        self._spec_img.setLookupTable(marathon_colormap_lut("spectrogram", "light"))
+        self._spec_img.setLookupTable(acid_colormap_lut("spectrogram", "light"))
         self.spec_plot.addItem(self._spec_img)
         self._plots = (self.wave_plot, self.fft_plot, self.log_plot, self.spec_plot)
         self._chart_cards = tuple(
@@ -171,20 +171,20 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         appearance: Appearance,
         *,
         system_is_dark: Optional[bool] = None,
-        marathon_variant: Optional[str] = None,
+        acid_variant: Optional[str] = None,
     ) -> None:
-        if marathon_variant in ("light", "dark"):
-            p = get_marathon_palette(marathon_variant)
+        if acid_variant in ("light", "dark"):
+            p = get_acid_palette(acid_variant)
             for plot in self._plots:
-                apply_marathon_plot_theme(plot, appearance, marathon_variant)
+                apply_acid_plot_theme(plot, appearance, acid_variant)
             wave_pen = pg.mkPen(p.plot_wave, width=1.2)
             self._wave_max_curve.setPen(wave_pen)
             self._wave_min_curve.setPen(wave_pen)
             self._fft_curve.setPen(pg.mkPen(p.plot_fft, width=1.5))
             qc = QtGui.QColor(p.plot_log)
             self._log_curve.setPen(pg.mkPen(p.plot_log, width=1.8))
-            self._log_curve.setBrush((qc.red(), qc.green(), qc.blue(), 34 if marathon_variant == "light" else 42))
-            self._spec_img.setLookupTable(marathon_colormap_lut("spectrogram", marathon_variant))
+            self._log_curve.setBrush((qc.red(), qc.green(), qc.blue(), 34 if acid_variant == "light" else 42))
+            self._spec_img.setLookupTable(acid_colormap_lut("spectrogram", acid_variant))
             return
 
         mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
