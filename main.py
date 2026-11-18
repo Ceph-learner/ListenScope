@@ -92,13 +92,21 @@ from ui.main_window import ListenScopeMainWindow
 
 
 def _discover_ai_python_executable() -> Optional[str]:
-    """Locate isolated `.venv-ai` Python executable across source & frozen PyInstaller layouts."""
+    """Locate isolated `.venv-ai` or bundled `runtime/ai` Python executable across source & frozen layouts."""
+    env_override = os.environ.get("LISTENSCOPE_AI_PYTHON", "").strip()
+    if env_override and Path(env_override).exists():
+        return env_override
     exe_dir = Path(sys.executable).resolve().parent
     roots = [ROOT, exe_dir, exe_dir.parent, exe_dir.parent.parent]
     candidates: list[Path] = []
     for base in roots:
         candidates.append(base / ".venv-ai" / "Scripts" / "python.exe")
         candidates.append(base / ".venv-ai" / "bin" / "python")
+    for base in roots:
+        for rel in (("runtime", "ai"), ("runtimes", "ai")):
+            candidates.append(base.joinpath(*rel, "python.exe"))
+            candidates.append(base.joinpath(*rel, "Scripts", "python.exe"))
+            candidates.append(base.joinpath(*rel, "bin", "python"))
     try:
         cur_resolved = Path(sys.executable).resolve()
     except Exception:
@@ -115,13 +123,25 @@ def _discover_ai_python_executable() -> Optional[str]:
 
 
 def _discover_midi_python_executable() -> Optional[str]:
-    """Locate isolated CPU `.venv-midi` Python 3.11 executable across source & frozen layouts."""
+    """Locate isolated CPU `.venv-midi` or bundled short-path `m` / `runtime/midi` Python 3.11 executable."""
+    env_override = os.environ.get("LISTENSCOPE_MIDI_PYTHON", "").strip()
+    if env_override and Path(env_override).exists():
+        return env_override
     exe_dir = Path(sys.executable).resolve().parent
     roots = [ROOT, exe_dir, exe_dir.parent, exe_dir.parent.parent]
     candidates: list[Path] = []
     for base in roots:
         candidates.append(base / ".venv-midi" / "Scripts" / "python.exe")
         candidates.append(base / ".venv-midi" / "bin" / "python")
+    for base in roots:
+        for rel in (("m",), ("runtime", "midi"), ("runtimes", "midi")):
+            candidates.append(base.joinpath(*rel, "python.exe"))
+            candidates.append(base.joinpath(*rel, "Scripts", "python.exe"))
+            candidates.append(base.joinpath(*rel, "bin", "python"))
+    if sys.platform == "win32":
+        for drive in ("D:", "C:", "E:"):
+            candidates.append(Path(f"{drive}\\LS-midi\\.venv-midi\\Scripts\\python.exe"))
+            candidates.append(Path(f"{drive}\\LS-midi\\m\\Scripts\\python.exe"))
     try:
         cur_resolved = Path(sys.executable).resolve()
     except Exception:
@@ -224,6 +244,7 @@ class ListenScopeController:
             channels=self.audio_config.channels,
         )
         self.drum_preview = DrumPreviewPlayer(self.audio_config.sample_rate, self.audio_config.channels)
+        self.chord_preview = DrumPreviewPlayer(self.audio_config.sample_rate, self.audio_config.channels)
         self.bookmark_manager = ABBookmarkManager(max_bookmarks=12)
         self.ab_player = HistoryABPlayer(
             self.ring_buffer,
@@ -313,6 +334,10 @@ class ListenScopeController:
         self.window.chroma_widget.set_progression_mode(saved_settings.progression_mode)
         self.window.mixer_widget.set_transpose_semitones(saved_settings.transpose_semitones)
         self.window.chroma_widget.sync_auto_reset_ui(enabled=self._auto_reset_on_track_change)
+        self.window.chroma_widget.configure_chord_practice(
+            preview_player=self.chord_preview,
+            before_play=self._on_before_chord_preview,
+        )
 
         self.window.set_closing_handler(self.shutdown)
         self._connect_signals()
@@ -453,6 +478,7 @@ class ListenScopeController:
             self.window.show_banner_message("🧪 当前运行合成测试信号源（非 Windows 真机 WASAPI 捕获）。")
         elif kind == "system_loopback":
             self._stop_drum_preview()
+            self._stop_chord_preview()
             backend = WasapiSystemLoopbackBackend(audio_config=self.audio_config)
             self.window.show_banner_message(SYSTEM_LOOPBACK_WARNING)
         else:
@@ -469,6 +495,9 @@ class ListenScopeController:
             self.window.show_banner_message(f"启动音频捕获失败: {exc}")
             return
 
+        if backend.get_stats().mode == CaptureMode.SYSTEM_LOOPBACK:
+            self._stop_drum_preview()
+            self._stop_chord_preview()
         self._capture_backend = backend
         self._drain_stop.clear()
         self._drain_thread = threading.Thread(
@@ -756,6 +785,7 @@ class ListenScopeController:
         if not pcm.size:
             self.window.show_banner_message("当前分析没有可试听的鼓点。")
             return
+        self._stop_chord_preview()
         self.ab_player.pause()
         self.mixer_engine.pause()
         self.metronome.stop_standalone()
@@ -773,8 +803,32 @@ class ListenScopeController:
             return True
         return False
 
+    def _stop_chord_preview(self) -> bool:
+        stopped = self.chord_preview.stop()
+        self.window.chroma_widget.sync_chord_preview_stopped(natural=False)
+        return stopped
+
+    def _on_before_chord_preview(self) -> Optional[str]:
+        backend = self._capture_backend
+        if backend is not None and backend.is_running and backend.get_stats().mode == CaptureMode.SYSTEM_LOOPBACK:
+            msg = "请先停止系统环回捕获，再试听练习和弦，避免把试听声录入历史。"
+            self.window.show_banner_message(msg)
+            return msg
+        if self.live_separator.is_active or self.live_separator.is_starting or self.window.live_widget.pending_start:
+            msg = "请先停止近实时分轨监听，再试听练习和弦。"
+            self.window.show_banner_message(msg)
+            return msg
+        self._stop_drum_preview()
+        self.ab_player.pause()
+        self.mixer_engine.pause()
+        self.metronome.stop_standalone()
+        self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
+        self.live_separator.close_output_stream()
+        return None
+
     def _on_ab_play(self) -> None:
         self._stop_drum_preview()
+        self._stop_chord_preview()
         if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
             self.ab_player.select_recent_seconds(min(30.0, max(1.0, self.ring_buffer.available_seconds)))
         self.metronome.stop_standalone()
@@ -822,6 +876,7 @@ class ListenScopeController:
 
     def _on_mixer_before_play(self) -> None:
         self._stop_drum_preview()
+        self._stop_chord_preview()
         self.metronome.stop_standalone()
         self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
         self.ab_player.pause()
@@ -858,6 +913,7 @@ class ListenScopeController:
     def _on_metronome_standalone_toggled(self, enabled: bool) -> None:
         if enabled:
             self._stop_drum_preview()
+            self._stop_chord_preview()
             self.ab_player.pause()
             self.mixer_engine.pause()
             self.live_separator.close_output_stream()
@@ -975,7 +1031,9 @@ class ListenScopeController:
         self.window.show_banner_message("✅ 已重置和弦/调性/BPM 分析历史，实时捕获继续运行。")
 
     def _on_toggle_active_playback(self) -> None:
-        if self._stop_drum_preview():
+        stopped_drum = self._stop_drum_preview()
+        stopped_chord = self._stop_chord_preview()
+        if stopped_drum or stopped_chord:
             return
         if self.window.tabs.currentWidget() is self.window.mixer_widget:
             if self.mixer_engine.is_playing:
@@ -1145,6 +1203,7 @@ class ListenScopeController:
             return
         try:
             self.stop_capture(live_stop_reason="已导入本地音频，自动停止实验性实时分轨")
+            self._stop_chord_preview()
             self.ab_player.stop()
             self.mixer_engine.pause()
             imported_sec, truncated = self.ring_buffer.import_audio_file_streaming(
@@ -1192,6 +1251,7 @@ class ListenScopeController:
                 self.window.show_banner_message(f"单轨 `{stem_name}` 不包含有效音频帧。")
                 return
             self.stop_capture(live_stop_reason="已载入单轨分析，自动停止实验性实时分轨")
+            self._stop_chord_preview()
             self.ab_player.stop()
             self.mixer_engine.pause()
             self.ring_buffer.clear()
@@ -1366,6 +1426,7 @@ class ListenScopeController:
 
         try:
             self._stop_drum_preview()
+            self._stop_chord_preview()
             self._stem_generation += 1
             self._latest_deep_report = None
             self._latest_midi_result = None
@@ -1550,6 +1611,7 @@ class ListenScopeController:
             return
 
         self._stop_drum_preview()
+        self._stop_chord_preview()
         self.metronome.stop_standalone()
         self.window.chroma_widget.sync_metronome_ui(standalone_playing=False)
         self.ab_player.pause()
@@ -1751,6 +1813,8 @@ class ListenScopeController:
 
         if self.drum_preview.close_if_finished():
             self.window.mixer_widget.set_drum_preview_playing(False)
+        if self.chord_preview.close_if_finished():
+            self.window.chroma_widget.sync_chord_preview_stopped(natural=True)
         self.ab_player.close_if_finished()
         self.mixer_engine.close_if_finished()
         self.window.update_ab_playhead(
@@ -1784,7 +1848,9 @@ class ListenScopeController:
                 )
                 self.window.update_capture_stats(cstats, self.ring_buffer.available_seconds)
             else:
-                self.window.history_coverage_lbl.setText(f"已缓冲: {self.ring_buffer.available_seconds:.1f} / 120.0 s")
+                cov_txt = f"已缓冲: {self.ring_buffer.available_seconds:.1f} / 120.0 s"
+                if self.window.history_coverage_lbl.text() != cov_txt:
+                    self.window.history_coverage_lbl.setText(cov_txt)
 
             self._refresh_history_overview()
             self._sync_ab_bookmarks()
@@ -1812,6 +1878,7 @@ class ListenScopeController:
         if hasattr(self, "_timer"):
             self._timer.stop()
         self._stop_drum_preview()
+        self._stop_chord_preview()
         self.stop_capture()
         self.metronome.stop_standalone()
         self.ab_player.stop()

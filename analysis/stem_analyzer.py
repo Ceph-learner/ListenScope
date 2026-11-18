@@ -228,8 +228,126 @@ def _coalesce_note_frames(
     return events[:max_notes]
 
 
+def _yin_bass_frame_f0(
+    frame: np.ndarray,
+    mag: np.ndarray,
+    *,
+    sample_rate: int = CANONICAL_SR,
+    bin_hz: float = CANONICAL_SR / 8192.0,
+    min_hz: float = 28.0,
+    max_hz: float = 350.0,
+) -> tuple[float, float]:
+    """Estimate bass fundamental frequency using FFT-accelerated YIN (CMNDF) + harmonic verification."""
+    n = int(frame.shape[0])
+    w = n // 2
+    tau_min = max(2, int(round(sample_rate / float(max_hz))))
+    tau_max = min(w - 2, int(round(sample_rate / float(min_hz))))
+    if tau_max <= tau_min + 2:
+        return 0.0, 0.0
+
+    xf = frame.astype(np.float64)
+    xf = xf - float(np.mean(xf))
+    e0 = float(np.dot(xf[:w], xf[:w]))
+    if e0 <= 1e-12:
+        return 0.0, 0.0
+
+    fft_n = n * 2
+    acf = np.fft.irfft(np.conj(np.fft.rfft(xf[:w], n=fft_n)) * np.fft.rfft(xf, n=fft_n), n=fft_n)
+    cs = np.empty(n + 1, dtype=np.float64)
+    cs[0] = 0.0
+    np.cumsum(xf * xf, out=cs[1:])
+
+    e_tau = cs[w : w + tau_max + 1] - cs[: tau_max + 1]
+    diff = np.maximum(0.0, e0 + e_tau - 2.0 * acf[: tau_max + 1])
+
+    cmndf = np.ones(tau_max + 1, dtype=np.float64)
+    running = np.cumsum(diff[1:])
+    taus = np.arange(1, tau_max + 1, dtype=np.float64)
+    valid = running > 1e-12
+    cmndf[1:][valid] = diff[1:][valid] * taus[valid] / running[valid]
+
+    thresh = 0.18
+    tau = -1
+    idx = tau_min
+    while idx < tau_max:
+        if cmndf[idx] < thresh:
+            while idx + 1 < tau_max and cmndf[idx + 1] < cmndf[idx]:
+                idx += 1
+            tau = idx
+            break
+        idx += 1
+
+    if tau < 0:
+        rel = int(np.argmin(cmndf[tau_min : tau_max + 1]))
+        tau = tau_min + rel
+        if cmndf[tau] > 0.42:
+            return 0.0, 0.0
+
+    # Guard against octave-up lock on overtone-heavy bass notes where 2nd harmonic momentarily dips <0.18
+    cand2 = tau * 2
+    if cand2 + 3 <= tau_max:
+        win2 = cmndf[cand2 - 3 : cand2 + 4]
+        local_off = int(np.argmin(win2)) - 3
+        c2 = cand2 + local_off
+        if cmndf[c2] < 0.08 and cmndf[c2] < cmndf[tau] * 0.65:
+            sub_bin = max(1, min(mag.shape[0] - 1, int(round((sample_rate / float(c2)) / bin_hz))))
+            spec_med = float(np.median(mag[1 : min(mag.shape[0], int(round(max_hz / bin_hz)) + 2)])) + 1e-9
+            lo_b = max(1, sub_bin - 1)
+            hi_b = min(mag.shape[0], sub_bin + 2)
+            if float(np.max(mag[lo_b:hi_b])) > 1.8 * spec_med:
+                tau = c2
+
+    if tau_min < tau < tau_max:
+        alpha = float(cmndf[tau - 1])
+        beta = float(cmndf[tau])
+        gamma = float(cmndf[tau + 1])
+        denom = alpha - 2.0 * beta + gamma
+        delta = max(-0.5, min(0.5, 0.5 * (alpha - gamma) / denom)) if abs(denom) > 1e-12 else 0.0
+        tau_est = float(tau) + delta
+    else:
+        tau_est = float(tau)
+
+    if tau_est <= 0.0:
+        return 0.0, 0.0
+    freq = float(sample_rate) / tau_est
+    conf = min(1.0, max(0.0, 1.0 - float(cmndf[tau])))
+    if not np.isfinite(freq) or freq < min_hz - 1.0 or freq > max_hz + 5.0 or conf < 0.50:
+        return 0.0, 0.0
+    return freq, conf
+
+
+def _detect_bass_modulation(events: list[StemNoteEvent]) -> tuple[bool, str]:
+    """Compare first-half vs second-half bass pitch-class weightings to surface key shift / modulation hints."""
+    if len(events) < 4:
+        return False, ""
+    span = events[-1].end_sec - events[0].start_sec
+    if span < 1.6:
+        return False, ""
+    mid = len(events) // 2
+    first_half = events[:mid]
+    second_half = events[mid:]
+
+    vec_a = np.zeros(12, dtype=np.float64)
+    vec_b = np.zeros(12, dtype=np.float64)
+    for ev in first_half:
+        vec_a[ev.pitch_midi % 12] += max(0.05, ev.end_sec - ev.start_sec)
+    for ev in second_half:
+        vec_b[ev.pitch_midi % 12] += max(0.05, ev.end_sec - ev.start_sec)
+
+    na = float(np.linalg.norm(vec_a))
+    nb = float(np.linalg.norm(vec_b))
+    if na <= 1e-6 or nb <= 1e-6:
+        return False, ""
+    cos_sim = float(np.dot(vec_a, vec_b) / (na * nb))
+    pc_a = PITCH_CLASSES[int(np.argmax(vec_a))]
+    pc_b = PITCH_CLASSES[int(np.argmax(vec_b))]
+    if cos_sim < 0.45 and pc_a != pc_b:
+        return True, f"前半段根音重心 {pc_a} → 后半段 {pc_b} (可能发生转调，最低音按实音 MIDI 标定)"
+    return False, ""
+
+
 def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) -> BassAnalysisResult:
-    """Analyze separated bass stem in [30 Hz, 340 Hz] using 8192-pt Hann FFT (~5.86 Hz bin)."""
+    """Analyze separated bass stem in [28 Hz, 350 Hz] using FFT-accelerated YIN/CMNDF + subharmonic verification."""
     path = Path(bass_wav_path)
     fft_size = 8192
     hop_size = 2048
@@ -237,63 +355,69 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
     bin_hz = CANONICAL_SR / float(fft_size)
     win = np.hanning(fft_size).astype(np.float32)
 
-    min_bin = max(1, int(round(30.0 / bin_hz)))
-    max_bin = int(round(340.0 / bin_hz))
-
     duration_sec, frames_iter = _iter_aligned_mono_48k_frames(
         [(path, 1.0)], fft_size=fft_size, hop_size=hop_size, max_seconds=max_seconds
     )
 
-    raw_obs: list[tuple[float, int, float, float]] = []
-    cand_bins = np.arange(min_bin, max_bin + 1)
+    frame_data: list[tuple[float, float, float]] = []
     signal_detected = False
     silence_rms = 10.0 ** (AnalysisConfig().silence_threshold_dbfs / 20.0)
 
     for center_sec, frame in frames_iter:
+        t_start = max(0.0, center_sec - hop_sec * 0.5)
         if not np.all(np.isfinite(frame)):
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         rms = float(np.sqrt(np.mean(np.square(frame))))
         if rms < silence_rms:
-            raw_obs.append((max(0.0, center_sec - hop_sec * 0.5), -1, 0.0, 0.0))
+            frame_data.append((t_start, 0.0, 0.0))
             continue
         signal_detected = True
 
         mag = np.abs(np.fft.rfft(frame * win)).astype(np.float32)
-        h1 = mag[cand_bins]
-        h2 = mag[np.minimum(cand_bins * 2, mag.shape[0] - 1)]
-        h3 = mag[np.minimum(cand_bins * 3, mag.shape[0] - 1)]
-        score = h1 + 0.45 * h2 + 0.2 * h3
-
-        rel_idx = int(np.argmax(score))
-        peak_bin = min_bin + rel_idx
-        peak_val = float(score[rel_idx])
-        med_val = float(np.median(score)) + 1e-9
-        conf = min(1.0, max(0.0, (peak_val / med_val - 1.0) / 14.0))
-        if not np.isfinite(conf) or conf < 0.20:
-            raw_obs.append((max(0.0, center_sec - hop_sec * 0.5), -1, 0.0, 0.0))
+        freq, conf = _yin_bass_frame_f0(frame, mag, sample_rate=CANONICAL_SR, bin_hz=bin_hz)
+        if freq <= 0.0:
+            frame_data.append((t_start, 0.0, 0.0))
             continue
+        frame_data.append((t_start, freq, conf))
 
-        alpha = float(score[rel_idx - 1]) if rel_idx > 0 else peak_val
-        beta = peak_val
-        gamma = float(score[rel_idx + 1]) if rel_idx + 1 < score.shape[0] else peak_val
-        denom = alpha - 2.0 * beta + gamma
-        raw_delta = 0.5 * (alpha - gamma) / denom if abs(denom) > 1e-9 else 0.0
-        delta = max(-0.5, min(0.5, raw_delta))
-        freq = max(25.0, float((peak_bin + delta) * bin_hz))
-        midi = max(0, min(127, int(round(69.0 + 12.0 * np.log2(freq / 440.0)))))
-        raw_obs.append((max(0.0, center_sec - hop_sec * 0.5), midi, freq, conf))
+    # 3-frame median filter across adjacent voiced frames eliminates single-frame octave glitches
+    raw_obs: list[tuple[float, int, float, float]] = []
+    for idx, (t_start, freq, conf) in enumerate(frame_data):
+        if freq <= 0.0:
+            raw_obs.append((t_start, -1, 0.0, 0.0))
+            continue
+        nbrs = [freq]
+        if idx > 0 and frame_data[idx - 1][1] > 0.0:
+            nbrs.append(frame_data[idx - 1][1])
+        if idx + 1 < len(frame_data) and frame_data[idx + 1][1] > 0.0:
+            nbrs.append(frame_data[idx + 1][1])
+        med_freq = float(np.median(nbrs))
+        midi = max(0, min(127, int(round(69.0 + 12.0 * np.log2(med_freq / 440.0)))))
+        raw_obs.append((t_start, midi, med_freq, conf))
 
     events = _coalesce_note_frames(raw_obs, hop_sec=hop_sec, min_note_duration_sec=0.08)
     if events:
-        midis = [e.pitch_midi for e in events]
-        lowest = _midi_to_name(min(midis))
-        highest = _midi_to_name(max(midis))
-        counts = Counter(PITCH_CLASSES[m % 12] for m in midis)
+        lowest_ev = min(events, key=lambda ev: (ev.pitch_midi, ev.start_sec))
+        highest_ev = max(events, key=lambda ev: (ev.pitch_midi, -ev.start_sec))
+        lowest_midi = int(lowest_ev.pitch_midi)
+        highest_midi = int(highest_ev.pitch_midi)
+        lowest = _midi_to_name(lowest_midi)
+        highest = _midi_to_name(highest_midi)
+        lowest_freq_hz = round(float(lowest_ev.frequency_hz), 2)
+        lowest_time_sec = round(float(lowest_ev.start_sec), 3)
+        counts = Counter(PITCH_CLASSES[ev.pitch_midi % 12] for ev in events)
         roots = [pc for pc, _ in counts.most_common(6)]
+        mod_detected, mod_note = _detect_bass_modulation(events)
     else:
         lowest = None
         highest = None
+        lowest_midi = None
+        highest_midi = None
+        lowest_freq_hz = None
+        lowest_time_sec = None
         roots = []
+        mod_detected = False
+        mod_note = ""
 
     return BassAnalysisResult(
         stem_path=path,
@@ -303,6 +427,12 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
         root_pitch_classes=roots,
         notes=events,
         signal_detected=signal_detected,
+        lowest_midi=lowest_midi,
+        highest_midi=highest_midi,
+        lowest_freq_hz=lowest_freq_hz,
+        lowest_note_time_sec=lowest_time_sec,
+        modulation_detected=mod_detected,
+        modulation_note=mod_note,
     )
 
 
@@ -789,6 +919,11 @@ def export_transcription_sheet(
         if semi != 0
         else "- **记谱移调 (Transpose)**: `0 半音 (原调实音)`"
     )
+    mod_flags: list[str] = []
+    if report.estimated_key.modulation_hint:
+        mod_flags.append("全局调性滑动窗口检测到可能转调")
+    if report.bass is not None and report.bass.modulation_detected and report.bass.modulation_note:
+        mod_flags.append(report.bass.modulation_note)
     lines: list[str] = [
         "# ListenScope 离线分轨与扒谱分析报告",
         "",
@@ -800,34 +935,67 @@ def export_transcription_sheet(
         f"- **推测调性 (Key)**: `{key_primary}`（第二候选: `{key_secondary}`，稳定度: `{report.estimated_key.stability}`）",
         f"- **调性说明**: {report.estimated_key.relation_note}；{report.estimated_key.key_signature_note}",
         f"- **推测速度 (BPM)**: `{bpm_str}`",
-        "",
-        "## 2. 时间轴和弦进行表 (Chord Timeline)",
-        "",
-        "| 开始 (s) | 结束 (s) | 和弦候选 | 第二候选 | 相关度 | 稳定度 |",
-        "| ---: | ---: | :--- | :--- | ---: | :--- |",
     ]
+    if mod_flags:
+        lines.append(f"- **转调提示 (Modulation)**: {'；'.join(mod_flags)}")
+    lines.extend(
+        [
+            "",
+            "## 2. 时间轴和弦进行表 (Chord Timeline)",
+            "",
+            "| 开始 (s) | 结束 (s) | 和弦候选 | 第二候选 | 相关度 | 稳定度 |",
+            "| ---: | ---: | :--- | :--- | ---: | :--- |",
+        ]
+    )
     for seg in report.chord_timeline:
         lines.append(
             f"| {seg.start_sec:.2f} | {seg.end_sec:.2f} | `{_tr_chord(seg.chord)}` | `{_tr_chord(seg.secondary)}` | {seg.correlation:.3f} | {seg.stability} |"
         )
 
     if report.bass is not None:
+        low_tr = _tr_note(report.bass.lowest_note) or "-"
+        high_tr = _tr_note(report.bass.highest_note) or "-"
+        low_midi_val = (report.bass.lowest_midi + semi) if report.bass.lowest_midi is not None else None
+        high_midi_val = (report.bass.highest_midi + semi) if report.bass.highest_midi is not None else None
+        if low_midi_val is not None:
+            extra_parts = [f"MIDI {low_midi_val}"]
+            if report.bass.lowest_freq_hz is not None:
+                extra_parts.append(f"{report.bass.lowest_freq_hz:.1f} Hz")
+            if report.bass.lowest_note_time_sec is not None:
+                extra_parts.append(f"@ {report.bass.lowest_note_time_sec:.2f}s")
+            low_desc = f"`{low_tr}` ({' · '.join(extra_parts)})"
+        else:
+            low_desc = f"`{low_tr}`"
+        high_desc = f"`{high_tr}` (MIDI {high_midi_val})" if high_midi_val is not None else f"`{high_tr}`"
+        concert_note = ""
+        if semi != 0 and report.bass.lowest_note:
+            concert_midi_txt = f" MIDI {report.bass.lowest_midi}" if report.bass.lowest_midi is not None else ""
+            concert_note = f"（实音最低 `{report.bass.lowest_note}`{concert_midi_txt}）"
         lines.extend(
             [
                 "",
                 "## 3. Bass 音轨分析",
                 "",
-                f"- **音域**: `{_tr_note(report.bass.lowest_note) or '-'} ~ {_tr_note(report.bass.highest_note) or '-'}`",
+                f"- **最低音**: {low_desc}{concert_note} | **最高音**: {high_desc}",
+                f"- **音域**: `{low_tr} ~ {high_tr}`",
                 f"- **高频根音级**: `{', '.join(_tr_note(r) for r in report.bass.root_pitch_classes) or '-'}`",
                 f"- **提取音符数**: `{len(report.bass.notes)}`",
+            ]
+        )
+        if report.bass.modulation_detected and report.bass.modulation_note:
+            lines.append(f"- **贝斯转调提示**: {report.bass.modulation_note}")
+        lines.extend(
+            [
                 "",
                 "| 开始 (s) | 结束 (s) | 音名 | MIDI | 基频 (Hz) | 置信度 |",
                 "| ---: | ---: | :--- | ---: | ---: | ---: |",
             ]
         )
         for n in report.bass.notes[:120]:
+            tr_midi = max(0, min(127, int(n.pitch_midi) + semi))
+            midi_cell = f"{tr_midi} (实{n.pitch_midi})" if semi != 0 else f"{n.pitch_midi}"
             lines.append(
-                f"| {n.start_sec:.2f} | {n.end_sec:.2f} | `{_tr_note(n.note_name)}` | {n.pitch_midi} | {n.frequency_hz:.1f} | {n.confidence:.2f} |"
+                f"| {n.start_sec:.2f} | {n.end_sec:.2f} | `{_tr_note(n.note_name)}` | {midi_cell} | {n.frequency_hz:.1f} | {n.confidence:.2f} |"
             )
 
     if report.drums is not None:

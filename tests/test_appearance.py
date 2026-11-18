@@ -31,7 +31,7 @@ def test_appearance_load_and_round_trip_preserve_schema_two(tmp_path):
     restored = load_settings(path)
     assert restored.schema_version == 2
     assert restored.metronome_bpm == 144
-    assert restored.appearance == Appearance("lenso", 16, "#ABCDEF", "", "", "panels", 45, 81, 0, "practice", "history")
+    assert restored.appearance == Appearance("lenso", 20, "#ABCDEF", "", "", "panels", 45, 81, 0, "practice", "history")
 
 
 def test_appearance_sample_isolated_from_parent_and_scopes_are_painted_only():

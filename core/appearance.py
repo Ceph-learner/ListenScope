@@ -10,6 +10,17 @@ PRESETS = {
     "codex": ("Codex", "#141417", "#ECECF0", "#ACAEFF"),
     "claude": ("Claude Code", "#201B18", "#F1E5D8", "#DF9B7B"),
 }
+LIGHT_PRESETS = {
+    "classic": ("经典 · 白天", "#F4F6FA", "#181D25", "#0E8A6D"),
+    "lenso": ("Lenso · 白天", "#EEF4FC", "#152238", "#2563EB"),
+    "codex": ("Codex · 白天", "#F5F5F8", "#18181F", "#4F46E5"),
+    "claude": ("Claude Code · 白天", "#FAF5F0", "#2A211B", "#B45309"),
+}
+THEME_MODES = {
+    "dark": "黑夜",
+    "light": "白天",
+    "system": "跟随系统",
+}
 DEFAULT_ANALYSIS_LAYOUT = "monitor"
 ANALYSIS_LAYOUTS = {
     "monitor": "实时监听",
@@ -36,6 +47,13 @@ def _color(raw):
     return raw.upper() if isinstance(raw, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", raw) else ""
 
 
+def _font_family(raw):
+    if not isinstance(raw, str):
+        return ""
+    cleaned = raw.replace('"', "").replace("'", "").replace(";", "").strip()
+    return cleaned[:80]
+
+
 @dataclass(frozen=True)
 class Appearance:
     preset: str = "classic"
@@ -49,6 +67,8 @@ class Appearance:
     dispersion: int = 20
     layout: str = "split"
     analysis_layout: str = DEFAULT_ANALYSIS_LAYOUT
+    theme_mode: str = "dark"
+    font_family: str = ""
 
     @classmethod
     def from_mapping(cls, raw):
@@ -56,7 +76,7 @@ class Appearance:
             return cls()
         return cls(
             preset=_choice(raw.get("preset"), PRESETS, "classic"),
-            font_size=_number(raw.get("font_size"), 11, 16, 12),
+            font_size=_number(raw.get("font_size"), 11, 20, 12),
             background=_color(raw.get("background")),
             text=_color(raw.get("text")),
             accent=_color(raw.get("accent")),
@@ -66,9 +86,23 @@ class Appearance:
             dispersion=_number(raw.get("dispersion"), 0, 100, 20),
             layout=_choice(raw.get("layout"), LAYOUTS, "split"),
             analysis_layout=_choice(raw.get("analysis_layout"), ANALYSIS_LAYOUTS, DEFAULT_ANALYSIS_LAYOUT),
+            theme_mode=_choice(raw.get("theme_mode"), THEME_MODES, "dark"),
+            font_family=_font_family(raw.get("font_family")),
         )
+
+    def resolve_theme_mode(self, *, system_is_dark: bool | None = None) -> str:
+        if self.theme_mode == "light":
+            return "light"
+        if self.theme_mode == "dark":
+            return "dark"
+        return "light" if system_is_dark is False else "dark"
+
+    def effective_colors(self, *, system_is_dark: bool | None = None):
+        mode = self.resolve_theme_mode(system_is_dark=system_is_dark)
+        table = LIGHT_PRESETS if mode == "light" else PRESETS
+        _, background, foreground, accent = table[self.preset]
+        return self.background or background, self.text or foreground, self.accent or accent
 
     @property
     def colors(self):
-        _, background, foreground, accent = PRESETS[self.preset]
-        return self.background or background, self.text or foreground, self.accent or accent
+        return self.effective_colors()

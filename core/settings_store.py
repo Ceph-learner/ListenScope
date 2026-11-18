@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from .config import AIConfig, ResourceLimits
 from .appearance import Appearance
+from .paths import _is_writable_dir, get_app_root
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,9 @@ class PersistedSettings:
 
 
 def default_settings_path() -> Path:
+    app_root = get_app_root()
+    if _is_writable_dir(app_root):
+        return app_root / "settings.json"
     return Path.home() / ".listenscope" / "settings.json"
 
 

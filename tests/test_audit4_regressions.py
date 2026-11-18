@@ -84,13 +84,26 @@ def test_default_work_and_export_dirs_fallback_when_frozen_or_readonly(
     fake_docs.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
+    # Writable frozen installation folder prefers sibling directories (keeps files beside app, away from C:\)
+    writable_app = tmp_path / "portable_app"
+    writable_app.mkdir()
+    monkeypatch.setattr(sys, "executable", str(writable_app / "ListenScope.exe"), raising=False)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    wd = default_work_dir()
-    ed = default_export_dir()
-    assert wd == fake_home / ".listenscope" / "workspace_outputs"
-    assert ed == fake_docs / "ListenScope" / "exports"
+    assert default_work_dir() == writable_app.resolve() / "workspace_outputs"
+    assert default_export_dir() == writable_app.resolve() / "exports"
 
-    # Non-frozen with read-only CWD must also fall back safely
+    # Read-only frozen dir safely falls back to ~/.listenscope and Documents/ListenScope/exports
+    readonly_app = tmp_path / "ro_program_files"
+    readonly_app.mkdir()
+    monkeypatch.setattr(sys, "executable", str(readonly_app / "ListenScope.exe"), raising=False)
+    monkeypatch.setattr(
+        "core.paths._is_writable_dir",
+        lambda d: Path(d) in (fake_home, fake_docs),
+    )
+    assert default_work_dir() == fake_home / ".listenscope" / "workspace_outputs"
+    assert default_export_dir() == fake_docs / "ListenScope" / "exports"
+
+    # Non-frozen with read-only CWD also falls back safely
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     monkeypatch.setattr(
         "core.paths._is_writable_dir",

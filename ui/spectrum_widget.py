@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.appearance import ANALYSIS_LAYOUTS
+from core.appearance import ANALYSIS_LAYOUTS, Appearance
 from core.models import AnalysisSnapshot
+from ui.appearance import apply_plot_appearance
+from ui.help_badge import HelpBadge
 
 ANALYSIS_VIEWS = {
     "monitor": (((0, 0, 1, 2), (2, 0, 1, 1), (2, 1, 1, 1), (1, 0, 1, 2)), (4, 3, 3), (1, 1, 0)),
     "frequency": (((0, 1, 1, 1), (0, 0, 2, 1), (1, 1, 1, 1), (2, 0, 1, 2)), (2, 3, 2), (3, 2, 0)),
     "history": (((1, 0, 1, 1), (1, 1, 1, 1), (1, 2, 1, 1), (0, 0, 1, 3)), (5, 3, 0), (1, 1, 1)),
 }
+
 
 class _FftFrequencyAxis(pg.AxisItem):
     """Display readable frequency labels on the FFT's log-scaled axis."""
@@ -53,6 +57,10 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self._cached_wave_x: Optional[np.ndarray] = None
+        self._cached_texts: dict[str, str] = {}
+        self._last_level_val: int = -1
+
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 12)
         root.setSpacing(10)
@@ -65,6 +73,12 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         for key, name in ANALYSIS_LAYOUTS.items():
             self.view_combo.addItem(name, key)
         toolbar.addWidget(self.view_combo)
+        toolbar.addWidget(
+            HelpBadge(
+                "实时分析布局",
+                "可随时在「实时监听 / 频率诊断 / 时频追踪」三种画布排布间切换；切换时保留全部波形曲线与已缩放的坐标范围。",
+            )
+        )
         root.addLayout(toolbar)
 
         metrics = QtWidgets.QHBoxLayout()
@@ -143,6 +157,21 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.view_combo.currentIndexChanged.connect(self._arrange_plots)
         self._arrange_plots()
 
+    def apply_theme(self, appearance: Appearance, *, system_is_dark: Optional[bool] = None) -> None:
+        mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
+        _, _, accent = appearance.effective_colors(system_is_dark=system_is_dark)
+        for p in self._plots:
+            apply_plot_appearance(p, appearance, system_is_dark=system_is_dark)
+        wave_pen = pg.mkPen(accent, width=1.2)
+        self._wave_max_curve.setPen(wave_pen)
+        self._wave_min_curve.setPen(wave_pen)
+        fft_color = "#0D9488" if mode == "light" else "#2EC27E"
+        self._fft_curve.setPen(pg.mkPen(fft_color, width=1.5))
+        log_color = "#C2410C" if mode == "light" else "#F5A623"
+        qc = QtGui.QColor(log_color)
+        self._log_curve.setPen(pg.mkPen(log_color, width=1.8))
+        self._log_curve.setBrush((qc.red(), qc.green(), qc.blue(), 38 if mode == "light" else 45))
+
     @staticmethod
     def _metric_card(caption, value, detail):
         card = QtWidgets.QFrame()
@@ -193,22 +222,36 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         layout.addWidget(plot, 1)
         return card
 
+    def _set_text_cached(self, key: str, lbl: QtWidgets.QLabel, text: str) -> None:
+        if self._cached_texts.get(key) != text:
+            self._cached_texts[key] = text
+            lbl.setText(text)
+
     def update_analysis(self, snap: AnalysisSnapshot, spectrogram: np.ndarray | None = None) -> None:
-        self.rms_label.setText(f"{snap.rms_dbfs:.1f} dBFS")
-        self.peak_label.setText(f"{snap.peak_dbfs:.1f} dBFS")
-        self.level_meter.setValue(round(max(0.0, min(60.0, snap.rms_dbfs + 60))))
+        self._set_text_cached("rms", self.rms_label, f"{snap.rms_dbfs:.1f} dBFS")
+        self._set_text_cached("peak", self.peak_label, f"{snap.peak_dbfs:.1f} dBFS")
+        lvl = round(max(0.0, min(60.0, snap.rms_dbfs + 60)))
+        if lvl != self._last_level_val:
+            self._last_level_val = lvl
+            self.level_meter.setValue(lvl)
         if snap.pitch.frequency_hz is not None:
-            self.pitch_label.setText(snap.pitch.note_name)
-            self.pitch_detail.setText(f"{snap.pitch.frequency_hz:.1f} Hz  ·  {snap.pitch.cents_offset:+.1f} cents")
+            self._set_text_cached("pitch", self.pitch_label, snap.pitch.note_name)
+            self._set_text_cached(
+                "pitch_det",
+                self.pitch_detail,
+                f"{snap.pitch.frequency_hz:.1f} Hz  ·  {snap.pitch.cents_offset:+.1f} cents",
+            )
         else:
-            self.pitch_label.setText("—")
-            self.pitch_detail.setText("等待有效音高")
-        self.window_label.setText(f"{snap.window_seconds:.1f} / 120 s")
+            self._set_text_cached("pitch", self.pitch_label, "—")
+            self._set_text_cached("pitch_det", self.pitch_detail, "等待有效音高")
+        self._set_text_cached("window", self.window_label, f"{snap.window_seconds:.1f} / 120 s")
 
         if snap.waveform_min and snap.waveform_max:
-            x_w = np.arange(len(snap.waveform_min), dtype=np.float32)
-            self._wave_max_curve.setData(x_w, np.asarray(snap.waveform_max, dtype=np.float32))
-            self._wave_min_curve.setData(x_w, np.asarray(snap.waveform_min, dtype=np.float32))
+            n_w = len(snap.waveform_min)
+            if self._cached_wave_x is None or len(self._cached_wave_x) != n_w:
+                self._cached_wave_x = np.arange(n_w, dtype=np.float32)
+            self._wave_max_curve.setData(self._cached_wave_x, np.asarray(snap.waveform_max, dtype=np.float32))
+            self._wave_min_curve.setData(self._cached_wave_x, np.asarray(snap.waveform_min, dtype=np.float32))
 
         if snap.fft_freqs_hz and snap.fft_db:
             freqs = np.asarray(snap.fft_freqs_hz, dtype=np.float32)
