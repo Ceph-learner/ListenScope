@@ -19,13 +19,14 @@ ListenScope 是 Windows 本地音乐分析与练习工作台。入口 [main.py](
 - 深度分轨的「鼓点」页支持导出独立鼓 MIDI，以及最多 8 秒合成试听。沿用检测的击打时间，可在 DAW 中选择鼓音源；映射见 [MIDI Association 打击乐说明](https://midi.org/general-midi-lite)。
 
 - CPU 分析：频谱、Chroma、和弦与 BPM；高频标签、x 轴缓冲与性能表格通过缓存与签名去重降低内存波动与重绘开销。
-- **外观、主题、字体与同级便携存储**：支持 **黑夜 / 白天 / 跟随系统**（Qt 6.8 `colorScheme()` 实时响应系统明暗变化与图表高对比配色）、扫描本机已安装字体 + `11–20 px` 字号**实时预览**与「**恢复默认**」/取消安全回退。配置与导出（[`core/paths.py`](../core/paths.py)）优先保存在程序同级目录（不写 `C:\`），仅在只读目录回退用户目录；启动自动探测随包 `runtime/ai`、短路径 `m`、`.venv-*` 并在设置页提供一键自动配置与 Inno Setup 6 安装包脚本（[`scripts/installer.iss`](../scripts/installer.iss)）。
+- **外观、主题、字体与同级便携存储**：支持 **黑夜 / 白天 / 跟随系统**（Qt 6.8 `colorScheme()` 实时响应系统明暗变化与图表高对比配色）、扫描本机已安装字体 + `11–20 px` 字号**实时预览**与「**恢复默认**」/取消安全回退；已集成可切换的第 5 档 **「马拉松 (`marathon`)」** 工业临床双模预设（[`ui/marathon_style.py`](../ui/marathon_style.py)、`ui/assets/marathon_*.svg` 与 [`packaging/listenscope_core.spec`](../packaging/listenscope_core.spec) 打包绑定），含顶栏 **临床冷白 / 暗夜遥测** 快切持久化、`ChamferBadge` 切角铭牌、`TelemetryHeader` 双语标题头、严格零暖黄/琥珀色串色，以及完全隔离在 `_marathon_controls_qss` 内的扁平无 3D 凸起控件样式（不影响 `经典`/`Lenso`/`Codex`/`Claude Code`，切离时完整恢复顶栏及卡片样式）。配置与导出（[`core/paths.py`](../core/paths.py)）优先保存在程序同级目录（不写 `C:\`），仅在只读目录回退用户目录；启动自动探测随包 `runtime/ai`、短路径 `m`、`.venv-*` 并在设置页提供一键自动配置与 Inno Setup 6 安装包脚本（[`scripts/installer.iss`](../scripts/installer.iss)）。
 
 GPU 分轨和 CPU MIDI 各用独立环境（Core 仍保持零 Torch/CUDA/TF，面向目标基线 Windows 11 · RTX 5060 Ti 8GB VRAM · 16GB RAM）。实验性近实时分轨位于 [streaming](../streaming)，默认关闭。软件版本 `0.2.0`（[pyproject.toml](../pyproject.toml)）。
 
 ## 当前验证基线
 
-- **当前开发分支（`feature/chord-practice-midi-audition`，基于 `426a6f4`）云端 Linux 离屏验证**：在 Debian 12 / Python 3.11 / PySide6 6.8.3 下运行 `QT_QPA_PLATFORM=offscreen pytest -q --tb=short`，结果 **`188 passed, 6 skipped`**（6 项为 Windows 专属 WASAPI / WinRT / PowerShell 测试，含新增 [`test_turnkey_cubase_bass_theme.py`](../tests/test_turnkey_cubase_bass_theme.py)）；5 张原生 PySide6 离屏 UI 截图已目检无截断与溢出，真机 Windows / GPU / DAW / `ISCC.exe` 验证待目标机按 [HANDOFF](HANDOFF.md) 补测。
+- **当前开发分支（`design/marathon-ui-preview`，基于 PR #23 `2a9c335`，证据提交 `549aecf`）云端 Linux 离屏验证**：在 Debian 12 / Python 3.11.2 / PySide6 6.8.3 / pyqtgraph 0.14.0 下运行 `QT_QPA_PLATFORM=offscreen pytest -q --tb=short`，结果 **`189 passed, 6 skipped`**（6 项为 Windows 专属 WASAPI / WinRT / PowerShell 测试，含新增 `test_marathon_preset_integration_topbar_sync_persistence_and_packaging`）；已目检 10 张原生 PySide6 离屏 UI 截图（Marathon 临床冷白/暗夜遥测、1280×800 窄窗、设置/外观/和弦练习弹窗、混音底栏与经典暗黑回退对照）确认无文字截断、无 Win98/Fusion 3D 凸起及配色串扰；真机 Windows PyInstaller SVG 加载 / GPU / DAW / `ISCC.exe` 验证待目标机按 [HANDOFF](HANDOFF.md) 补测。
+- **PR #23 合并前云端基线（`2a9c335`，历史参照）**：`QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 共 `188 passed, 6 skipped`。
 
 - **四轨监听复测**：Windows 现场 10 秒 GPU 四轨完成。贝斯独听默认 +12 dB，可关闭，原始 WAV 和导出保持原音量。混音页禁用缺轨独听，复选框选中态更清楚。Windows pytest 165 项通过。见 [Windows 验收报告](WINDOWS_TEST_REPORT.md)。
 

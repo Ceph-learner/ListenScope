@@ -1,8 +1,35 @@
 # 最新交接
 
-## 综合体验升级：练习和弦对齐、贝斯 YIN/转调、Cubase MIDI、黑夜/白天/跟随系统、字体预览、同级存储与一键安装包（`feature/chord-practice-midi-audition` · 提交 PR 合入 `main`）
+## 「马拉松 (`Marathon`)」工业临床主题集成与隔离式扁平控件（`design/marathon-ui-preview` · 提交 PR 合入 `main`）
 
-- **基线与状态**：从远端 `main` (`426a6f476d24f6903de6f4f7f280521461a8c769`, PR #22) 检出本地分支 `feature/chord-practice-midi-audition`。按确认意见完成全部开发、视觉细节修复、文档补齐、全量离屏单测与原生截图核对后，推送分支并在通过 GitHub Linux CI 后合入 `main`。目标机硬件基线保持 **Windows 11 (Build >= 20348) · NVIDIA GeForce RTX 5060 Ti 8GB VRAM · 16GB RAM**（Core 仍零捆绑 PyTorch/CUDA/ORT/TF，安装包版本与 `pyproject.toml` 同步为 `0.2.0`）。
+- **目标与状态**：基于远端 `main` (`2a9c335`, PR #23) 检出 `design/marathon-ui-preview`，将已确认的「马拉松」工业临床双模视觉方案正式接入 **设置 / 外观主题** 预设体系（第 5 档 `marathon`，与 `classic` / `lenso` / `codex` / `claude` 并列，支持 **黑夜 / 白天 / 跟随系统**、`AppearanceDialog` 实时预览与取消回退、顶栏快切胶囊持久化）；随后按用户视觉反馈在完全隔离于 `ui/marathon_style.py` + `ui/assets/marathon_*.svg` 的前提下消除 Qt Fusion 原生 3D 凸起（`QComboBox` 下拉盖板、`QSpinBox`/`QDoubleSpinBox` 步进钮、`QGroupBox` 抬升框、`QSlider`、`QCheckBox`、`QRadioButton`、`QScrollArea` 与 `QPushButton`），不影响 `经典` 等现有预设。核心代码及测试证据提交：`549aecf6986c03039ebc7211ecbed496234ac305`。
+- **关键改动路径**：
+  - 主题配置与独立视觉引擎：[`core/appearance.py`](../core/appearance.py)、[`ui/marathon_style.py`](../ui/marathon_style.py)（`is_marathon_eligible`、`resolve_marathon_variant`、`marathon_stylesheet`、`apply_marathon_plot_theme`、`marathon_colormap_lut`、`ChamferBadge`、`TelemetryHeader` 与隔离扁平控件生成函数 `_marathon_controls_qss`）、[`ui/appearance.py`](../ui/appearance.py)（接入 `AppearanceDialog` 第 5 档预设并提供切回 `经典`/`Lenso` 时的顶栏与遥测卡片完整回退 CSS）。
+  - 随包 SVG 矢量化图标与 PyInstaller 打包清单：`ui/assets/marathon_check.svg`、`ui/assets/marathon_chevron_{up,down}_{light,dark}.svg` 及 [`packaging/listenscope_core.spec`](../packaging/listenscope_core.spec) `datas`。
+  - 窗口与子模块联动：[`ui/main_window.py`](../ui/main_window.py)（顶栏双模快切 `MARATHON // CLINICAL` 与 `OBSIDIAN` 持久化回调 `set_marathon_skin`、切离自动隐藏）、[`ui/settings_dialog.py`](../ui/settings_dialog.py)（左侧导航动态着色与主题摘要同步）、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/chord_practice.py`](../ui/chord_practice.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)、[`ui/resource_widget.py`](../ui/resource_widget.py)。
+  - 回归测试：[`tests/test_turnkey_cubase_bass_theme.py`](../tests/test_turnkey_cubase_bass_theme.py)（`test_marathon_preset_integration_topbar_sync_persistence_and_packaging`）。
+- **已验证（云端 Linux · Debian 12 · Python 3.11.2 · PySide6 6.8.3 · `QT_QPA_PLATFORM=offscreen`）**：
+  - 专项：`QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest tests/test_turnkey_cubase_bass_theme.py tests/test_appearance.py -q --tb=short` -> **`12 passed in 3.21s`**
+  - 全量（基于代码提交 `549aecf`）：`QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short` -> **`189 passed, 6 skipped in 63.68s`**（6 项 Windows WASAPI / WinRT / PowerShell 专属测试在 Linux 跳过）。
+  - 离屏视觉截图检查与顺带修复：生成并逐一核对 10 张真实 `PySide6` offscreen 截图（临床冷白 Tab 1–3、暗夜遥测 Tab 4、1280×800 窄窗、设置弹窗、外观弹窗、和弦练习弹窗及 `经典` 暗黑回退对照）；除消除 `QComboBox`/`QSpinBox`/`QGroupBox` 3D 凸起外，同步在 `ui/mixer_widget.py` 收紧子页内距与设置 `chord_timeline_table.setMinimumHeight(48)` 解决 870px 高度下 `deep_summary_lbl`（`Melody (vocals)` 行）底部 3–6px 裁切问题。
+- **尚未验证（需 Windows 11 目标机复测）**：
+  1. PyInstaller 打包产物 `dist\ListenScopeCore\ListenScope.exe` 下 [`_marathon_asset_url`](../ui/marathon_style.py#L335-L340) 加载 `ui/assets/marathon_*.svg`（确认下拉箭头、微调上下三角与复选框对勾正常渲染）。
+  2. Windows 11 实机 `100% / 125% / 150%` 系统 DPI 缩放与字体渲染、系统深浅色切换联动「跟随系统」以及在 **马拉松 临床冷白 / 暗夜遥测 / 经典 / Lenso** 间反复切换。
+  3. 延续 PR #23 待真机复测项：`ISCC.exe` 编译单文件安装包（`build_windows.ps1 -Clean -BundleRuntimes -BundleFfmpeg -BuildInstaller`）与非 C 盘零配置安装、三类 Cubase `.mid` 导入验证、WASAPI 实声卡试听及 RTX 5060 Ti 8GB / 16GB RAM 下真实曲目四轨与近实时播放。
+- **Windows 本机复测命令**：
+  ```powershell
+  $env:PYTHONUTF8 = "1"; $env:QT_QPA_PLATFORM = "offscreen"
+  .\.venv-core\Scripts\python.exe -m pytest tests/test_turnkey_cubase_bass_theme.py tests/test_appearance.py tests/test_chord_practice.py -q --tb=short
+  .\.venv-core\Scripts\python.exe -m pytest -q --tb=short
+  # PyInstaller + Inno Setup 安装包验证（Windows 目标机）：
+  pwsh -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -Clean -BundleRuntimes -BundleFfmpeg -BuildInstaller
+  ```
+
+---
+
+## 更早交接（PR #23 基线 · `2a9c335`）
+
+- **基线与状态**：从远端 `main` (`426a6f476d24f6903de6f4f7f280521461a8c769`, PR #22) 检出本地分支 `feature/chord-practice-midi-audition`，已通过 PR #23 合入 `main` (`2a9c335`)。目标机硬件基线保持 **Windows 11 (Build >= 20348) · NVIDIA GeForce RTX 5060 Ti 8GB VRAM · 16GB RAM**（Core 仍零捆绑 PyTorch/CUDA/ORT/TF，安装包版本与 `pyproject.toml` 同步为 `0.2.0`）。
 - **核心改动**：
   1. **练习和弦弹窗 Row 0 对齐与试听/导出**（[`ui/chord_practice.py`](../ui/chord_practice.py)、[`analysis/chord_practice.py`](../analysis/chord_practice.py)）：新增 `_PracticeTableDelegate` 清除第 0 行 `State_HasFocus` 焦点矩形导致的左缩进并统一罗马级数/和弦左对齐与匹配列居中（对齐表头）；支持 24 调模板、Capo 移调指型/实音双重口径换算、本地合成试听（复用共享 `DrumPreviewPlayer` 且与 A/B、混音、节拍器、鼓试听严格互斥）与 `.mid` 导出。
   2. **贝斯最低音 MIDI、具体音名与转调预警**（[`analysis/stem_analyzer.py`](../analysis/stem_analyzer.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)）：在 `[28 Hz, 350 Hz]` 实现 FFT 加速 YIN (CMNDF) + 2 倍谐波防 8 度跃变 + 3 帧中值滤波，支持低至 `B0` (`30.87 Hz`)/`E1` (`41.20 Hz`, MIDI `28`)；对比前半段/后半段音级权重并在混音摘要、`export_transcription_sheet` Markdown 报告及 Chroma 页呈现转调警告（`tone="warn"`）。

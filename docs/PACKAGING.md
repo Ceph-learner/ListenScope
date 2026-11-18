@@ -149,7 +149,7 @@ E:\LS-midi\.venv-midi\Scripts\python.exe scripts\check_env.py --json --check-mid
   ```powershell
   .\.venv-core\Scripts\python.exe main.py --ai-python .\.venv-ai\Scripts\python.exe --midi-python E:\LS-midi\.venv-midi\Scripts\python.exe
   ```
-- **打包目录运行**: `dist\ListenScopeCore\ListenScope.exe`（[`listenscope_core.spec`](../packaging/listenscope_core.spec) 已同步打包 `requirements-ai.txt`、`constraints-ai-cu128.txt`、`requirements-midi.txt`、`winrt` 运行时与全部 Worker/Probe 模块）。首次运行支持自动扫描同级运行时、通过 `--ai-python` / `--midi-python` 传入，或在 **设置 -> AI 与 MIDI 环境** 一键自动配置、验证并保存至同级 `settings.json`（重启 `ListenScope.exe` 后自动保留）。
+- **打包目录运行**: `dist\ListenScopeCore\ListenScope.exe`（[`listenscope_core.spec`](../packaging/listenscope_core.spec) 已同步打包 `requirements-ai.txt`、`constraints-ai-cu128.txt`、`requirements-midi.txt`、`winrt` 运行时、`ui/assets/marathon_*.svg` 马拉松控件图标与全部 Worker/Probe 模块）。首次运行支持自动扫描同级运行时、通过 `--ai-python` / `--midi-python` 传入，或在 **设置 -> AI 与 MIDI 环境** 一键自动配置、验证并保存至同级 `settings.json`（重启 `ListenScope.exe` 后自动保留）。
 
 ### Windows 真机音频设备与现场排障说明
 

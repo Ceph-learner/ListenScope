@@ -12,7 +12,7 @@
 - **系统内存**: **16GB RAM**
 
 核心安全准则：
-1. **CPU 实时基础与练习工具**：实时波形、FFT/对数频谱（带横轴十倍频防重叠刻度）、12-bin Chroma、12 大/小三和弦（实时显示构成音拼写、有界 12 步进行、**手动「换歌重置」与基于 Windows SMTC 的受保护「自动切歌重置」**，以及本地 24 调「练习和弦」合成试听与导出；离线深度分析可选 `maj7/m7/7/sus4` 扩展和弦）、调性、BPM、主音高与 `-50 ~ +50c` 轻量动画准音刻度条 (`TuningCentsBar`)、**纯 CPU Capo / 乐器移调联动**（UI 与 `.md/.csv` 扒谱表同步移调显示）、纯 CPU Tap 定速与练习节拍器（支持 `0%–150%` 音量调节、1 小节预备拍、独立跟练及自动对齐 `0.5x–1.25x` 回放速度）、鼓组 Kick/Snare/Hi-Hat 16 步律动与试听、**FFT-YIN 贝斯最低音（含 `B0`/`E1` 防 8 度跃变、MIDI 编号与半程转调预警）**、主旋律音域、**全路径 Steinberg Cubase 兼容 SMF Type-0 (`480 TPB`) MIDI 导出**、`.md/.csv` 扒谱报告原子导出以及纯 CPU WSOLA 不变调变速回放与分块练习 WAV 导出全部纯 CPU 运行，不依赖 PyTorch GPU 且不打断实时捕获；界面支持 **黑夜 / 白天 / 跟随系统**、本机字体扫描实时预览、恢复默认与紧凑 `[?]` 悬浮/点击说明徽标。
+1. **CPU 实时基础与练习工具**：实时波形、FFT/对数频谱（带横轴十倍频防重叠刻度）、12-bin Chroma、12 大/小三和弦（实时显示构成音拼写、有界 12 步进行、**手动「换歌重置」与基于 Windows SMTC 的受保护「自动切歌重置」**，以及本地 24 调「练习和弦」合成试听与导出；离线深度分析可选 `maj7/m7/7/sus4` 扩展和弦）、调性、BPM、主音高与 `-50 ~ +50c` 轻量动画准音刻度条 (`TuningCentsBar`)、**纯 CPU Capo / 乐器移调联动**（UI 与 `.md/.csv` 扒谱表同步移调显示）、纯 CPU Tap 定速与练习节拍器（支持 `0%–150%` 音量调节、1 小节预备拍、独立跟练及自动对齐 `0.5x–1.25x` 回放速度）、鼓组 Kick/Snare/Hi-Hat 16 步律动与试听、**FFT-YIN 贝斯最低音（含 `B0`/`E1` 防 8 度跃变、MIDI 编号与半程转调预警）**、主旋律音域、**全路径 Steinberg Cubase 兼容 SMF Type-0 (`480 TPB`) MIDI 导出**、`.md/.csv` 扒谱报告原子导出以及纯 CPU WSOLA 不变调变速回放与分块练习 WAV 导出全部纯 CPU 运行，不依赖 PyTorch GPU 且不打断实时捕获；界面支持 **黑夜 / 白天 / 跟随系统**、可切换第 5 档 **「马拉松 (`Marathon // 临床冷白 & 暗夜遥测`)」** 工业临床预设（含顶栏双模快切、隔离式无 3D 凸起扁平控件与随包 SVG 图标）、本机字体扫描实时预览、恢复默认与紧凑 `[?]` 悬浮/点击说明徽标。
 2. **120 秒固定 PCM 环形缓冲、A/B 选区与有界书签**：统一 `48kHz / stereo / float32`（固定预分配 ~46.08 MB），支持流式载入本地音频前 `<=120s` 片段（先成功解码首块后再清空旧历史，避免损坏文件抹除既有缓冲）、底部 120s 波形总览拖拽 A/B 选区、`A-1s/A+1s/B-1s/B+1s` 区间微调、实时黄线播放游标、最多 12 个按环形缓冲绝对帧追踪并随滑窗滚出自动清理的 A/B 练习书签、单次/循环切换及独立原子导出（支持带当前倍速与节拍器 Click 的练习 WAV）；禁止无限音频队列、禁止一次性整首解码进 RAM。
 3. **三环境隔离 + 严格串行单模型 + 6 秒实测安全默认**：
    - `.venv-core`（Python 3.12 x64）：轻量桌面 GUI 与 WASAPI/DSP + 可选 Windows SMTC (`winrt-Windows.Media.Control`) 只读曲目监听，禁止混入 PyTorch/CUDA。
@@ -27,14 +27,14 @@
 
 ```text
 ListenScope/
-├── core/               # 硬件与 MIDI 探针, 同级目录优先路径与跨版本外部 Python 启动/FFmpeg 解析 (paths.py), 黑夜/白天/跟随系统配色与字体外观模型 (appearance.py), Windows SMTC 曲目监听 (media_session.py), ResourceLimits, ResourceManager, PersistedSettings, 脱敏诊断打包 (diagnostics.py)
+├── core/               # 硬件与 MIDI 探针, 同级目录优先路径与跨版本外部 Python 启动/FFmpeg 解析 (paths.py), 黑夜/白天/跟随系统与「马拉松」双模配色外观模型 (appearance.py), Windows SMTC 曲目监听 (media_session.py), ResourceLimits, ResourceManager, PersistedSettings, 脱敏诊断打包 (diagnostics.py)
 ├── audio/              # WASAPI Process Loopback (Build >= 20348)/System Loopback, decode_wave_bytes/PCM 规范化, FixedRingBuffer(120s), WSOLA 不变调变速, Tap 定速/节拍器/鼓点与练习和弦本地试听, 有界 A/B 书签, HistoryABPlayer/StemMixerEngine
 ├── analysis/           # CPU DSP(NaN/Inf 清洗): 频谱/Chroma/和弦/Capo移调/调性/BPM/24调练习模板, 无损流式分轨深度解析与 FFT-YIN 贝斯/转调分析 (stem_analyzer.py), Cubase 兼容 SMF Type-0 规范化 (midi_common.py), Basic Pitch / 轻量回退 MIDI 转录 (midi_transcription.py)
 ├── ai/                 # 模型注册表(htdemucs_4stem 默认 6s 分段), 流式 WAV 分块守护(默认 6.0s 分块), 隔离 AIWorkerProcess, AIJobManager(进程树清理与 RAM 拒停告警)
 ├── separation/         # 2-Stem MDX-ONNX 后端 & 4-Stem HTDemucs 后端 (全链路 2ch float32 与任务内 tmp 隔离)
 ├── streaming/          # Phase 8 实验性近实时 2-Stem 分轨 (默认关闭, 独立 .venv-ai 隔离、RTF 基准与 ASCII 安全 JSON IPC)
-├── ui/                 # PySide6 + PyQtGraph GUI (黑夜/白天/跟随系统主题与字体实时预览 appearance.py, 紧凑 [?] 说明徽标 help_badge.py, 练习和弦试听/导出 chord_practice.py, 防重叠频谱/Chroma/120s 波形/分轨混音/设置与一键环境向导)
-├── packaging/          # PyInstaller Core 规范 (排除 CUDA/PyTorch/TF 臃肿依赖, 附带 requirements-ai.txt / constraints-ai-cu128.txt / requirements-midi.txt、winrt 绑定与 Worker/Probe 模块)
+├── ui/                 # PySide6 + PyQtGraph GUI (黑夜/白天/跟随系统主题与字体实时预览 appearance.py, 独立隔离「马拉松」双模引擎与扁平控件 marathon_style.py + assets/marathon_*.svg, 紧凑 [?] 徽标 help_badge.py, 练习和弦 chord_practice.py, 防重叠频谱/Chroma/120s 波形/分轨混音/设置)
+├── packaging/          # PyInstaller Core 规范 (排除 CUDA/PyTorch/TF 臃肿依赖, 附带 requirements-ai.txt / constraints-ai-cu128.txt / requirements-midi.txt、marathon SVG 资产、winrt 绑定与 Worker/Probe 模块)
 ├── scripts/            # check_env.py, probe_media_session.py (只读 SMTC 切歌信号探针), setup_windows.ps1 (-CudaWheelDir/-SkipCore/-AiVenvPath), build_windows.ps1 (-BundleRuntimes/-BuildInstaller) 与 Inno Setup 6 安装模板 installer.iss
 ├── docs/               # CURRENT_STATE/HANDOFF (AI 接手入口), REQUIREMENTS/ARCHITECTURE/DECISIONS/DEVELOPMENT, PACKAGING.md 与 WINDOWS_TEST_REPORT.md (Windows 11 + RTX 5060 Ti 真机实测记录)
 ├── capture_test.py     # Phase 1 CLI 捕获 + ResourceManager PoC
@@ -48,8 +48,8 @@ ListenScope/
 > [!NOTE]
 > 以下区分 **云端 Linux 自动化验证**、**Windows 真机实测已通过项** 与 **待真机补验项**（详情见 [docs/WINDOWS_TEST_REPORT.md](docs/WINDOWS_TEST_REPORT.md)）：
 > - **Windows 11 + RTX 5060 Ti (8GB VRAM, 16GB RAM) 已实测通过（含第四、五轮及 PR #22 前置基线）**：Core / GPU AI / CPU MIDI 三环境 `pip check` 与 Windows `pytest` 通过（第四轮 `112/112`，PR #22 基线 `184` 项通过）；**30 分钟 `QQMusic.exe` `process_loopback` 连续捕获**（主进程 `289–362 MiB`、队列 `0/64`、累计溢出/欠载 `0/0`）与**手动点击「换歌重置」**立即清空 12 步历史；打包版默认 `6.0s` 分块下真实 30s GPU 二轨 (`9.469s`，2,670 个 CUDA 节点事件) 与四轨 (`4.344s`) 分离及显存/子树完全回落；打包版调用独立 Python 3.11 CPU 环境导出 `bass` 的 **Spotify Basic Pitch CPU (`basic-pitch`)** `.mid`（`120` 音符，与 CLI 逐字节同源 SHA-256），且重启 `exe` 后保留设置。
-> - **云端 Linux 沙箱已验证（无 Windows 声卡 / 无 WinRT SMTC / 无 NVIDIA GPU / 无 `ISCC.exe`）**：`QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 全量 **`188 passed, 6 skipped`**（6 项 Windows 专属测试跳过），覆盖练习和弦 Row 0 对齐与互斥试听、FFT-YIN 贝斯（`B0`/`E1` 防 8 度跃变与转调提示）、三类导出 Cubase SMF Type-0 (`480 TPB`) 规范化、黑夜/白天/跟随系统主题与字体扫描实时预览/恢复默认、`TuningCentsBar`/`[?]` 徽标及同级存储/运行时自动探测；同步核对 5 张原生 PySide6 离屏截图无文字截断与溢出。
-> - **最新状态与待真机补验见 [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) 与 [docs/HANDOFF.md](docs/HANDOFF.md)**：Inno Setup 6 安装包编译（`build_windows.ps1 -BundleRuntimes -BundleFfmpeg -BuildInstaller`）与免配置非 C 盘安装、三类 `.mid` 实际拖入 Steinberg Cubase 验证、Windows 11 系统主题实时切换与 DPI/真机字体效果、真实曲库贝斯/四轨、QQ 音乐 SMTC 及持续近实时播放仍待目标机实测。
+> - **云端 Linux 沙箱已验证（无 Windows 声卡 / 无 WinRT SMTC / 无 NVIDIA GPU / 无 `ISCC.exe`）**：`QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 全量 **`189 passed, 6 skipped`**（6 项 Windows 专属测试跳过），覆盖第 5 档 **「马拉松」双模工业临床主题与隔离扁平控件**（含顶栏快切持久化、`经典` 回退校验与 `listenscope_core.spec` 随包 SVG 资产核验）、练习和弦 Row 0 对齐与互斥试听、FFT-YIN 贝斯（`B0`/`E1` 防 8 度跃变与转调提示）、三类导出 Cubase SMF Type-0 (`480 TPB`) 规范化、黑夜/白天/跟随系统主题与字体扫描实时预览/恢复默认、`TuningCentsBar`/`[?]` 徽标及同级存储/运行时自动探测；同步目检 10 张原生 PySide6 离屏截图（含临床冷白 / 暗夜遥测、1280×800 窄窗、弹窗及经典回退对照）无文字截断、无 Win98 3D 凸起及溢出。
+> - **最新状态与待真机补验见 [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) 与 [docs/HANDOFF.md](docs/HANDOFF.md)**：Inno Setup 6 安装包编译（`build_windows.ps1 -BundleRuntimes -BundleFfmpeg -BuildInstaller`）与免配置非 C 盘安装、PyInstaller 打包 exe 内 `ui/assets/marathon_*.svg` 加载、三类 `.mid` 实际拖入 Steinberg Cubase 验证、Windows 11 系统主题实时切换与 DPI/真机字体效果、真实曲库贝斯/四轨、QQ 音乐 SMTC 及持续近实时播放仍待目标机实测。
 
 ---
 
