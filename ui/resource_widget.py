@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
+from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
 
 from core.logging import PerformanceRecord
 from core.models import ResourceSnapshot, ResourceStatus
 from core.paths import default_export_dir
+from ui.appearance import set_widget_tone
 
 
-def _status_badge_style(status: ResourceStatus) -> str:
+def _status_to_tone(status: ResourceStatus) -> str:
     if status == ResourceStatus.NORMAL:
-        return "background-color: #1B4D3E; color: #7EE2B8; border: 1px solid #2EC27E; border-radius: 4px; padding: 2px 8px; font-weight: 600;"
+        return "normal"
     if status == ResourceStatus.WARNING:
-        return "background-color: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 4px; padding: 2px 8px; font-weight: 600;"
-    return "background-color: #5C1A1A; color: #FF9B9B; border: 1px solid #E03E3E; border-radius: 4px; padding: 2px 8px; font-weight: 700;"
+        return "warn"
+    return "error"
 
 
 class ResourceMonitorBar(QtWidgets.QWidget):
@@ -25,30 +26,46 @@ class ResourceMonitorBar(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self._cached_texts: dict[str, str] = {}
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 6, 2)
-        layout.setSpacing(10)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(8)
 
         self.ram_label = QtWidgets.QLabel("RAM: -")
         self.vram_label = QtWidgets.QLabel("VRAM: -")
         self.status_badge = QtWidgets.QLabel("Normal")
-        self.status_badge.setStyleSheet(_status_badge_style(ResourceStatus.NORMAL))
+        self.status_badge.setObjectName("statusBadge")
+        set_widget_tone(self.status_badge, "normal")
+        for w in (self.ram_label, self.vram_label, self.status_badge):
+            w.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Preferred)
 
         layout.addWidget(self.ram_label)
         layout.addWidget(self.vram_label)
         layout.addWidget(self.status_badge)
 
+    def _set_text_if_changed(self, key: str, lbl: QtWidgets.QLabel, text: str) -> None:
+        if self._cached_texts.get(key) != text:
+            self._cached_texts[key] = text
+            lbl.setText(text)
+
     def update_snapshot(self, snap: ResourceSnapshot) -> None:
-        self.ram_label.setText(
-            f"主={snap.main_ram_mb:.0f}MB | AI={snap.ai_worker_ram_mb:.0f}MB | 可用={snap.system_ram_available_mb:.0f}MB"
-        )
-        if snap.vram_total_mb is not None and snap.vram_free_mb is not None:
-            self.vram_label.setText(f"VRAM 空闲={snap.vram_free_mb:.0f}/{snap.vram_total_mb:.0f}MB")
+        if snap.ai_worker_ram_mb >= 1.0:
+            ram_txt = f"主={snap.main_ram_mb:.0f}M | AI={snap.ai_worker_ram_mb:.0f}M | 余={snap.system_ram_available_mb:.0f}M"
         else:
-            self.vram_label.setText("VRAM: 未检测到 GPU")
-        self.status_badge.setText(snap.status.value)
-        self.status_badge.setStyleSheet(_status_badge_style(snap.status))
-        self.status_badge.setToolTip("\n".join(snap.status_reasons) if snap.status_reasons else "资源状态正常")
+            ram_txt = f"主={snap.main_ram_mb:.0f}MB | 可用={snap.system_ram_available_mb:.0f}MB"
+        self._set_text_if_changed("ram", self.ram_label, ram_txt)
+        vram_txt = (
+            f"VRAM {snap.vram_free_mb:.0f}/{snap.vram_total_mb:.0f}M"
+            if snap.vram_total_mb is not None and snap.vram_free_mb is not None
+            else "VRAM: 无GPU"
+        )
+        self._set_text_if_changed("vram", self.vram_label, vram_txt)
+        self._set_text_if_changed("status", self.status_badge, snap.status.value)
+        set_widget_tone(self.status_badge, _status_to_tone(snap.status))
+        tip_txt = "\n".join(snap.status_reasons) if snap.status_reasons else "资源状态正常"
+        if self._cached_texts.get("tip") != tip_txt:
+            self._cached_texts["tip"] = tip_txt
+            self.status_badge.setToolTip(tip_txt)
 
 
 class ResourceStatusPanel(QtWidgets.QWidget):
@@ -58,6 +75,10 @@ class ResourceStatusPanel(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self._cached_texts: dict[str, str] = {}
+        self._last_perf_sig: Optional[tuple[int, Optional[str]]] = None
+        self._last_log_sig: Optional[tuple[int, str]] = None
+
         root = QtWidgets.QVBoxLayout(self)
         root.setSpacing(10)
 
@@ -80,9 +101,13 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         for idx, (key, title) in enumerate(specs):
             r, c = divmod(idx, 3)
             title_lbl = QtWidgets.QLabel(title)
-            title_lbl.setStyleSheet("color: #9AA4B2;")
+            title_lbl.setObjectName("mutedCaption")
             val_lbl = QtWidgets.QLabel("-")
-            val_lbl.setStyleSheet("font-weight: 600;")
+            if key == "status":
+                val_lbl.setObjectName("statusBadge")
+                set_widget_tone(val_lbl, "normal")
+            else:
+                val_lbl.setStyleSheet("font-weight: 600;")
             cell = QtWidgets.QHBoxLayout()
             cell.addWidget(title_lbl)
             cell.addWidget(val_lbl, 1)
@@ -113,7 +138,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         log_layout = QtWidgets.QVBoxLayout(log_group)
         diag_bar = QtWidgets.QHBoxLayout()
         diag_note = QtWidgets.QLabel("日志与性能摘要严格有界；如在 Windows 遇到 CUDA/WASAPI 故障可一键导出脱敏诊断包：")
-        diag_note.setStyleSheet("color: #9AA4B2;")
+        diag_note.setObjectName("mutedCaption")
         self.export_diag_btn = QtWidgets.QPushButton("导出诊断包 (.zip)")
         self.export_diag_btn.setToolTip("打包 SYSTEM_REPORT、最近 500 条有界日志、性能记录与脱敏 settings.json")
         self.export_diag_btn.clicked.connect(self._on_export_diag_clicked)
@@ -138,33 +163,54 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         if file_path:
             self.export_diagnostics_requested.emit(file_path)
 
+    def _set_field_text(self, key: str, lbl: QtWidgets.QLabel, text: str) -> None:
+        if self._cached_texts.get(key) != text:
+            self._cached_texts[key] = text
+            lbl.setText(text)
+
     def update_snapshot(self, snap: ResourceSnapshot) -> None:
-        self._fields["main_ram"].setText(f"{snap.main_ram_mb:.1f} MB")
-        self._fields["worker_ram"].setText(f"{snap.ai_worker_ram_mb:.1f} MB")
-        self._fields["sys_ram"].setText(
-            f"{snap.system_ram_available_mb:.0f} / {snap.system_ram_total_mb:.0f} MB"
+        self._set_field_text("main_ram", self._fields["main_ram"], f"{snap.main_ram_mb:.1f} MB")
+        self._set_field_text("worker_ram", self._fields["worker_ram"], f"{snap.ai_worker_ram_mb:.1f} MB")
+        self._set_field_text(
+            "sys_ram",
+            self._fields["sys_ram"],
+            f"{snap.system_ram_available_mb:.0f} / {snap.system_ram_total_mb:.0f} MB",
         )
-        if snap.vram_total_mb is not None and snap.vram_free_mb is not None:
-            self._fields["vram"].setText(f"{snap.vram_free_mb:.0f} / {snap.vram_total_mb:.0f} MB")
-        else:
-            self._fields["vram"].setText("N/A (未检测到 GPU)")
-        self._fields["gpu_util"].setText(
-            f"{snap.gpu_utilization_pct:.0f}%" if snap.gpu_utilization_pct is not None else "N/A"
+        vram_txt = (
+            f"{snap.vram_free_mb:.0f} / {snap.vram_total_mb:.0f} MB"
+            if snap.vram_total_mb is not None and snap.vram_free_mb is not None
+            else "N/A (未检测到 GPU)"
         )
-        model_task = f"{snap.current_model or '-'} / {snap.current_task or '-'}"
-        self._fields["ai_model_task"].setText(model_task)
-        self._fields["audio_queue"].setText(f"{snap.audio_queue_size} / {snap.audio_queue_maxsize}")
-        self._fields["ai_buffer"].setText(f"{snap.ai_buffer_seconds:.1f} s")
+        self._set_field_text("vram", self._fields["vram"], vram_txt)
+        self._set_field_text(
+            "gpu_util",
+            self._fields["gpu_util"],
+            f"{snap.gpu_utilization_pct:.0f}%" if snap.gpu_utilization_pct is not None else "N/A",
+        )
+        self._set_field_text(
+            "ai_model_task",
+            self._fields["ai_model_task"],
+            f"{snap.current_model or '-'} / {snap.current_task or '-'}",
+        )
+        self._set_field_text(
+            "audio_queue",
+            self._fields["audio_queue"],
+            f"{snap.audio_queue_size} / {snap.audio_queue_maxsize}",
+        )
+        self._set_field_text("ai_buffer", self._fields["ai_buffer"], f"{snap.ai_buffer_seconds:.1f} s")
 
         st_lbl = self._fields["status"]
-        st_lbl.setText(snap.status.value)
-        st_lbl.setStyleSheet(_status_badge_style(snap.status))
-        self.reasons_label.setText(
-            "状态说明: " + ("；".join(snap.status_reasons) if snap.status_reasons else "各项内存与显存指标安全")
-        )
+        self._set_field_text("status", st_lbl, snap.status.value)
+        set_widget_tone(st_lbl, _status_to_tone(snap.status))
+        reasons_txt = "状态说明: " + ("；".join(snap.status_reasons) if snap.status_reasons else "各项内存与显存指标安全")
+        self._set_field_text("reasons", self.reasons_label, reasons_txt)
 
     def update_performance_records(self, records: list[PerformanceRecord]) -> None:
         recent = list(reversed(records[-30:]))
+        sig = (len(recent), recent[0].timestamp_utc if recent else None)
+        if sig == self._last_perf_sig:
+            return
+        self._last_perf_sig = sig
         self.perf_table.setRowCount(len(recent))
         for row, rec in enumerate(recent):
             vals = [
@@ -184,7 +230,12 @@ class ResourceStatusPanel(QtWidgets.QWidget):
                 self.perf_table.setItem(row, col, item)
 
     def update_logs(self, lines: list[str]) -> None:
-        joined = "\n".join(lines[-200:])
+        tail = lines[-200:]
+        sig = (len(lines), tail[-1] if tail else "")
+        if sig == self._last_log_sig:
+            return
+        self._last_log_sig = sig
+        joined = "\n".join(tail)
         if self.log_text.toPlainText() != joined:
             self.log_text.setPlainText(joined)
             bar = self.log_text.verticalScrollBar()

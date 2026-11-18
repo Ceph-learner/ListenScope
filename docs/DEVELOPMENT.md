@@ -16,14 +16,14 @@ $env:PYTHONUTF8 = "1"; $env:QT_QPA_PLATFORM = "offscreen"
 .\.venv-core\Scripts\python.exe -m pytest -q --tb=short
 ```
 
-- 测试位于 [tests/](../tests)。[conftest.py](../tests/conftest.py) 会创建临时 venv 来模拟外部解释器。
+- 测试位于 [tests/](../tests)（含 [`test_turnkey_cubase_bass_theme.py`](../tests/test_turnkey_cubase_bass_theme.py) 等回归集）。[conftest.py](../tests/conftest.py) 会创建临时 venv 来模拟外部解释器。
 - 自动化测试不涉及真实声卡、QQ 音乐、GPU 或打包 exe。这些必须在目标机按 [PACKAGING](PACKAGING.md) 第 2–3 节手动验证，结果追加到 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)，并注明提交 SHA。
-- 其他无硬件检查：`python scripts/check_env.py`、`python capture_test.py --simulate`、`python scripts/probe_media_session.py --self-test-mock --json`、`python main.py --simulate`。
+- 其他无硬件检查：`python scripts/check_env.py --no-write`、`python capture_test.py --simulate`、`python scripts/probe_media_session.py --self-test-mock --json`、`python main.py --simulate`。
 - CI：[.github/workflows/tests.yml](../.github/workflows/tests.yml) 在 push 和 PR 时用 Ubuntu 运行上面的 Linux 命令。它只做测试，不打包也不发布。
 
 ## 构建
 
-Windows 上执行 `pwsh -File scripts\setup_windows.ps1`（可选 `-CudaWheelDir`），再执行 `pwsh -File scripts\build_windows.ps1`，产物为 `dist\ListenScopeCore\ListenScope.exe`。参数说明见 [PACKAGING](PACKAGING.md)。云端 Linux 无法构建或运行 Windows exe。
+Windows 上执行 `pwsh -File scripts\setup_windows.ps1`（可选 `-CudaWheelDir`、`-SkipCore`、`-AiVenvPath`），再执行 `pwsh -File scripts\build_windows.ps1`，产物为 `dist\ListenScopeCore\ListenScope.exe`。若需内置可迁移 Python 运行时/FFmpeg 并由 Inno Setup 6 (`ISCC.exe`) 生成安装器 `dist\installer\ListenScope-Setup-Windows-x64.exe`，可附加 `-BundleRuntimes -BundleFfmpeg -BuildInstaller`（`Assert-PortableRuntime` 默认禁止打包含本机绝对路径 `pyvenv.cfg` 的 venv）。参数说明见 [PACKAGING](PACKAGING.md)。云端 Linux 无法构建或运行 Windows exe，也未在本机实测过 `ISCC.exe`。
 
 ## Git 协作流程（多 AI 共用）
 

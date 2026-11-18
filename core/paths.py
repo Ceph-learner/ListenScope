@@ -78,6 +78,13 @@ def get_bundle_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def get_app_root() -> Path:
+    """Return the application directory (executable dir when frozen, current working dir in source runs)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path.cwd().resolve()
+
+
 def _is_writable_dir(directory: Path) -> bool:
     """Check directory writability safely without leaving probe files or directories behind."""
     if not directory.exists() or not directory.is_dir():
@@ -90,16 +97,20 @@ def _is_writable_dir(directory: Path) -> bool:
 
 
 def default_work_dir() -> Path:
-    """Return safe workspace_outputs path for source runs vs frozen read-only Windows installs."""
-    if not getattr(sys, "frozen", False) and _is_writable_dir(Path.cwd()):
-        return Path("workspace_outputs")
+    """Return sibling workspace_outputs when app directory is writable; otherwise fall back safely."""
+    frozen = bool(getattr(sys, "frozen", False))
+    app_dir = Path(sys.executable).resolve().parent if frozen else Path.cwd()
+    if _is_writable_dir(app_dir):
+        return (app_dir / "workspace_outputs") if frozen else Path("workspace_outputs")
     return Path.home() / ".listenscope" / "workspace_outputs"
 
 
 def default_export_dir() -> Path:
-    """Return safe default export directory for file save dialogs."""
-    if not getattr(sys, "frozen", False) and _is_writable_dir(Path.cwd()):
-        return Path("exports")
+    """Return sibling exports folder when app directory is writable; otherwise fall back safely."""
+    frozen = bool(getattr(sys, "frozen", False))
+    app_dir = Path(sys.executable).resolve().parent if frozen else Path.cwd()
+    if _is_writable_dir(app_dir):
+        return (app_dir / "exports") if frozen else Path("exports")
     docs = Path.home() / "Documents"
     if _is_writable_dir(docs):
         return docs / "ListenScope" / "exports"

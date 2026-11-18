@@ -35,8 +35,10 @@ param(
     [string]$TorchaudioSpec = "torchaudio==2.11.0",
     [string]$TorchvisionSpec = "torchvision==0.26.0",
     [string]$CudaWheelDir = "",
+    [string]$AiVenvPath = "",
     [string]$MidiPythonExe = "",
     [string]$MidiVenvPath = "",
+    [switch]$SkipCore,
     [switch]$SkipAI,
     [switch]$SkipMidi,
     [switch]$AllowUntestedPython,
@@ -196,7 +198,8 @@ if ($CheckCudaWheels -and (-not $CudaWheelDir -or $SkipAI)) {
 }
 
 $ExpectedPyTag = "cp312"
-if (-not $CheckCudaWheels) {
+$CorePyMeta = $null
+if (-not $CheckCudaWheels -and (-not $SkipCore -or -not $SkipAI)) {
     if (-not $PythonExe) {
         $Auto312 = Resolve-LauncherPython -SpecVersion "3.12"
         if ($Auto312) {
@@ -274,19 +277,23 @@ if ($CheckCudaWheels) {
     return
 }
 
-Write-Host "=== [1/3] 初始化 Core 桌面环境 (.venv-core) [$($CorePyMeta.Version) $($CorePyMeta.Arch)] ===" -ForegroundColor Green
-$CoreVenv = Join-Path $RepoRoot ".venv-core"
-$CorePy = Join-Path $CoreVenv "Scripts\python.exe"
-if (-not (Test-Path $CorePy)) {
-    Invoke-Checked $PythonExe @("-m", "venv", $CoreVenv)
+if (-not $SkipCore) {
+    Write-Host "=== [1/3] 初始化 Core 桌面环境 (.venv-core) [$($CorePyMeta.Version) $($CorePyMeta.Arch)] ===" -ForegroundColor Green
+    $CoreVenv = Join-Path $RepoRoot ".venv-core"
+    $CorePy = Join-Path $CoreVenv "Scripts\python.exe"
+    if (-not (Test-Path $CorePy)) {
+        Invoke-Checked $PythonExe @("-m", "venv", $CoreVenv)
+    }
+    Invoke-Checked $CorePy @("-m", "pip", "install", "--upgrade", "pip")
+    Invoke-Checked $CorePy @("-m", "pip", "install", "-r", (Join-Path $RepoRoot "requirements-windows.txt"))
+    Invoke-Checked $CorePy @("-m", "pip", "check")
+    Invoke-Checked $CorePy @("scripts\check_env.py", "--write-report", "SYSTEM_REPORT.md")
+} else {
+    Write-Host "=== [1/3] 已跳过 Core 桌面环境初始化 (-SkipCore) ===" -ForegroundColor Gray
 }
-Invoke-Checked $CorePy @("-m", "pip", "install", "--upgrade", "pip")
-Invoke-Checked $CorePy @("-m", "pip", "install", "-r", (Join-Path $RepoRoot "requirements-windows.txt"))
-Invoke-Checked $CorePy @("-m", "pip", "check")
-Invoke-Checked $CorePy @("scripts\check_env.py", "--write-report", "SYSTEM_REPORT.md")
 
 if (-not $SkipAI) {
-    $AiVenv = Join-Path $RepoRoot ".venv-ai"
+    $AiVenv = if ($AiVenvPath) { $AiVenvPath } else { Join-Path $RepoRoot ".venv-ai" }
     $AiPy = Join-Path $AiVenv "Scripts\python.exe"
     if (-not (Test-Path $AiPy)) {
         Invoke-Checked $PythonExe @("-m", "venv", $AiVenv)
@@ -294,7 +301,7 @@ if (-not $SkipAI) {
     Invoke-Checked $AiPy @("-m", "pip", "install", "--upgrade", "pip")
 
     if ($ResolvedCudaWheelDir) {
-        Write-Host "=== [2/3] 初始化隔离 RTX 5060 Ti AI Worker 环境 (.venv-ai) [优先本地 wheel: $ResolvedCudaWheelDir] ===" -ForegroundColor Green
+        Write-Host "=== [2/3] 初始化隔离 RTX 5060 Ti AI Worker 环境 ($AiVenv) [优先本地 wheel: $ResolvedCudaWheelDir] ===" -ForegroundColor Green
         Write-Host "[cu128 本地 wheel 优先] 命中 $($LocalWheels.Count) 个本地 wheel:" -ForegroundColor Green
         foreach ($WhlPath in $LocalWheels) {
             Write-Host "  - $WhlPath" -ForegroundColor Green
@@ -362,7 +369,12 @@ if (-not $SkipAI) {
         "import torch, torchaudio, torchvision; exp='$CudaSuffixCheck'; assert all(exp in str(v) for v in (torch.__version__, torchaudio.__version__, torchvision.__version__)), f'Expected {exp} stack, got torch={torch.__version__}, torchaudio={torchaudio.__version__}, torchvision={torchvision.__version__}'; print('Verified CUDA stack:', torch.__version__, torchaudio.__version__, torchvision.__version__)"
     )
     Invoke-Checked $AiPy @("-m", "pip", "check")
-    Invoke-Checked $AiPy @("scripts\check_env.py", "--json", "--check-ai-packages", "--write-report", "SYSTEM_REPORT.md")
+    $AiReportArgs = if ($SkipCore) {
+        @("scripts\check_env.py", "--json", "--check-ai-packages", "--no-write")
+    } else {
+        @("scripts\check_env.py", "--json", "--check-ai-packages", "--write-report", "SYSTEM_REPORT.md")
+    }
+    Invoke-Checked $AiPy $AiReportArgs
 }
 
 # 检查 FFmpeg 查找位置 (PATH 或仓库本地路径)

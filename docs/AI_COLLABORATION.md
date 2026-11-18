@@ -191,3 +191,11 @@ OpenCode Go `opencode-go/deepseek-v4.1-flash` 完成一次文本复核，无重�
 两位 Worker 各完成一次，零重试。OpenCode Go `opencode-go/deepseek-v4.1-flash` 31.4 秒，输入 1,402，输出 812，推理 999。采纳页面栈、分组、统一表单保存路径和 MIDI 直接导航。按用户修正选项采用常驻左侧栏。
 
 Command Code GOAT `deepseek/deepseek-v4.1-flash` 23.2 秒，输入 12,993，输出 1,863，缓存读取 4,096。采纳标题、正文、次级文字层级、浅边框、图标底板、响应式和可见焦点。根据实际 Qt 截图校准页面密度和字号，使用原生按钮状态描绘反馈。工作区与主题状态由既有设置模型处理。
+
+## 2026-11-18 · 综合体验升级：练习和弦对齐、贝斯 YIN、Cubase MIDI、明暗主题与安装包
+
+本轮在云端 Linux 环境基于 `main` (`426a6f4`) 进行，借助内部协同子代理（`UI Design & Layout Reviewer` 与 `Chord MIDI & Audition Architect`）并行辅助方案评审与模块拆分，未调用外部 OpenCode / Command Code CLI；两路内部子代理无结构化 token 或耗时工具回报，按约定标为未报告，不在报告中推算或编造指标。
+
+- **采纳设计**：`ChordPracticeDialog` 新增 `_PracticeTableDelegate` 剥离第 0 行焦点缩进并统一左/居中对齐；`analysis/stem_analyzer.py` 实现 `28–350 Hz` FFT-YIN + 2 倍谐波抑制 + 半程转调检测；抽取共享 `analysis/midi_common.py` 统一三类导出的 Cubase SMF Type-0 (`480 TPB`)、等音规范化 `key_signature`、Controller Reset 与防音符粘连；`core/appearance.py` / `ui/appearance.py` 接入黑夜/白天/跟随系统、字体扫描、实时预览与恢复默认；`core/paths.py` 与 `scripts/installer.iss` / `setup_windows.ps1` / `build_windows.ps1` 实现同级便携存储、零配置运行时探测与 Inno Setup 6 安装模板。
+- **离屏预览与复核修正的 5 项缺陷**：通过 PySide6 `offscreen` 截图与定向测试先后发现并修复 `SettingsDialog.update_appearance_summary` 对 `THEME_MODES` 字符串做 `[0]` 切片导致仅显示首字的问题、1280px 宽度下顶部 `ResourceMonitorBar` 文本截断、Tab 标签 `&` 误渲染助记下划线、`midi_table` 窄视口横向滚动溢出，以及 Light Lenso 模式下 Chroma 顶部三卡片底行文字垂直裁剪。
+- **验证与待补项**：云端 Linux `QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 共 **188 通过、6 跳过**（6 项为 Windows WASAPI / WinRT / PowerShell 专属测试），同步核对 5 张原生长离屏预览图；`ISCC.exe` 编译与干净非 C 盘安装、Cubase 实际拖入、Windows 11 系统主题实时切换、真实声卡与 RTX 5060 Ti 8GB 真机分轨均留待目标机复测。

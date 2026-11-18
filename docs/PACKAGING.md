@@ -129,37 +129,48 @@ E:\LS-midi\.venv-midi\Scripts\python.exe -m pip check
 E:\LS-midi\.venv-midi\Scripts\python.exe scripts\check_env.py --json --check-midi-packages --no-write
 ```
 
-### Step D: FFmpeg 查找规则、SMTC 自动切歌与打包启动
+### Step D: FFmpeg 查找规则、SMTC 自动切歌、零配置随包运行时与一键安装包 (Inno Setup 6)
 
+- **同级便携存储与内置运行时发现**（[`core/paths.py`](../core/paths.py) & [`main.py`](../main.py)）：
+  - **同级数据目录**：当应用目录（如 `D:\ListenScope`）可写时，配置 `settings.json`、`workspace_outputs/` 与 `exports/` 均优先创建在应用同级目录下，避免写入 `C:\` 系统目录；仅在软件位于只读目录时才回退至 `~/.listenscope/` 与 `Documents/ListenScope/exports`。
+  - **免手工路径自动探测**：启动与「设置 -> AI 与 MIDI 环境」页自动 按序扫描环境变量覆盖 (`LISTENSCOPE_AI_PYTHON` / `LISTENSCOPE_MIDI_PYTHON`)、`.venv-ai` / `.venv-midi`、随包可迁移目录 `runtime/ai`、`m`（短路径防 TensorFlow MAX_PATH）、`runtime/midi`、`runtimes/*` 与短盘路径 `LS-midi`；若未随包内置，也可在「设置」里点 **「一键自动配置 AI + MIDI / 仅自动配置 CPU MIDI」** 就地调用 `scripts/setup_windows.ps1` 并自动写入配置。
+- **打包一体安装版 (Inno Setup 6 · [`scripts/installer.iss`](../scripts/installer.iss))**：
+  - 将**独立可迁移 Python 运行时**（须为自包含嵌入式/便携 Python，不可带绑定构建机绝对路径的 `pyvenv.cfg`；本机测试可加 `-AllowMachineBoundVenv`）分别放入 `staging\runtime\ai` 与 `staging\m`，连同 `tools\ffmpeg\bin` 运行：
+    ```powershell
+    pwsh -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -Clean -BundleRuntimes -BundleFfmpeg -BuildInstaller
+    ```
+  - 生成单文件安装器 `dist\installer\ListenScope-Setup-Windows-x64.exe`：采用 `PrivilegesRequired=lowest`（免管理员安装）、默认智能选择非 C 盘根目录（`D:\ListenScope` / `E:\ListenScope`，回退 `{userpf}\ListenScope`）、内置短路径 `{app}\m` 并预建且在卸载/升级时保留 `{app}\exports\`。
+  - `setup_windows.ps1` 同步新增 `-SkipCore`（在应用内置引导场景中免除复写 Core 环境、`--no-write` 安全核验）与 `-AiVenvPath` 参数，便于在应用同级 `runtime\ai` 等指定位置落地隔离环境。
+- **Cubase 标准 MIDI (SMF Type-0 · [`analysis/midi_common.py`](../analysis/midi_common.py))**：
+  - 全部三个 MIDI 导出路径（和弦进行、鼓点、单轨转录 / Basic Pitch 规范化）统一输出 `type=0, ticks_per_beat=480`，在 Tick `0` 写入 ASCII 轨名、`time_signature`、`set_tempo`、合法规范 `key_signature`（自动做圈内等音映射如 `G# major -> Ab`）、Controller Reset (`CC 121=0`, `CC 64=0`, `pitchwheel=0`) 及 GM 音色号，并裁切同通道同音高重叠且严格排序 `note_off < note_on`。
 - **FFmpeg 查找顺序**（[`core/paths.py`](../core/paths.py)）: 系统 `PATH` -> 当前工作目录 -> 可执行文件目录 / Bundle 根目录 -> `ffmpeg/`、`ffmpeg/bin/`、`tools/ffmpeg/bin/`、`../tools/ffmpeg/bin/`；主进程会在启动 AI/MIDI/Benchmark 子进程前自动把命中的 FFmpeg 目录注入子进程 `PATH`。WAV 可直走 `soundfile`，但部分模型加载和封装格式需要 `ffmpeg.exe`。
 - **SMTC 自动切歌重置 (`自动切歌重置` 开关 + 手动「换歌重置」保底)**: Core 环境可选安装 `winrt-Windows.Media.Control` 后，按进程捕获期间会在后台以只读模式查询目标进程（如 `QQMusic.exe`）的 Windows SMTC 会话；同一首歌暂停/恢复/快进快退/瞬态空标题/浏览器无关会话不会误清空历史，仅在连续 2 次轮询确认新曲目后调用既有 `reset_harmony()` + 清空最近 12 步和弦带并保持捕获不断。如目标机未启用 SMTC 或尚未验证 QQ 音乐兼容细节，可先运行只读探针 `scripts\probe_media_session.py --process QQMusic.exe --duration 30` 确认，并随时使用手动「换歌重置 (和弦/调性/BPM)」按钮。
 - **源码运行**:
   ```powershell
   .\.venv-core\Scripts\python.exe main.py --ai-python .\.venv-ai\Scripts\python.exe --midi-python E:\LS-midi\.venv-midi\Scripts\python.exe
   ```
-- **打包目录运行**: `dist\ListenScopeCore\ListenScope.exe`（[`listenscope_core.spec`](../packaging/listenscope_core.spec) 已同步打包 `requirements-ai.txt`、`constraints-ai-cu128.txt`、`requirements-midi.txt`、`winrt` 运行时与全部 Worker/Probe 模块）。首次运行可通过 `--ai-python` / `--midi-python` 传入，或在 **设置 -> 资源安全阈值 & AI 配置** 页面浏览、验证并保存至 `~/.listenscope/settings.json`（重启 `ListenScope.exe` 后自动保留）。
+- **打包目录运行**: `dist\ListenScopeCore\ListenScope.exe`（[`listenscope_core.spec`](../packaging/listenscope_core.spec) 已同步打包 `requirements-ai.txt`、`constraints-ai-cu128.txt`、`requirements-midi.txt`、`winrt` 运行时与全部 Worker/Probe 模块）。首次运行支持自动扫描同级运行时、通过 `--ai-python` / `--midi-python` 传入，或在 **设置 -> AI 与 MIDI 环境** 一键自动配置、验证并保存至同级 `settings.json`（重启 `ListenScope.exe` 后自动保留）。
 
 ### Windows 真机音频设备与现场排障说明
 
 - **44.1kHz / 96kHz 声卡或蓝牙耳机静音启动问题（上游 `proctap 1.1.1` 特性）**:
   - 推荐在 Windows「声音设置 -> 默认格式」保持 **48000 Hz**；若使用其他采样率设备，先让 QQ 音乐开始出声再点击「开始捕获」。如仍受限可切换 `[兜底] 系统 WASAPI Loopback`。
 - **一键导出脱敏诊断包 (`.zip`)**:
-  - 在 **4. 系统资源 & 性能日志** 页点击 **「导出诊断包 (.zip)」**，导出 `SYSTEM_REPORT.md`、硬件摘要（含 AI/MIDI 路径及 FFmpeg 探测路径）、最近 500 条日志、最新性能日志尾部及脱敏设置。
+  - 在 **4. 系统资源与性能日志** 页点击 **「导出诊断包 (.zip)」**，导出 `SYSTEM_REPORT.md`、硬件摘要（含 AI/MIDI 路径及 FFmpeg 探测路径）、最近 500 条日志、最新性能日志尾部及脱敏设置。
 
 ---
 
 ## 3. Windows 真机实测状态与待完成验证项
 
-### 已在 Windows 11 真机（RTX 5060 Ti 8GB VRAM / 16GB RAM）实测通过（详见 [WINDOWS_TEST_REPORT.md](WINDOWS_TEST_REPORT.md)）
+### 已在 Windows 11 真机（RTX 5060 Ti 8GB VRAM / 16GB RAM）实测通过的历史基线（详见 [WINDOWS_TEST_REPORT.md](WINDOWS_TEST_REPORT.md)）
 
-- Core、GPU AI 与独立 CPU MIDI 三个环境均通过 `pip check`，Windows `pytest` **112/112** 全通（第四轮），本地核验 wheel + 自动生成 `cu128` 约束通过 CUDA 执行
+- Core、GPU AI 与独立 CPU MIDI 三个环境均通过 `pip check`，Windows `pytest` 通过（第四轮 `112/112`，后期 PR #22 基线达 `184` 项通过）
 - **30 分钟 QQ 音乐按进程连续捕获通过（第四轮）**：`process_loopback` 连续运行满 30 分钟，主进程 RSS `289–362 MiB`、队列始终 `0/64`、累计溢出/欠载 `0/0`，以及**手动点击「换歌重置」**立即清空 12 步和弦/BPM/调性而不中断捕获
-- 打包版 `ListenScope.exe` 输出设备热切换重连、目标进程退出安全停止、0.5× WSOLA A/B 循环回放及配置重启保留（含 `midi_python`、分块 6s、Demucs 6s 与 GPU 解锁状态）
-- 打包版默认配置（`6.0s` 分块 / HTDemucs `6s` 分段 / MDX `256`）下第四轮实测 GPU 2-Stem（`9.469s`，2,670 个 CUDA 节点事件，峰值显存 `4631 MiB`，最低可用 RAM `3181 MiB`）与 GPU 4-Stem（`4.344s`，峰值显存 `3209 MiB`，最低可用 RAM `3503 MiB`），退出后 Worker 子树归零、显存回落至 `~2087–2102 MiB`
-- 打包版 `ListenScope.exe` 调用独立 Python 3.11 `.venv-midi` 完成 `bass` 的 **Spotify Basic Pitch CPU (`basic-pitch`)** 转录与 `.mid` 导出（`120` 音符，与 CLI 诊断 SHA-256 逐字节一致），重启 `exe` 后 MIDI 路径持久化保留
+- 打包版默认值（`6.0s` 分块 / HTDemucs `6s` 分段 / MDX `256`）下第四轮实测 GPU 2-Stem（`9.469s`，2,670 个 CUDA 节点事件，峰值显存 `4631 MiB`，最低可用 RAM `3181 MiB`）与 GPU 4-Stem（`4.344s`，峰值显存 `3209 MiB`，最低可用 RAM `3503 MiB`），退出后 Worker 子树归零、显存回落至 `~2087–2102 MiB`
 
-### 仍需在本机复测 / 待验收项
+### 最新改动仍需在目标机真机验收清单（本次 Linux 云端未测 Windows 实机项）
 
-1. **`-CudaWheelDir` 安装路径与单轨 WAV 直接转 MIDI GUI 入口真机复验**: 在干净目录实测 `scripts\setup_windows.ps1 -CudaWheelDir <本地wheel目录>` 全流程、`pip check`、重打包 `ListenScope.exe` 并从 GUI 直接打开上一轮 `bass.wav`（不重新分轨、不清空捕获缓冲）验证 **Spotify Basic Pitch CPU (`basic-pitch`)** 预览与可用 `mido` 解析的 `.mid` 导出。
-2. **QQ 音乐 Windows SMTC 只读探针与自动切歌重置实测**: 在 Windows 11 本机运行 `scripts\probe_media_session.py --process QQMusic.exe --duration 30` 检查 QQ 音乐是否稳定暴露 SMTC 曲目元信息，并在新打包 GUI 验证 **同曲暂停 / 恢复 / 拖动进度条不误清历史** 与 **真实切换歌曲 A -> B 自动重置**（以及关闭开关仅用手动重置）。
-3. **持续近实时播放（继续标为待验收）**: 在本机单独测试实验性近实时分轨持续播放的延迟、掉块与资源占用。
+1. **Inno Setup 6 (`ISCC.exe`) 编译与干净目录一键安装实测**: 运行 `build_windows.ps1 -Clean -BundleRuntimes -BundleFfmpeg -BuildInstaller`（配合独立便携运行时），在无预设 Python 路径的干净非 C 盘（如 `D:\ListenScope`）安装后验证免手动选路径直跑 AI 分轨、Basic Pitch MIDI 与应用内置一键安装 (`setup_windows.ps1 -SkipCore`)，同时核验设置/导出目录落在同级而非 `C:\`。
+2. **Cubase / DAW 导入全部三类 `.mid` 实测**: 验证和弦进行、鼓点与 Basic Pitch 转录导出的 `.mid` 在 Cubase 内轨名、拍号、BPM、调号、CC 复位、音符无粘连挂起及实音音高对齐情况。
+3. **Windows 11 系统深浅主题实时切换 & 字体缩放 DPI 验收**: 开启「跟随系统」，切换 Windows 系统深浅主题与常用 DPI (`125% / 150%`)，核对已安装字体扫描、Live Preview 与重启保存持久化。
+4. **真机曲库验证**: 用真机贝斯分轨实测 FFT-YIN 最低音 + MIDI + 转调警告，以及 QQ 音乐 SMTC 与实验性近实时持续播放表现。

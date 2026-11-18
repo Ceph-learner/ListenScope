@@ -19,6 +19,7 @@ import numpy as np
 from core.models import MidiNoteCandidate, MidiTranscriptionResult
 
 from .chroma import PITCH_CLASSES
+from .midi_common import gm_program_for_stem, normalize_midi_file_for_cubase, write_cubase_note_spans
 from .pitch import PitchEstimator
 
 
@@ -66,42 +67,34 @@ def _write_notes_to_midi(
     output_midi_path: Path,
     *,
     bpm: float = 120.0,
+    stem_name: str = "bass",
+    key_signature: Optional[str] = None,
+    time_signature: tuple[int, int] = (4, 4),
 ) -> Path:
-    output_midi_path.parent.mkdir(parents=True, exist_ok=True)
-    mid = mido.MidiFile(ticks_per_beat=480)
-    track = mido.MidiTrack()
-    mid.tracks.append(track)
-
-    tempo = mido.bpm2tempo(max(30.0, min(240.0, bpm)))
-    track.append(mido.MetaMessage("set_tempo", tempo=tempo, time=0))
-
-    events: list[tuple[int, str, int, int]] = []
+    safe_bpm = max(30.0, min(240.0, float(bpm)))
+    tempo = mido.bpm2tempo(safe_bpm)
+    channel, program = gm_program_for_stem(stem_name)
+    spans: list[tuple[int, int, int, int, int]] = []
     for n in notes:
         start_tick = max(0, int(round(mido.second2tick(n.start_sec, 480, tempo))))
         end_tick = max(start_tick + 24, int(round(mido.second2tick(n.end_sec, 480, tempo))))
         vel = max(1, min(127, int(n.velocity)))
         pitch = max(0, min(127, int(n.pitch_midi)))
-        events.append((start_tick, "note_on", pitch, vel))
-        events.append((end_tick, "note_off", pitch, 0))
+        spans.append((start_tick, end_tick, channel, pitch, vel))
 
-    # Sort chronologically; note_off before note_on at identical tick avoids zero-length overlap
-    events.sort(key=lambda e: (e[0], 0 if e[1] == "note_off" else 1, e[2]))
-
-    last_tick = 0
-    for tick, msg_type, pitch, vel in events:
-        delta = max(0, tick - last_tick)
-        track.append(mido.Message(msg_type, note=pitch, velocity=vel, time=delta))
-        last_tick = tick
-
-    track.append(mido.MetaMessage("end_of_track", time=0))
-    tmp_path = output_midi_path.with_name(output_midi_path.name + ".tmp")
-    try:
-        mid.save(str(tmp_path))
-        tmp_path.replace(output_midi_path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    return output_midi_path
+    out_path, _ = write_cubase_note_spans(
+        spans,
+        output_midi_path,
+        track_name=f"ListenScope {stem_name or 'Stem'}",
+        tempo_bpm=safe_bpm,
+        channel=channel,
+        program=program,
+        time_signature=time_signature,
+        key_signature=key_signature,
+        ticks_per_beat=480,
+        include_controller_reset=(channel != 9),
+    )
+    return out_path
 
 
 def _fallback_monophonic_stem_to_notes(audio_path: Path, *, max_seconds: float = 120.0) -> list[MidiNoteCandidate]:
@@ -204,7 +197,7 @@ def transcribe_stem_to_midi(
                 "未安装 Spotify `basic-pitch`。请在 AI Worker 环境中安装: pip install basic-pitch[onnx]"
             ) from exc
         notes = _fallback_monophonic_stem_to_notes(src)
-        _write_notes_to_midi(notes, out)
+        _write_notes_to_midi(notes, out, stem_name=stem_name)
         return MidiTranscriptionResult(
             source_stem_name=stem_name,
             output_midi_path=out,
@@ -217,6 +210,11 @@ def transcribe_stem_to_midi(
     _model_output, midi_data, note_events = predict(str(src), model_or_model_path=ICASSP_2022_MODEL_PATH)
     out.parent.mkdir(parents=True, exist_ok=True)
     midi_data.write(str(out))
+    normalize_midi_file_for_cubase(
+        out,
+        track_name=f"ListenScope {stem_name or 'Stem'}",
+        stem_name=stem_name,
+    )
 
     candidates: list[MidiNoteCandidate] = []
     for start_s, end_s, pitch_midi, amplitude, _bends in note_events:

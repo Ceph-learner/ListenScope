@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-
 from pathlib import Path
 from typing import Any, Optional
 
@@ -16,10 +15,10 @@ from audio.playback import StemMixerEngine
 from core.appearance import Appearance
 from core.config import AIConfig, ResourceLimits
 from core.logging import PerformanceRecord
-from core.paths import default_export_dir
 from core.models import (
     AIJobProgress,
     AIJobResult,
+    AIJobState,
     AnalysisSnapshot,
     AudioProcessInfo,
     CaptureMode,
@@ -30,9 +29,18 @@ from core.models import (
     StemDeepAnalysisReport,
     SystemHardwareReport,
 )
+from core.paths import default_export_dir
 
-from .appearance import AppearanceDialog, appearance_stylesheet, apply_plot_appearance
+from .appearance import (
+    AppearanceDialog,
+    _blend,
+    appearance_stylesheet,
+    apply_plot_appearance,
+    detect_system_is_dark,
+    set_widget_tone,
+)
 from .chroma_widget import ChromaAndHarmonyWidget
+from .help_badge import HelpBadge
 from .mixer_widget import StemMixerWidget
 from .resource_widget import ResourceMonitorBar, ResourceStatusPanel
 from .settings_dialog import SettingsDialog
@@ -115,6 +123,21 @@ QTabBar::tab:selected {
 """
 
 
+def _set_label_cached(label: QtWidgets.QLabel, text: str) -> None:
+    if label.text() != text:
+        label.setText(text)
+
+
+def _infer_banner_tone(text: str) -> str:
+    if text.startswith("❌") or "失败" in text or "错误" in text:
+        return "error"
+    if text.startswith("⚠️") or "紧急停止" in text or "系统环回" in text or "阻塞" in text:
+        return "warn"
+    if text.startswith("✅"):
+        return "ok"
+    return "info"
+
+
 class ExperimentalLiveWidget(QtWidgets.QWidget):
     """Phase 8 Experimental Near-Real-Time 2-Stem tab (default OFF)."""
 
@@ -135,9 +158,8 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
             "速度基准用于判断模型能否跟上实时播放。资源告警时自动停止分轨，频谱分析继续运行。"
         )
         banner.setWordWrap(True)
-        banner.setStyleSheet(
-            "padding: 10px; background: #2A2310; color: #FFD166; border: 1px solid #F5A623; border-radius: 6px;"
-        )
+        banner.setObjectName("bannerNotice")
+        set_widget_tone(banner, "warn")
         root.addWidget(banner)
 
         ctrl = QtWidgets.QHBoxLayout()
@@ -229,35 +251,41 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
 
     @QtCore.Slot(str)
     def set_benchmark_text(self, text: str) -> None:
-        self.bench_lbl.setText(text)
+        _set_label_cached(self.bench_lbl, text)
 
     def update_metrics(self, m: LiveSeparationMetrics) -> None:
         if m.active:
             self._pending_start = False
         self.toggle_btn.blockSignals(True)
         if self._pending_start and not m.active:
-            self.toggle_btn.setEnabled(False)
-            self.toggle_btn.setChecked(True)
-            self.toggle_btn.setText("基准测试 / 启动中...")
+            if self.toggle_btn.isEnabled():
+                self.toggle_btn.setEnabled(False)
+            if not self.toggle_btn.isChecked():
+                self.toggle_btn.setChecked(True)
+            if self.toggle_btn.text() != "基准测试 / 启动中...":
+                self.toggle_btn.setText("基准测试 / 启动中...")
         else:
-            self.toggle_btn.setEnabled(True)
-            self.toggle_btn.setChecked(m.active)
-            self.toggle_btn.setText("停止实验性近实时分轨" if m.active else "开启实验性近实时分轨")
+            if not self.toggle_btn.isEnabled():
+                self.toggle_btn.setEnabled(True)
+            if self.toggle_btn.isChecked() != m.active:
+                self.toggle_btn.setChecked(m.active)
+            target_btn_txt = "停止实验性近实时分轨" if m.active else "开启实验性近实时分轨"
+            if self.toggle_btn.text() != target_btn_txt:
+                self.toggle_btn.setText(target_btn_txt)
         self.toggle_btn.blockSignals(False)
 
-        self.lbl_state.setText(f"状态: {m.status_message}")
-        self.lbl_latency.setText(f"分块估计延迟: {m.latency_ms:.1f} ms")
-        self.lbl_rtf.setText(f"实时率 RTF: {m.rtf:.3f} {'(可实时)' if 0 < m.rtf < 1.0 else ''}")
-        self.lbl_mem.setText(f"RAM (主={m.main_ram_mb:.1f} MB / Worker={m.worker_ram_mb:.1f} MB)")
+        _set_label_cached(self.lbl_state, f"状态: {m.status_message}")
+        _set_label_cached(self.lbl_latency, f"分块估计延迟: {m.latency_ms:.1f} ms")
+        _set_label_cached(self.lbl_rtf, f"实时率 RTF: {m.rtf:.3f} {'(可实时)' if 0 < m.rtf < 1.0 else ''}")
+        _set_label_cached(self.lbl_mem, f"RAM (主={m.main_ram_mb:.1f} MB / Worker={m.worker_ram_mb:.1f} MB)")
         vram_txt = f"{m.vram_free_mb:.0f} MB" if m.vram_free_mb is not None else "N/A"
         util_txt = f"{m.gpu_util_pct:.0f}%" if m.gpu_util_pct is not None else "N/A"
-        self.lbl_vram.setText(f"空闲 VRAM={vram_txt} | GPU={util_txt}")
-        self.lbl_buf.setText(
-            f"输出缓冲: {m.buffer_seconds:.2f} / {m.max_buffer_seconds:.1f} s"
-        )
-        self.lbl_playback_health.setText(
+        _set_label_cached(self.lbl_vram, f"空闲 VRAM={vram_txt} | GPU={util_txt}")
+        _set_label_cached(self.lbl_buf, f"输出缓冲: {m.buffer_seconds:.2f} / {m.max_buffer_seconds:.1f} s")
+        _set_label_cached(
+            self.lbl_playback_health,
             f"输入跳段 {m.dropped_chunks} 次 | 输出溢出丢弃 {m.output_overwritten_frames} 帧 | "
-            f"输出重缓冲 {m.playback_rebuffers} 次 | 声卡报告欠载 {m.device_underflows} 次"
+            f"输出重缓冲 {m.playback_rebuffers} 次 | 声卡报告欠载 {m.device_underflows} 次",
         )
 
 
@@ -310,6 +338,24 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._closing_handler = None
         self._last_capture_banner: Optional[str] = None
         self._syncing_ab_region = False
+        self._system_is_dark = detect_system_is_dark()
+        self._style_hints_connected = False
+
+        self._last_capture_status_txt = "未捕获"
+        self._last_capture_tooltip = ""
+        self._last_coverage_txt = "已缓冲: 0.0 / 120.0 s"
+        self._last_ai_badge_txt = "AI: Idle"
+        self._hist_x_key: Optional[tuple[int, float, float]] = None
+        self._hist_x_buf: Optional[np.ndarray] = None
+        self._last_hist_empty = False
+
+        app_inst = QtGui.QGuiApplication.instance()
+        if app_inst is not None:
+            try:
+                app_inst.styleHints().colorSchemeChanged.connect(self._on_system_color_scheme_changed)
+                self._style_hints_connected = True
+            except Exception:
+                pass
 
         self._play_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Space"), self)
         self._play_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
@@ -324,11 +370,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         # 1. TOP BAR: Source selector + Capture + RAM/VRAM + AI status + Settings + ALWAYS-VISIBLE Emergency Stop
         top_bar = QtWidgets.QHBoxLayout()
-        top_bar.setSpacing(8)
+        top_bar.setSpacing(6)
 
         top_bar.addWidget(QtWidgets.QLabel("音频源:"))
         self.source_combo = QtWidgets.QComboBox()
-        self.source_combo.setMinimumWidth(260)
+        self.source_combo.setMinimumWidth(190)
+        self.source_combo.setMaximumWidth(250)
+        self.source_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         self.refresh_btn = QtWidgets.QPushButton("刷新进程")
         self.refresh_btn.clicked.connect(self.refresh_sources_requested.emit)
 
@@ -337,11 +387,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.clicked.connect(self._on_capture_clicked)
 
         self.capture_status_lbl = QtWidgets.QLabel("未捕获")
+        self.capture_status_lbl.setObjectName("captureStatus")
+        set_widget_tone(self.capture_status_lbl, "info")
 
         self.resource_bar = ResourceMonitorBar()
 
         self.ai_status_badge = QtWidgets.QLabel("AI: Idle")
-        self.ai_status_badge.setStyleSheet("padding: 3px 8px; background: #1C2026; border: 1px solid #303742; border-radius: 4px;")
+        self.ai_status_badge.setObjectName("aiStatusBadge")
+        set_widget_tone(self.ai_status_badge, "info")
 
         self.settings_btn = QtWidgets.QPushButton("设置 / 系统状态")
         self.settings_btn.clicked.connect(self.open_settings_dialog)
@@ -355,6 +408,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.emergency_stop_btn.clicked.connect(self.emergency_stop_requested.emit)
 
         top_bar.addWidget(self.source_combo)
+        top_bar.addWidget(
+            HelpBadge(
+                "按进程捕获说明",
+                "优先选择正在播放音乐的进程（如 QQMusic.exe），仅捕获该应用输出，避免把混音或节拍器再次录回；"
+                "若系统 Build < 20348 或列表未找到播放器，可改用系统环回。",
+            )
+        )
         top_bar.addWidget(self.refresh_btn)
         top_bar.addWidget(self.capture_btn)
         top_bar.addWidget(self.capture_status_lbl)
@@ -365,13 +425,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         top_bar.addWidget(self.emergency_stop_btn)
         main_layout.addLayout(top_bar)
 
-        # Dismissible warning / notice banner (QQ Music A/B hint, System Loopback warning, GPU block)
+        # Dismissible warning / notice banner
         self.notice_banner = QtWidgets.QLabel("")
+        self.notice_banner.setObjectName("bannerNotice")
         self.notice_banner.setWordWrap(True)
         self.notice_banner.setVisible(False)
-        self.notice_banner.setStyleSheet(
-            "padding: 6px 10px; background: #332400; color: #FFD166; border: 1px solid #F5A623; border-radius: 5px;"
-        )
+        set_widget_tone(self.notice_banner, "warn")
         main_layout.addWidget(self.notice_banner)
 
         # 2. CENTER TABS
@@ -383,10 +442,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.resource_panel = ResourceStatusPanel()
         self.live_widget = ExperimentalLiveWidget(ai_config)
 
-        self.tabs.addTab(self.spectrum_widget, "1. 实时频谱 & 波形")
+        self.tabs.addTab(self.spectrum_widget, "1. 实时频谱与波形")
         self.tabs.addTab(self.chroma_widget, "2. Chroma / 和弦 / 调性 / BPM")
-        self.tabs.addTab(self.mixer_widget, "3. 分轨混音 & MIDI 扒谱")
-        self.tabs.addTab(self.resource_panel, "4. 系统资源 & 性能日志")
+        self.tabs.addTab(self.mixer_widget, "3. 分轨混音与 MIDI 扒谱")
+        self.tabs.addTab(self.resource_panel, "4. 系统资源与性能日志")
         self.tabs.addTab(self.live_widget, "5. 实验功能: 近实时分轨 (默认关闭)")
         main_layout.addWidget(self.tabs, 1)
 
@@ -474,6 +533,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_snap_btn.setToolTip("停止播放后，在 A/B 边界各 ±5 毫秒内寻找更接近零的样本，以减轻循环接缝声。")
         self.ab_snap_btn.clicked.connect(self.ab_snap_requested.emit)
         row_a_transport.addWidget(self.ab_snap_btn)
+        row_a_transport.addWidget(
+            HelpBadge(
+                "贴近零点微调",
+                "停止回放后点击，将在当前 A 与 B 边界各 ±5ms 范围内寻找最接近 0 的采样点对齐，大幅减少循环端点咔哒声。",
+            )
+        )
         row_a_transport.addWidget(self.ab_loop_chk)
         row_a_transport.addWidget(self.ab_speed_combo)
         row_a_transport.addWidget(self.ab_export_wav_btn)
@@ -587,6 +652,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_b.addWidget(self.ai_2stem_combo)
         row_b.addWidget(self.segment_spin)
         row_b.addWidget(self.ai_gpu_chk)
+        row_b.addWidget(
+            HelpBadge(
+                "8GB 显存防护与分轨模型",
+                "AI 分轨全部在独立子进程执行，按 6s 分块逐段流式推理并自动清理中间缓存；"
+                "若 RTX 5060 Ti (8GB VRAM) 或 16GB 系统内存接近保护阈值，将自动拦截或停止以保护播放器不卡顿。",
+            )
+        )
         row_b.addStretch(1)
         row_b.addWidget(self.sep_2stem_btn)
         row_b.addWidget(self.sep_4stem_btn)
@@ -595,9 +667,40 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         main_layout.addWidget(bottom_box)
         self.apply_appearance(appearance)
 
-    def apply_appearance(self, appearance: Appearance) -> None:
+    @QtCore.Slot(object)
+    def _on_system_color_scheme_changed(self, _scheme: Any = None) -> None:
+        new_dark = detect_system_is_dark()
+        if new_dark == self._system_is_dark:
+            return
+        self._system_is_dark = new_dark
+        if getattr(self, "appearance", None) is not None and self.appearance.theme_mode == "system":
+            self.apply_appearance(self.appearance, force_theme=True)
+
+    def _apply_history_plot_theme(self, appearance: Appearance) -> None:
+        mode = appearance.resolve_theme_mode(system_is_dark=self._system_is_dark)
+        bg, fg, accent = appearance.effective_colors(system_is_dark=self._system_is_dark)
+        if mode == "light":
+            wave_color = _blend(fg, accent, 0.45)
+            reg_brush = (22, 163, 74, 42)
+            reg_pen = "#15803D"
+            playhead_pen = "#D97706"
+        else:
+            wave_color = _blend("#4EA8DE", accent, 0.35)
+            reg_brush = (46, 194, 126, 48)
+            reg_pen = "#2EC27E"
+            playhead_pen = "#FFD166"
+        pen = pg.mkPen(wave_color, width=1.0)
+        self._hist_max_curve.setPen(pen)
+        self._hist_min_curve.setPen(pen)
+        self.ab_region.setBrush(reg_brush)
+        self.ab_region.setHoverBrush(reg_brush)
+        for line in self.ab_region.lines:
+            line.setPen(pg.mkPen(reg_pen, width=1.5))
+        self._ab_playhead_line.setPen(pg.mkPen(playhead_pen, width=1.8))
+
+    def apply_appearance(self, appearance: Appearance, *, force_theme: bool = False) -> None:
         old = getattr(self, "appearance", None)
-        if appearance == old:
+        if appearance == old and not force_theme:
             return
         self.appearance = appearance
         self.mixer_widget.plot_appearance = appearance
@@ -605,12 +708,21 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._apply_workspace_layout(appearance.layout)
         analysis_view = self.spectrum_widget.view_combo
         analysis_view.setCurrentIndex(analysis_view.findData(appearance.analysis_layout))
-        if old is not None and replace(appearance, layout=old.layout, analysis_layout=old.analysis_layout) == old:
+        if (
+            old is not None
+            and not force_theme
+            and replace(appearance, layout=old.layout, analysis_layout=old.analysis_layout) == old
+        ):
             return
-        self.setStyleSheet(appearance_stylesheet(DARK_STYLESHEET, appearance))
+        self.setStyleSheet(
+            appearance_stylesheet(DARK_STYLESHEET, appearance, system_is_dark=self._system_is_dark)
+        )
         for plot in self.findChildren(pg.PlotWidget):
-            apply_plot_appearance(plot, appearance)
-        self.chroma_widget.refresh_chroma_note_ticks()
+            apply_plot_appearance(plot, appearance, system_is_dark=self._system_is_dark)
+        self._apply_history_plot_theme(appearance)
+        self.spectrum_widget.apply_theme(appearance, system_is_dark=self._system_is_dark)
+        self.chroma_widget.apply_theme(appearance, system_is_dark=self._system_is_dark)
+        self.mixer_widget.apply_theme(appearance, system_is_dark=self._system_is_dark)
 
     def _on_analysis_layout_selected(self) -> None:
         layout = self.spectrum_widget.view_combo.currentData()
@@ -629,11 +741,18 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.mixer_widget.apply_workspace_layout(layout)
 
     def open_appearance_dialog(self, parent: QtWidgets.QWidget | None = None) -> None:
-        dialog = AppearanceDialog(self.appearance, DARK_STYLESHEET, parent or self)
+        initial = self.appearance
+        dialog = AppearanceDialog(
+            initial,
+            DARK_STYLESHEET,
+            parent or self,
+            on_preview=self.apply_appearance,
+            system_is_dark=self._system_is_dark,
+        )
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             appearance = dialog.values()
-            if appearance != self.appearance:
-                self.apply_appearance(appearance)
+            self.apply_appearance(appearance)
+            if appearance != initial:
                 self.appearance_applied.emit()
 
     @property
@@ -644,6 +763,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._closing_handler = fn
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._style_hints_connected:
+            app_inst = QtGui.QGuiApplication.instance()
+            if app_inst is not None:
+                try:
+                    app_inst.styleHints().colorSchemeChanged.disconnect(self._on_system_color_scheme_changed)
+                except Exception:
+                    pass
+            self._style_hints_connected = False
         plot_widgets = (
             self.history_overview_plot,
             self.spectrum_widget.wave_plot,
@@ -785,12 +912,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self, mins: np.ndarray, maxs: np.ndarray, avail_sec: float, *, end_ago: float = 0,
     ) -> None:
         if avail_sec <= 0.0 or mins.size == 0 or maxs.size == 0:
-            self._hist_max_curve.setData([], [])
-            self._hist_min_curve.setData([], [])
+            if not self._last_hist_empty:
+                self._hist_max_curve.setData([], [])
+                self._hist_min_curve.setData([], [])
+                self._last_hist_empty = True
             return
-        x = np.linspace(-end_ago - avail_sec, -end_ago, int(mins.shape[0]), dtype=np.float32)
-        self._hist_max_curve.setData(x, np.asarray(maxs, dtype=np.float32))
-        self._hist_min_curve.setData(x, np.asarray(mins, dtype=np.float32))
+        self._last_hist_empty = False
+        n = int(mins.shape[0])
+        key = (n, round(float(avail_sec), 4), round(float(end_ago), 4))
+        if self._hist_x_buf is None or self._hist_x_key != key:
+            self._hist_x_buf = np.linspace(-end_ago - avail_sec, -end_ago, n, dtype=np.float32)
+            self._hist_x_key = key
+        self._hist_max_curve.setData(self._hist_x_buf, np.asarray(maxs, dtype=np.float32))
+        self._hist_min_curve.setData(self._hist_x_buf, np.asarray(mins, dtype=np.float32))
 
     def _on_ab_speed_changed(self) -> None:
         self.ab_speed_changed.emit(float(self.ab_speed_combo.currentData() or 1.0))
@@ -917,36 +1051,54 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.blockSignals(False)
         if not active:
             self._last_capture_banner = None
-            self.capture_status_lbl.setStyleSheet("")
-            self.capture_status_lbl.setText("未捕获")
-            self.capture_status_lbl.setToolTip("")
+            set_widget_tone(self.capture_status_lbl, "info")
+            _set_label_cached(self.capture_status_lbl, "未捕获")
+            self._last_capture_status_txt = "未捕获"
+            if self._last_capture_tooltip:
+                self.capture_status_lbl.setToolTip("")
+                self._last_capture_tooltip = ""
 
-    def show_banner_message(self, text: str) -> None:
+    def show_banner_message(self, text: str, *, tone: Optional[str] = None) -> None:
         if not text:
-            self.notice_banner.setVisible(False)
-            self.notice_banner.setText("")
+            if self.notice_banner.isVisible():
+                self.notice_banner.setVisible(False)
+            _set_label_cached(self.notice_banner, "")
         else:
-            self.notice_banner.setText(text)
-            self.notice_banner.setVisible(True)
+            resolved_tone = tone if tone is not None else _infer_banner_tone(text)
+            set_widget_tone(self.notice_banner, resolved_tone)
+            _set_label_cached(self.notice_banner, text)
+            if not self.notice_banner.isVisible():
+                self.notice_banner.setVisible(True)
 
     def update_capture_stats(self, stats: CaptureStats, ring_available_sec: float) -> None:
         if self.capture_btn.isChecked() != stats.is_running:
             self.set_capture_active_ui(stats.is_running)
         silence = "静音" if stats.is_silent else "有信号"
         if stats.mode == CaptureMode.SYSTEM_LOOPBACK:
-            style = "padding: 3px 8px; background: #4D3800; color: #FFD166; border: 1px solid #F5A623; border-radius: 4px;"
+            tone = "warn"
             prefix = "[混入警告] "
-        else:
-            style = ""
+        elif stats.is_running and not stats.is_silent:
+            tone = "ok"
             prefix = ""
-        if self.capture_status_lbl.styleSheet() != style:
-            self.capture_status_lbl.setStyleSheet(style)
-        self.capture_status_lbl.setText(f"{prefix}{silence} · {stats.rms_dbfs:.1f} dBFS" if stats.is_running else "未捕获")
-        self.capture_status_lbl.setToolTip(
+        else:
+            tone = "info"
+            prefix = ""
+        set_widget_tone(self.capture_status_lbl, tone)
+        status_txt = f"{prefix}{silence} · {stats.rms_dbfs:.1f} dBFS" if stats.is_running else "未捕获"
+        if status_txt != self._last_capture_status_txt:
+            self.capture_status_lbl.setText(status_txt)
+            self._last_capture_status_txt = status_txt
+        tip = (
             f"{prefix}{stats.mode.value} | {stats.process_name} | RMS {stats.rms_dbfs:.1f} dBFS [{silence}] | "
             f"Drop(Over)={stats.buffer_overruns} Under={stats.buffer_underruns}"
         )
-        self.history_coverage_lbl.setText(f"已缓冲: {ring_available_sec:.1f} / 120.0 s")
+        if tip != self._last_capture_tooltip:
+            self.capture_status_lbl.setToolTip(tip)
+            self._last_capture_tooltip = tip
+        cov_txt = f"已缓冲: {ring_available_sec:.1f} / 120.0 s"
+        if cov_txt != self._last_coverage_txt:
+            self.history_coverage_lbl.setText(cov_txt)
+            self._last_coverage_txt = cov_txt
 
         banner_msg: Optional[str] = None
         if stats.last_error:
@@ -980,11 +1132,27 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.chroma_widget.update_analysis(snap, chroma_history=chroma_history)
 
     def update_ai_progress(self, prog: AIJobProgress) -> None:
-        self.ai_status_badge.setText(f"AI: {prog.state.value} ({int(round(prog.progress * 100))}%)")
+        txt = f"AI: {prog.state.value} ({int(round(prog.progress * 100))}%)"
+        if txt != self._last_ai_badge_txt:
+            self.ai_status_badge.setText(txt)
+            self._last_ai_badge_txt = txt
+        set_widget_tone(self.ai_status_badge, "info")
         self.mixer_widget.update_ai_progress(prog)
 
     def handle_ai_result(self, res: AIJobResult) -> None:
-        self.ai_status_badge.setText(f"AI: {res.state.value}")
+        txt = f"AI: {res.state.value}"
+        if txt != self._last_ai_badge_txt:
+            self.ai_status_badge.setText(txt)
+            self._last_ai_badge_txt = txt
+        if res.state == AIJobState.COMPLETED:
+            tone = "ok"
+        elif res.state in (AIJobState.FAILED, AIJobState.REJECTED_RESOURCE):
+            tone = "error"
+        elif res.state in (AIJobState.CANCELED, AIJobState.EMERGENCY_STOPPED):
+            tone = "warn"
+        else:
+            tone = "info"
+        set_widget_tone(self.ai_status_badge, tone)
         self.mixer_widget.handle_ai_result(res)
 
     def update_live_metrics(self, metrics: LiveSeparationMetrics) -> None:
@@ -1009,9 +1177,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             appearance=self.appearance,
             parent=self,
         )
+
         def edit_appearance(parent: QtWidgets.QWidget) -> None:
             self.open_appearance_dialog(parent)
             dlg.update_appearance_summary(self.appearance)
+
         dlg.appearance_requested.connect(edit_appearance)
         if focus_midi:
             QtCore.QTimer.singleShot(0, dlg.focus_midi)

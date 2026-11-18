@@ -347,6 +347,12 @@ class BassAnalysisResult:
     root_pitch_classes: list[str] = field(default_factory=list)
     notes: list[StemNoteEvent] = field(default_factory=list)
     signal_detected: Optional[bool] = None
+    lowest_midi: Optional[int] = None
+    highest_midi: Optional[int] = None
+    lowest_freq_hz: Optional[float] = None
+    lowest_note_time_sec: Optional[float] = None
+    modulation_detected: bool = False
+    modulation_note: str = ""
 
 
 @dataclass

@@ -1,5 +1,37 @@
 # 最新交接
 
+## 综合体验升级：练习和弦对齐、贝斯 YIN/转调、Cubase MIDI、黑夜/白天/跟随系统、字体预览、同级存储与一键安装包（`feature/chord-practice-midi-audition` · 提交 PR 合入 `main`）
+
+- **基线与状态**：从远端 `main` (`426a6f476d24f6903de6f4f7f280521461a8c769`, PR #22) 检出本地分支 `feature/chord-practice-midi-audition`。按确认意见完成全部开发、视觉细节修复、文档补齐、全量离屏单测与原生截图核对后，推送分支并在通过 GitHub Linux CI 后合入 `main`。目标机硬件基线保持 **Windows 11 (Build >= 20348) · NVIDIA GeForce RTX 5060 Ti 8GB VRAM · 16GB RAM**（Core 仍零捆绑 PyTorch/CUDA/ORT/TF，安装包版本与 `pyproject.toml` 同步为 `0.2.0`）。
+- **核心改动**：
+  1. **练习和弦弹窗 Row 0 对齐与试听/导出**（[`ui/chord_practice.py`](../ui/chord_practice.py)、[`analysis/chord_practice.py`](../analysis/chord_practice.py)）：新增 `_PracticeTableDelegate` 清除第 0 行 `State_HasFocus` 焦点矩形导致的左缩进并统一罗马级数/和弦左对齐与匹配列居中（对齐表头）；支持 24 调模板、Capo 移调指型/实音双重口径换算、本地合成试听（复用共享 `DrumPreviewPlayer` 且与 A/B、混音、节拍器、鼓试听严格互斥）与 `.mid` 导出。
+  2. **贝斯最低音 MIDI、具体音名与转调预警**（[`analysis/stem_analyzer.py`](../analysis/stem_analyzer.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)）：在 `[28 Hz, 350 Hz]` 实现 FFT 加速 YIN (CMNDF) + 2 倍谐波防 8 度跃变 + 3 帧中值滤波，支持低至 `B0` (`30.87 Hz`)/`E1` (`41.20 Hz`, MIDI `28`)；对比前半段/后半段音级权重并在混音摘要、`export_transcription_sheet` Markdown 报告及 Chroma 页呈现转调警告（`tone="warn"`）。
+  3. **轻量化微动画 & `[?]` 悬浮/点击说明徽标**（[`ui/help_badge.py`](../ui/help_badge.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)）：全程禁用 `QGraphicsEffect`；主音高旁加入平滑 `90 ms OutCubic` `QVariantAnimation` 准音刻度条（`TuningCentsBar`）；关键控件旁加入支持悬停、点击弹出与键盘 `TabFocus` 的 `HelpBadge`（`wrap_with_help`）。
+  4. **Cubase 兼容标准 MIDI 规范化**（[`analysis/midi_common.py`](../analysis/midi_common.py)、[`analysis/drum_midi.py`](../analysis/drum_midi.py)、[`analysis/midi_transcription.py`](../analysis/midi_transcription.py)）：和弦进行、鼓点（GM 通道 9）及单轨 Basic Pitch / CPU 回退全部规范为 SMF Type-0 (`480 TPB`)，Tick 0 写入 ASCII 轨名、`time_signature`、`set_tempo`、合法规范 `key_signature`（自动等音映射如 `G# major -> Ab`）、Controller Reset (`CC 121=0`, `CC 64=0`, `pitchwheel=0`) 与 GM 音色号，修剪同通道同音高重叠并保证 `note_off` 先于同 Tick `note_on`。
+  5. **黑夜 / 白天 / 跟随系统主题 + 扫描电脑字体 + 实时预览 + 恢复默认**（[`core/appearance.py`](../core/appearance.py)、[`ui/appearance.py`](../ui/appearance.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)、[`ui/main_window.py`](../ui/main_window.py)、[`ui/settings_dialog.py`](../ui/settings_dialog.py)）：基于 Qt 6.8 `styleHints().colorScheme()` 实时响应系统深浅色切换；扫描本机已安装字体（`11–20 px`）并支持主界面**实时预览**与取消回退；新增「**恢复默认**」一键还原出厂配置；`PlotWidget` 与波形曲线、A/B 选区/游标及全部语义色调（`[tone=...]`）在黑夜/白天模式下均保持高对比度。
+  6. **同级目录存储、零配置运行时发现与 Inno Setup 一键安装包**（[`core/paths.py`](../core/paths.py)、[`core/settings_store.py`](../core/settings_store.py)、[`main.py`](../main.py)、[`ui/settings_dialog.py`](../ui/settings_dialog.py)、[`scripts/installer.iss`](../scripts/installer.iss)、[`scripts/setup_windows.ps1`](../scripts/setup_windows.ps1)、[`scripts/build_windows.ps1`](../scripts/build_windows.ps1)）：优先把 `settings.json`、`workspace_outputs/` 与 `exports/` 保存在程序同级目录（不写 `C:\`）；启动与设置页自动发现随包 `runtime/ai`、短路径 `m`、`.venv-*` 及 `LS-midi` 短盘环境，并支持设置内一键触发 `setup_windows.ps1 -SkipCore` 自动装好 AI/MIDI；`build_windows.ps1` 支持 `-BundleRuntimes -BundleFfmpeg -BuildInstaller`（内置 `Assert-PortableRuntime` 校验禁止打包绑定本机的 `pyvenv.cfg`），`installer.iss` 默认免管理员且智能选非 `C:\`（`D:\ListenScope` / `E:\ListenScope`）。
+  7. **导航流畅度与内存稳定优化**：在 [`ui/spectrum_widget.py`](../ui/spectrum_widget.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/resource_widget.py`](../ui/resource_widget.py) 与 [`main.py`](../main.py) 为高频标签、工作区缓存文本与曲线 X 轴缓冲加入去重缓存；统一收口 `set_widget_tone()` 仅在属性变化时触发 `unpolish/polish`；消除顶部状态栏截断、Tab 标题 `&` 误下划线及 MIDI 表格横向溢出。
+- **云端 Linux 离屏验证**：
+  - 全量 `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short` 运行 **`188 passed, 6 skipped`**（6 项 Windows 专属 WinRT / PowerShell 脚本在 Linux 跳过），含新增 [`tests/test_turnkey_cubase_bass_theme.py`](../tests/test_turnkey_cubase_bass_theme.py) 全项测试。
+  - 无硬件命令行自检：`python scripts/check_env.py --no-write` 与 `python scripts/probe_media_session.py --self-test-mock --json` 通过；原生 PySide6 离屏截图已核对（`ChordPracticeDialog` Row 0 对齐、白天模式 `AppearanceDialog`、Light Lenso Chroma 无裁剪、Dark Classic Mixer 贝斯 FFT-YIN 最低 `E1` / `MIDI 28` / 转调 warning 横幅及 MIDI 表格预览）。
+- **尚未验证（需 Windows 11 目标机复测）**：
+  1. `ISCC.exe` 编译单文件安装程序（`build_windows.ps1 -Clean -BundleRuntimes -BundleFfmpeg -BuildInstaller`）及干净目录一键安装体验（含核验免手工配置识别同级 `runtime\ai` 与 `m`、设置/导出落在 `D:\ListenScope` 而非 `C:\`）。
+  2. 将三类导出的 `.mid`（和弦进行、鼓点、单轨转录）实际拖入 Steinberg Cubase 验证轨道、拍号、BPM、调号与音符不粘连。
+  3. Windows 11 系统深浅色切换时「跟随系统」实时刷新、`125% / 150%` 系统缩放 DPI、真实本地字体显示效果与 WASAPI 声卡试听。
+  4. RTX 5060 Ti 8GB / 16GB RAM 下真实曲目贝斯/四轨分析、SMTC 切歌与持续近实时播放。
+- **Windows 本机复测命令**：
+  ```powershell
+  $env:PYTHONUTF8 = "1"; $env:QT_QPA_PLATFORM = "offscreen"
+  .\.venv-core\Scripts\python.exe -m pytest tests/test_turnkey_cubase_bass_theme.py tests/test_chord_practice.py tests/test_drum_preview.py tests/test_appearance.py -q --tb=short
+  .\.venv-core\Scripts\python.exe -m pytest -q --tb=short
+  # 构建与安装包测试（需安装 Inno Setup 6，建议配合可迁移便携运行时）：
+  pwsh -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -Clean -BundleRuntimes -BundleFfmpeg -BuildInstaller
+  ```
+
+---
+
+## 更早交接（PR #22 基线）
+
 - 新增实时 Chroma 页的「练习和弦」，代码证据 `877ebe48ead6e85096dbcd708847e133a6bbeabe`。根据打开窗口时的最近和弦与稳定调性预选练习调，或手选 24 个大小调。显示罗马级数、保留常用升降号拼写的和弦和连续匹配步数。按最近和弦的连续后缀与练习模板开头匹配，平手保留内置顺序。模板为项目内置通用练习，原曲检测状态独立。
 - Windows Core 离屏 `python -m pytest tests/test_chord_practice.py -q --tb=short` 三项通过，覆盖大调七和弦归类、自然小调、24 调、非调内和弦中断、Capo 偏移与手选调。原生截图使用合成和弦历史。实机可在 Chroma 页先核对手选调，再用有稳定调性的片段检查自动预选。后续可扩展练习模板的试听与 MIDI。
 
