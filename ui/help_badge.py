@@ -46,6 +46,7 @@ def wrap_with_help(
 ) -> tuple[QtWidgets.QWidget, HelpBadge]:
     """Return a compact zero-margin container placing a `[?]` badge directly after `widget`."""
     holder = QtWidgets.QWidget(parent)
+    holder.setObjectName("helpHolder")
     layout = QtWidgets.QHBoxLayout(holder)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(4)

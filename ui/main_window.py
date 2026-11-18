@@ -41,14 +41,16 @@ from .appearance import (
 )
 from .chroma_widget import ChromaAndHarmonyWidget
 from .help_badge import HelpBadge
-from .marathon_style import (
+from .acid_style import (
+    AcidBarcodeFooter,
     ChamferBadge,
+    HazardStripeBar,
     TelemetryHeader,
-    apply_marathon_plot_theme,
-    get_marathon_palette,
-    is_marathon_eligible,
-    marathon_stylesheet,
-    resolve_marathon_variant,
+    acid_stylesheet,
+    apply_acid_plot_theme,
+    get_acid_palette,
+    is_acid_eligible,
+    resolve_acid_variant,
 )
 from .mixer_widget import StemMixerWidget
 from .resource_widget import ResourceMonitorBar, ResourceStatusPanel
@@ -187,7 +189,7 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         self.bench_btn = QtWidgets.QPushButton("运行 RTF 速度基准测试")
         self.bench_btn.clicked.connect(lambda: self.benchmark_requested.emit(self.selected_model_id()))
         self.toggle_btn = QtWidgets.QPushButton("开启实验性近实时分轨")
-        self.toggle_btn.setObjectName("marathonPrimaryBtn")
+        self.toggle_btn.setObjectName("acidPrimaryBtn")
         self.toggle_btn.setCheckable(True)
         self.toggle_btn.clicked.connect(self._on_toggle)
 
@@ -361,7 +363,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._last_capture_banner: Optional[str] = None
         self._syncing_ab_region = False
         self._system_is_dark = detect_system_is_dark()
-        self._marathon_variant: Optional[str] = None
+        self._acid_variant: Optional[str] = None
+        self._static_lock: bool = False
         self._active_settings_dialog: Optional[SettingsDialog] = None
         self._style_hints_connected = False
 
@@ -392,9 +395,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         main_layout.setContentsMargins(10, 8, 10, 10)
         main_layout.setSpacing(7)
 
-        # 1. TWO-TIER MARATHON COMMAND HEADER: Brand Badge + Telemetry + Segmented Skin Switcher + Audio Input + Emergency Stop
+        # 1. TWO-TIER COMMAND HEADER: Brand Badge + Telemetry + Segmented Skin Switcher + Audio Input + Hazard/Emergency Stop
         topbar_frame = QtWidgets.QFrame()
-        topbar_frame.setObjectName("marathonTopbar")
+        topbar_frame.setObjectName("acidTopbar")
         topbar_v = QtWidgets.QVBoxLayout(topbar_frame)
         topbar_v.setContentsMargins(10, 6, 10, 6)
         topbar_v.setSpacing(5)
@@ -407,12 +410,24 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         brand_txt = QtWidgets.QVBoxLayout()
         brand_txt.setContentsMargins(0, 0, 0, 0)
         brand_txt.setSpacing(0)
-        brand_eye = QtWidgets.QLabel("LISTENSCOPE // AUDIO TELEMETRY")
-        brand_eye.setObjectName("telemetryEyebrow")
-        brand_title = QtWidgets.QLabel("实时音频分析与吉他扒谱工作台")
-        brand_title.setObjectName("telemetryTitle")
-        brand_txt.addWidget(brand_eye)
-        brand_txt.addWidget(brand_title)
+        self._brand_eye = QtWidgets.QLabel("LISTENSCOPE // AUDIO TELEMETRY")
+        self._brand_eye.setObjectName("telemetryEyebrow")
+        brand_title_row = QtWidgets.QHBoxLayout()
+        brand_title_row.setContentsMargins(0, 0, 0, 0)
+        brand_title_row.setSpacing(6)
+        self._brand_title = QtWidgets.QLabel("实时音频分析与吉他扒谱工作台")
+        self._brand_title.setObjectName("telemetryTitle")
+        self._acid_hero_echo_lbl = QtWidgets.QLabel("WORKBENCH")
+        self._acid_hero_echo_lbl.setObjectName("acidEchoTitle")
+        self._acid_hero_echo_lbl.setVisible(False)
+        self._acid_hero_sub_lbl = QtWidgets.QLabel("实时频谱 · 120s 分轨终端")
+        self._acid_hero_sub_lbl.setObjectName("acidHeroSub")
+        self._acid_hero_sub_lbl.setVisible(False)
+        brand_title_row.addWidget(self._brand_title)
+        brand_title_row.addWidget(self._acid_hero_echo_lbl)
+        brand_title_row.addWidget(self._acid_hero_sub_lbl)
+        brand_txt.addWidget(self._brand_eye)
+        brand_txt.addLayout(brand_title_row)
 
         row_cmd.addWidget(self._brand_badge)
         row_cmd.addLayout(brand_txt)
@@ -424,24 +439,27 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         set_widget_tone(self.ai_status_badge, "info")
 
         self._skin_switcher = QtWidgets.QWidget()
-        self._skin_switcher.setObjectName("marathonModeGroup")
+        self._skin_switcher.setObjectName("acidModeGroup")
         skin_l = QtWidgets.QHBoxLayout(self._skin_switcher)
         skin_l.setContentsMargins(2, 2, 2, 2)
         skin_l.setSpacing(2)
         self._skin_group = QtWidgets.QButtonGroup(self)
         self._skin_group.setExclusive(True)
-        self._pill_light = QtWidgets.QPushButton("临床冷白")
-        self._pill_dark = QtWidgets.QPushButton("暗夜遥测")
-        for btn, skin_key in ((self._pill_light, "marathon_light"), (self._pill_dark, "marathon_dark")):
-            btn.setObjectName("marathonPillBtn")
+        self._pill_dark = QtWidgets.QPushButton("ACID && VOID")
+        self._pill_light = QtWidgets.QPushButton("CLINICAL_LIGHT")
+        for btn, skin_key in ((self._pill_dark, "acid_dark"), (self._pill_light, "acid_light")):
+            btn.setObjectName("acidPillBtn")
             btn.setCheckable(True)
-            btn.clicked.connect(lambda _c=False, k=skin_key: self.set_marathon_skin(k))
+            btn.clicked.connect(lambda _c=False, k=skin_key: self.set_acid_skin(k))
             self._skin_group.addButton(btn)
             skin_l.addWidget(btn)
-        self._pill_light.setChecked(True)
+        self._pill_dark.setChecked(True)
 
         self.settings_btn = QtWidgets.QPushButton("设置 / 系统状态")
         self.settings_btn.clicked.connect(self.open_settings_dialog)
+
+        self._hazard_bar = HazardStripeBar()
+        self._hazard_bar.setVisible(False)
 
         self.emergency_stop_btn = QtWidgets.QPushButton("紧急停止 AI")
         self.emergency_stop_btn.setObjectName("emergencyStopBtn")
@@ -451,19 +469,20 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_cmd.addWidget(self.ai_status_badge)
         row_cmd.addWidget(self._skin_switcher)
         row_cmd.addWidget(self.settings_btn)
+        row_cmd.addWidget(self._hazard_bar)
         row_cmd.addWidget(self.emergency_stop_btn)
         topbar_v.addLayout(row_cmd)
 
         divider = QtWidgets.QFrame()
-        divider.setObjectName("marathonDivider")
+        divider.setObjectName("acidDivider")
         divider.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         topbar_v.addWidget(divider)
 
         row_io = QtWidgets.QHBoxLayout()
         row_io.setContentsMargins(0, 0, 0, 0)
         row_io.setSpacing(6)
-        src_pill = QtWidgets.QLabel("AUDIO INPUT")
-        src_pill.setObjectName("telemetryPill")
+        self._src_pill = QtWidgets.QLabel("AUDIO INPUT")
+        self._src_pill.setObjectName("telemetryPill")
         self.source_combo = QtWidgets.QComboBox()
         self.source_combo.setMinimumWidth(260)
         self.source_combo.setMaximumWidth(390)
@@ -482,12 +501,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_status_lbl.setObjectName("captureStatus")
         set_widget_tone(self.capture_status_lbl, "info")
 
-        shortcut_pill = QtWidgets.QLabel("CTRL+SPACE // 播放控制")
-        shortcut_pill.setObjectName("telemetryPill")
-        self._skin_badge = QtWidgets.QLabel("MARATHON // CLINICAL")
+        self._shortcut_pill = QtWidgets.QLabel("CTRL+SPACE // 播放控制")
+        self._shortcut_pill.setObjectName("telemetryPill")
+        self._skin_badge = QtWidgets.QLabel("THEME // CLASSIC")
         self._skin_badge.setObjectName("telemetryPill")
 
-        row_io.addWidget(src_pill)
+        row_io.addWidget(self._src_pill)
         row_io.addWidget(self.source_combo)
         row_io.addWidget(
             HelpBadge(
@@ -500,7 +519,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_io.addWidget(self.capture_btn)
         row_io.addWidget(self.capture_status_lbl)
         row_io.addStretch(1)
-        row_io.addWidget(shortcut_pill)
+        row_io.addWidget(self._shortcut_pill)
         row_io.addWidget(self._skin_badge)
         topbar_v.addLayout(row_io)
 
@@ -514,7 +533,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         set_widget_tone(self.notice_banner, "warn")
         main_layout.addWidget(self.notice_banner)
 
-        # 2. CENTER TABS (Slash-indexed Marathon Telemetry navigation)
+        # 2. CENTER TABS (Slash-indexed Telemetry navigation)
         self.tabs = QtWidgets.QTabWidget()
         self.spectrum_widget = SpectrumAnalysisWidget()
         self.spectrum_widget.view_combo.activated.connect(self._on_analysis_layout_selected)
@@ -531,7 +550,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         main_layout.addWidget(self.tabs, 1)
 
         # 3. BOTTOM 120s HISTORY TIMELINE + A/B LOOP + AI TRIGGER BAR
-        self._history_box = bottom_box = QtWidgets.QGroupBox("RING BUFFER // 120S HISTORY · A/B LOOP + AI DISPATCH (~46MB)")
+        self._history_box = bottom_box = QtWidgets.QGroupBox("120秒历史缓冲与 A/B 片段 (零溢出固定上限 ~46MB) + AI 离线分轨")
         bottom_l = QtWidgets.QVBoxLayout(bottom_box)
         bottom_l.setSpacing(5)
 
@@ -575,7 +594,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         row_a_transport = QtWidgets.QHBoxLayout()
         self.ab_play_btn = QtWidgets.QPushButton("A/B 播放")
-        self.ab_play_btn.setObjectName("marathonPrimaryBtn")
+        self.ab_play_btn.setObjectName("acidPrimaryBtn")
         self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
         self.ab_loop_chk = QtWidgets.QCheckBox("A/B 循环")
         self.ab_loop_chk.setChecked(True)
@@ -728,7 +747,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         )
 
         self.sep_2stem_btn = QtWidgets.QPushButton("AI 2-Stem 分轨 (人声/伴奏)")
-        self.sep_2stem_btn.setObjectName("marathonPrimaryBtn")
+        self.sep_2stem_btn.setObjectName("acidPrimaryBtn")
         self.sep_2stem_btn.clicked.connect(self._on_sep_2stem)
         self.sep_4stem_btn = QtWidgets.QPushButton("AI 4-Stem 分轨 (HTDemucs)")
         self.sep_4stem_btn.clicked.connect(self._on_sep_4stem)
@@ -750,16 +769,31 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         bottom_l.addLayout(row_b)
 
         main_layout.addWidget(bottom_box)
+
+        self._acid_footer = AcidBarcodeFooter()
+        self._acid_footer.setVisible(False)
+        self._acid_footer.static_lock_toggled.connect(self._on_static_lock_toggled)
+        main_layout.addWidget(self._acid_footer)
+
         self.apply_appearance(appearance, force_theme=True)
 
-    def set_marathon_skin(self, skin: str) -> None:
-        if skin not in ("marathon_light", "marathon_dark"):
+    def _on_static_lock_toggled(self, locked: bool) -> None:
+        self._static_lock = bool(locked)
+
+    def set_acid_skin(self, skin: str) -> None:
+        skin_map = {
+            "acid_light": "light",
+            "light": "light",
+            "acid_dark": "dark",
+            "dark": "dark",
+        }
+        target_mode = skin_map.get(skin)
+        if target_mode is None:
             return
-        target_mode = "light" if skin == "marathon_light" else "dark"
         base = getattr(self, "appearance", Appearance())
         updated = replace(
             base,
-            preset="marathon",
+            preset="acid_telemetry",
             background="",
             text="",
             accent="",
@@ -781,11 +815,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self,
         appearance: Appearance,
         *,
-        marathon_variant: Optional[str] = None,
+        acid_variant: Optional[str] = None,
     ) -> None:
-        if marathon_variant in ("light", "dark"):
-            p = get_marathon_palette(marathon_variant)
-            wave_color = p.plot_wave
+        if acid_variant in ("light", "dark"):
+            p = get_acid_palette(acid_variant)
+            apply_acid_plot_theme(self.history_overview_plot, appearance, acid_variant, is_history=True)
+            wave_color = p.hist_plot_wave
             reg_brush = p.plot_region_rgba
             reg_pen = p.plot_region_pen
             playhead_pen = p.plot_playhead
@@ -811,6 +846,71 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             line.setPen(pg.mkPen(reg_pen, width=1.5))
         self._ab_playhead_line.setPen(pg.mkPen(playhead_pen, width=1.8))
 
+    def _sync_acid_chrome(self, is_acid: bool, variant: Optional[str]) -> None:
+        is_active = bool(is_acid and variant in ("light", "dark"))
+        if is_active:
+            self._brand_eye.setText(
+                f"LISTENSCOPE // {'CLINICAL' if variant == 'light' else 'ACID_VOID'} TELEMETRY"
+            )
+            self._brand_title.setText("SIGNAL_GRID")
+            self._brand_title.setObjectName("acidHeroTitle")
+            self._acid_hero_echo_lbl.setVisible(True)
+            self._acid_hero_sub_lbl.setVisible(True)
+            self._src_pill.setText("AUDIO_IN")
+            self._shortcut_pill.setText("CTRL+SPACE // TRANSPORT")
+            self.settings_btn.setText("SYS // CONFIG")
+            self.emergency_stop_btn.setText("E-STOP // AI")
+            self._history_box.setTitle("RING BUFFER // 120S HISTORY · A/B LOOP + AI DISPATCH (~46MB)")
+            self._history_box.setObjectName("historyPaperDock")
+            self._skin_badge.setObjectName("acidMicroTag")
+            tab_titles = (
+                "// 01 SPECTRUM",
+                "// 02 CHROMA & HARMONY",
+                "// 03 STEM MIXER & MIDI",
+                "// 04 TELEMETRY & LOGS",
+                "// 05 LIVE ENGINE",
+            )
+        else:
+            self._static_lock = False
+            self._acid_footer.set_locked(False)
+            self._brand_eye.setText("LISTENSCOPE // AUDIO TELEMETRY")
+            self._brand_title.setText("实时音频分析与吉他扒谱工作台")
+            self._brand_title.setObjectName("telemetryTitle")
+            self._acid_hero_echo_lbl.setVisible(False)
+            self._acid_hero_sub_lbl.setVisible(False)
+            self._src_pill.setText("AUDIO INPUT")
+            self._shortcut_pill.setText("CTRL+SPACE // 播放控制")
+            self.settings_btn.setText("设置 / 系统状态")
+            self.emergency_stop_btn.setText("紧急停止 AI")
+            self._history_box.setTitle("120秒历史缓冲与 A/B 片段 (零溢出固定上限 ~46MB) + AI 离线分轨")
+            self._history_box.setObjectName("")
+            self._skin_badge.setObjectName("telemetryPill")
+            tab_titles = (
+                "// 01 实时频谱与波形",
+                "// 02 和弦与调性",
+                "// 03 分轨混音与 MIDI",
+                "// 04 系统资源与日志",
+                "// 05 实验近实时分轨",
+            )
+        for idx, title in enumerate(tab_titles):
+            if idx < self.tabs.count():
+                self.tabs.setTabText(idx, title)
+        self._hazard_bar.setVisible(is_active)
+        self._acid_footer.setVisible(is_active)
+        if is_active:
+            p = get_acid_palette(variant or "dark")
+            self._hazard_bar.set_color(p.danger)
+            self._acid_footer.set_colors(p.micro_tag_bg, "#090D10")
+        self.capture_btn.setText(
+            ("CAPTURE_ACTIVE" if self.capture_btn.isChecked() else "CAPTURE_START")
+            if is_active
+            else ("停止捕获" if self.capture_btn.isChecked() else "开始捕获")
+        )
+        for widget in (self._brand_title, self._history_box, self._skin_badge):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
+
     def apply_appearance(self, appearance: Appearance, *, force_theme: bool = False) -> None:
         old = getattr(self, "appearance", None)
         if appearance == old and not force_theme:
@@ -829,9 +929,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._sync_active_settings_dialog()
             return
 
-        eligible = is_marathon_eligible(appearance)
-        variant = resolve_marathon_variant(appearance, system_is_dark=self._system_is_dark)
-        self._marathon_variant = variant
+        eligible = is_acid_eligible(appearance)
+        variant = resolve_acid_variant(appearance, system_is_dark=self._system_is_dark)
+        self._acid_variant = variant
         self._skin_switcher.setVisible(eligible)
         for btn, checked in (
             (self._pill_light, variant == "light"),
@@ -842,25 +942,29 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             btn.blockSignals(False)
 
         if variant in ("light", "dark"):
-            p = get_marathon_palette(variant)
+            p = get_acid_palette(variant)
             self._skin_badge.setText(
-                "MARATHON // CLINICAL" if variant == "light" else "MARATHON // OBSIDIAN"
+                "ACID // CLINICAL_LIGHT" if variant == "light" else "ACID // VOID_V2"
             )
             self._brand_badge.set_palette_colors(fill=p.accent, border=p.accent_strong, fg=p.text_inverse)
-            self.setStyleSheet(marathon_stylesheet(appearance, variant))
+            self._sync_acid_chrome(True, variant)
+            self.setStyleSheet(acid_stylesheet(appearance, variant))
             for plot in self.findChildren(pg.PlotWidget):
-                apply_marathon_plot_theme(plot, appearance, variant)
-            self._apply_history_plot_theme(appearance, marathon_variant=variant)
+                if plot is self.history_overview_plot:
+                    continue
+                apply_acid_plot_theme(plot, appearance, variant)
+            self._apply_history_plot_theme(appearance, acid_variant=variant)
             self.spectrum_widget.apply_theme(
-                appearance, system_is_dark=self._system_is_dark, marathon_variant=variant
+                appearance, system_is_dark=self._system_is_dark, acid_variant=variant
             )
             self.chroma_widget.apply_theme(
-                appearance, system_is_dark=self._system_is_dark, marathon_variant=variant
+                appearance, system_is_dark=self._system_is_dark, acid_variant=variant
             )
             self.mixer_widget.apply_theme(
-                appearance, system_is_dark=self._system_is_dark, marathon_variant=variant
+                appearance, system_is_dark=self._system_is_dark, acid_variant=variant
             )
         else:
+            self._sync_acid_chrome(False, None)
             _, _, accent = appearance.effective_colors(system_is_dark=self._system_is_dark)
             has_custom = bool(appearance.background or appearance.text or appearance.accent)
             badge_prefix = "CUSTOM" if has_custom else "THEME"
@@ -874,15 +978,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             )
             for plot in self.findChildren(pg.PlotWidget):
                 apply_plot_appearance(plot, appearance, system_is_dark=self._system_is_dark)
-            self._apply_history_plot_theme(appearance, marathon_variant=None)
+            self._apply_history_plot_theme(appearance, acid_variant=None)
             self.spectrum_widget.apply_theme(
-                appearance, system_is_dark=self._system_is_dark, marathon_variant=None
+                appearance, system_is_dark=self._system_is_dark, acid_variant=None
             )
             self.chroma_widget.apply_theme(
-                appearance, system_is_dark=self._system_is_dark, marathon_variant=None
+                appearance, system_is_dark=self._system_is_dark, acid_variant=None
             )
             self.mixer_widget.apply_theme(
-                appearance, system_is_dark=self._system_is_dark, marathon_variant=None
+                appearance, system_is_dark=self._system_is_dark, acid_variant=None
             )
         self._sync_active_settings_dialog()
 
@@ -892,7 +996,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             return
         try:
             dlg.update_appearance_summary(self.appearance)
-            dlg.apply_skin(self.appearance, marathon_variant=self._marathon_variant or "")
+            dlg.apply_skin(self.appearance, acid_variant=self._acid_variant or "")
         except RuntimeError:
             self._active_settings_dialog = None
 
@@ -1217,9 +1321,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                     break
 
     def set_capture_active_ui(self, active: bool) -> None:
+        is_acid = self._acid_variant in ("light", "dark")
         self.capture_btn.blockSignals(True)
         self.capture_btn.setChecked(active)
-        self.capture_btn.setText("停止捕获" if active else "开始捕获")
+        self.capture_btn.setText(
+            ("CAPTURE_ACTIVE" if active else "CAPTURE_START")
+            if is_acid
+            else ("停止捕获" if active else "开始捕获")
+        )
         self.capture_btn.blockSignals(False)
         if not active:
             self._last_capture_banner = None
@@ -1300,6 +1409,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         spectrogram: Optional[np.ndarray],
         chroma_history: Optional[np.ndarray],
     ) -> None:
+        if self._static_lock:
+            return
         self.spectrum_widget.update_analysis(snap, spectrogram=spectrogram)
         self.chroma_widget.update_analysis(snap, chroma_history=chroma_history)
 
@@ -1347,14 +1458,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             ai_python_executable=self._ai_python_executable,
             midi_python_executable=self._midi_python_executable,
             appearance=self.appearance,
-            marathon_variant=self._marathon_variant or "",
+            acid_variant=self._acid_variant or "",
             parent=self,
         )
 
         def edit_appearance(parent: QtWidgets.QWidget) -> None:
             self.open_appearance_dialog(parent)
             dlg.update_appearance_summary(self.appearance)
-            dlg.apply_skin(self.appearance, marathon_variant=self._marathon_variant or "")
+            dlg.apply_skin(self.appearance, acid_variant=self._acid_variant or "")
 
         dlg.appearance_requested.connect(edit_appearance)
         if focus_midi:

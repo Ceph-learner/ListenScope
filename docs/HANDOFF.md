@@ -1,29 +1,29 @@
 # 最新交接
 
-## 「马拉松 (`Marathon`)」工业临床主题集成与隔离式扁平控件（`design/marathon-ui-preview` · 提交 PR 合入 `main`）
+## Acid Telemetry v2（「酸性遥测」）工业视觉重塑、合规改名与 `v0.2.1` Windows Core 发布流水线（`feat/acid-telemetry-v2-release` · PR + `v0.2.1` Tag）
 
-- **目标与状态**：基于远端 `main` (`2a9c335`, PR #23) 检出 `design/marathon-ui-preview`，将已确认的「马拉松」工业临床双模视觉方案正式接入 **设置 / 外观主题** 预设体系（第 5 档 `marathon`，与 `classic` / `lenso` / `codex` / `claude` 并列，支持 **黑夜 / 白天 / 跟随系统**、`AppearanceDialog` 实时预览与取消回退、顶栏快切胶囊持久化）；随后按用户视觉反馈在完全隔离于 `ui/marathon_style.py` + `ui/assets/marathon_*.svg` 的前提下消除 Qt Fusion 原生 3D 凸起（`QComboBox` 下拉盖板、`QSpinBox`/`QDoubleSpinBox` 步进钮、`QGroupBox` 抬升框、`QSlider`、`QCheckBox`、`QRadioButton`、`QScrollArea` 与 `QPushButton`），不影响 `经典` 等现有预设。核心代码及测试证据提交：`549aecf6986c03039ebc7211ecbed496234ac305`。
+- **目标与状态**：在合并 PR #24 后针对用户授权启动 `v0.2.1` 交付版本：
+  1. **去商标与视觉系统升级**：全面剥离此前借用的外部品牌词及专属名称（源码、SVG、QSS、打包 spec、测试与文档 100% 清零，仅在 [`core/appearance.py`](../core/appearance.py) `_PRESET_ALIASES` 保留静默 JSON 旧预设 ID 迁移），正式定名为第 5 档 **「酸性遥测 (`acid_telemetry` / `Acid Telemetry v2`)」**。
+  2. **Graphic Realism v2 双模全量端口实装**：[`ui/acid_style.py`](../ui/acid_style.py) 与各实装 Qt 视图完成双极体系：`ACID & VOID` 暗夜（`#0B0D0F` / `#CEFF18` / `#2211FF`、`#77DCE4` 次要指标）搭配底部 **Clinical Paper 对比扩展坞（`#historyPaperDock` `#E9EBE7`/`#F4F5F2`）**；`CLINICAL_LIGHT` 临床浅色（`#EEF2F6` / `#FFFFFF` / `#00A878`）。全窗口实装 45° 警示斜纹 [`HazardStripeBar`](../ui/acid_style.py)、动态 5 点信号置信矩阵 [`DotMatrixWidget`](../ui/acid_style.py)、卡片准星/棋盘格/序号水印 [`AcidGraphicOverlay`](../ui/acid_style.py) 与底部交互式 `[STATIC_LOCK]` 条码带 [`AcidBarcodeFooter`](../ui/acid_style.py)（冻结实时图表刷新而不阻断底层捕获）。
+  3. **离屏截图实检顺带修复**：核对 14 张真实 `PySide6` 离屏截图期间定位并修复三项问题——① 删除 `QFrame#acidTopbar QLabel` / `QFrame#telemetryHeader QLabel` 高权重后代规则以免掩蔽 `#acidHeroTitle` (`#2211FF` 钴蓝实底)、`#acidMicroTag` (`#CEFF18` 青柠实底) 与 `#telemetryPill` 背景；② 为 [`SettingsDialog`](../ui/settings_dialog.py) 滚动页设置 `settingsScrollPage` + `setAutoFillBackground(False)` 及透明规则，彻底消除 Fusion 浅灰滚动底块与 GroupBox 标题缝隙白条；③ 在 [`ListenScopeMainWindow.set_acid_skin`](../ui/main_window.py) 同时兼容 `"acid_light"/"light"` 与 `"acid_dark"/"dark"` 别名并纳入回归断言。
+  4. **版本号同步与 Windows Core 自动 Release**：同步升版 [`pyproject.toml`](../pyproject.toml) 与 [`scripts/installer.iss`](../scripts/installer.iss) 至 **`0.2.1`**，新增 [`.github/workflows/release-windows.yml`](../.github/workflows/release-windows.yml)（`v*` 标签或手动触发 -> `windows-latest` 执行 `pytest` -> PyInstaller 打包 Core -> 复制独立临时目录冒烟校验 `ListenScope.exe --simulate --headless-smoke` -> 生成 `ListenScope-Core-Windows-x64-Portable.zip` 与 Inno Setup 6 安装包 `ListenScope-Setup-Windows-x64.exe` -> 输出 `SHA256SUMS.txt` 并发布 GitHub Release）。
 - **关键改动路径**：
-  - 主题配置与独立视觉引擎：[`core/appearance.py`](../core/appearance.py)、[`ui/marathon_style.py`](../ui/marathon_style.py)（`is_marathon_eligible`、`resolve_marathon_variant`、`marathon_stylesheet`、`apply_marathon_plot_theme`、`marathon_colormap_lut`、`ChamferBadge`、`TelemetryHeader` 与隔离扁平控件生成函数 `_marathon_controls_qss`）、[`ui/appearance.py`](../ui/appearance.py)（接入 `AppearanceDialog` 第 5 档预设并提供切回 `经典`/`Lenso` 时的顶栏与遥测卡片完整回退 CSS）。
-  - 随包 SVG 矢量化图标与 PyInstaller 打包清单：`ui/assets/marathon_check.svg`、`ui/assets/marathon_chevron_{up,down}_{light,dark}.svg` 及 [`packaging/listenscope_core.spec`](../packaging/listenscope_core.spec) `datas`。
-  - 窗口与子模块联动：[`ui/main_window.py`](../ui/main_window.py)（顶栏双模快切 `MARATHON // CLINICAL` 与 `OBSIDIAN` 持久化回调 `set_marathon_skin`、切离自动隐藏）、[`ui/settings_dialog.py`](../ui/settings_dialog.py)（左侧导航动态着色与主题摘要同步）、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/chord_practice.py`](../ui/chord_practice.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)、[`ui/resource_widget.py`](../ui/resource_widget.py)。
-  - 回归测试：[`tests/test_turnkey_cubase_bass_theme.py`](../tests/test_turnkey_cubase_bass_theme.py)（`test_marathon_preset_integration_topbar_sync_persistence_and_packaging`）。
+  - 主题与视觉组件：[`core/appearance.py`](../core/appearance.py)、[`ui/acid_style.py`](../ui/acid_style.py)、`ui/assets/acid_{check,chevron_up,chevron_down}_{dark,light}.svg`、[`ui/appearance.py`](../ui/appearance.py)、[`ui/main_window.py`](../ui/main_window.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)、[`ui/chord_practice.py`](../ui/chord_practice.py)、[`ui/resource_widget.py`](../ui/resource_widget.py)、[`ui/settings_dialog.py`](../ui/settings_dialog.py)。
+  - 打包与发布流水线：[`packaging/listenscope_core.spec`](../packaging/listenscope_core.spec)、[`pyproject.toml`](../pyproject.toml)、[`scripts/installer.iss`](../scripts/installer.iss)、[`.github/workflows/release-windows.yml`](../.github/workflows/release-windows.yml)。
+  - 回归与文档：[`tests/test_turnkey_cubase_bass_theme.py`](../tests/test_turnkey_cubase_bass_theme.py)（`test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packaging`）及 [README](../README.md)、[DESIGN](../DESIGN.md)、[docs/*](CURRENT_STATE.md)。
 - **已验证（云端 Linux · Debian 12 · Python 3.11.2 · PySide6 6.8.3 · `QT_QPA_PLATFORM=offscreen`）**：
-  - 专项：`QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest tests/test_turnkey_cubase_bass_theme.py tests/test_appearance.py -q --tb=short` -> **`12 passed in 3.21s`**
-  - 全量（基于代码提交 `549aecf`）：`QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short` -> **`189 passed, 6 skipped in 63.68s`**（6 项 Windows WASAPI / WinRT / PowerShell 专属测试在 Linux 跳过）。
-  - 离屏视觉截图检查与顺带修复：生成并逐一核对 10 张真实 `PySide6` offscreen 截图（临床冷白 Tab 1–3、暗夜遥测 Tab 4、1280×800 窄窗、设置弹窗、外观弹窗、和弦练习弹窗及 `经典` 暗黑回退对照）；除消除 `QComboBox`/`QSpinBox`/`QGroupBox` 3D 凸起外，同步在 `ui/mixer_widget.py` 收紧子页内距与设置 `chord_timeline_table.setMinimumHeight(48)` 解决 870px 高度下 `deep_summary_lbl`（`Melody (vocals)` 行）底部 3–6px 裁切问题。
-- **尚未验证（需 Windows 11 目标机复测）**：
-  1. PyInstaller 打包产物 `dist\ListenScopeCore\ListenScope.exe` 下 [`_marathon_asset_url`](../ui/marathon_style.py#L335-L340) 加载 `ui/assets/marathon_*.svg`（确认下拉箭头、微调上下三角与复选框对勾正常渲染）。
-  2. Windows 11 实机 `100% / 125% / 150%` 系统 DPI 缩放与字体渲染、系统深浅色切换联动「跟随系统」以及在 **马拉松 临床冷白 / 暗夜遥测 / 经典 / Lenso** 间反复切换。
-  3. 延续 PR #23 待真机复测项：`ISCC.exe` 编译单文件安装包（`build_windows.ps1 -Clean -BundleRuntimes -BundleFfmpeg -BuildInstaller`）与非 C 盘零配置安装、三类 Cubase `.mid` 导入验证、WASAPI 实声卡试听及 RTX 5060 Ti 8GB / 16GB RAM 下真实曲目四轨与近实时播放。
-- **Windows 本机复测命令**：
-  ```powershell
-  $env:PYTHONUTF8 = "1"; $env:QT_QPA_PLATFORM = "offscreen"
-  .\.venv-core\Scripts\python.exe -m pytest tests/test_turnkey_cubase_bass_theme.py tests/test_appearance.py tests/test_chord_practice.py -q --tb=short
-  .\.venv-core\Scripts\python.exe -m pytest -q --tb=short
-  # PyInstaller + Inno Setup 安装包验证（Windows 目标机）：
-  pwsh -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -Clean -BundleRuntimes -BundleFfmpeg -BuildInstaller
-  ```
+  - 专项：`QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest tests/test_turnkey_cubase_bass_theme.py -q --tb=short`（`8 passed`）
+  - 全量：`QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short`（`189 passed, 6 skipped`，6 项为 Windows 专属 PowerShell / setup 测试）
+  - 真实 `PySide6` 离屏多模式多尺寸 14 张截图目检（`ACID & VOID` Tab 1–4 & Mixer MIDI、`1280×800` + `[STATIC_LOCK: ON]`、顶栏点击切换 `CLINICAL_LIGHT`、设置/外观/和弦练习弹窗与经典暗黑回退对照）。
+- **Windows Release 流水线与仍需目标机实机验收项**：
+  1. `windows-latest` CI 自动验证：`pytest` 离屏回归、PyInstaller `acid_*.svg` 随包资产存在性校验、重定位便携目录执行 `--simulate --headless-smoke` 退出码校验与 `ISCC.exe` 编译生成 `.exe`/`.zip` 交付件。
+  2. **仍需用户回家实机测试**：在 Windows 11 + RTX 5060 Ti (8GB VRAM / 16GB RAM) 本机运行 `ListenScope-Setup-Windows-x64.exe`（核验非 C 盘默认安装与同级 `settings.json` / `exports/`）、测试 WASAPI 实际音频捕获与声卡试听、`100%/125%/150%` DPI 与「跟随系统」深浅色切换、本地引导/真机 2-Stem & 4-Stem GPU 分轨、QQ 音乐 SMTC 切歌重置及三类 `.mid` 实际拖入 Steinberg Cubase 验证。
+
+---
+
+## 历史记录（PR #24 基线：第 5 档双模主题首次集成与隔离扁平控件）
+
+- **状态**：已合入 `main`，并在上述 `v0.2.1` 迭代中完整升级为 `Acid Telemetry v2`（`ui/acid_style.py` + `acid_*.svg`）及完成商标名词清理。
 
 ---
 

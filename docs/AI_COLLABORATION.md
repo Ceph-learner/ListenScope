@@ -200,12 +200,22 @@ Command Code GOAT `deepseek/deepseek-v4.1-flash` 23.2 秒，输入 12,993，输�
 - **离屏预览与复核修正的 5 项缺陷**：通过 PySide6 `offscreen` 截图与定向测试先后发现并修复 `SettingsDialog.update_appearance_summary` 对 `THEME_MODES` 字符串做 `[0]` 切片导致仅显示首字的问题、1280px 宽度下顶部 `ResourceMonitorBar` 文本截断、Tab 标签 `&` 误渲染助记下划线、`midi_table` 窄视口横向滚动溢出，以及 Light Lenso 模式下 Chroma 顶部三卡片底行文字垂直裁剪。
 - **验证与待补项**：云端 Linux `QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 共 **188 通过、6 跳过**（6 项为 Windows WASAPI / WinRT / PowerShell 专属测试），同步核对 5 张原生长离屏预览图；`ISCC.exe` 编译与干净非 C 盘安装、Cubase 实际拖入、Windows 11 系统主题实时切换、真实声卡与 RTX 5060 Ti 8GB 真机分轨均留待目标机复测。
 
-## 2026-11-18 · 「马拉松」主题集成与隔离扁平控件重塑
+## 2026-11-18 · 第 5 档双模工业视觉集成与隔离扁平控件重塑（PR #24）
 
-本轮在云端 Linux 环境基于 `main` (`2a9c335`, PR #23) 于分支 `design/marathon-ui-preview` 进行，未调用外部 OpenCode / Command Code CLI；先输出独立的 Marathon 双模原型供用户评审，再正式集成进设置预设并在用户指出原生 Fusion 控件存在 Win98/XP 式 3D 凸起后完成严格隔离重塑（代码证据提交 `549aecf`）。
+本轮在云端 Linux 环境基于 `main` (`2a9c335`, PR #23) 经独立设计分支进行，未调用外部 OpenCode / Command Code CLI；先输出独立双模原型供用户评审，再正式集成进设置预设并在用户指出原生 Fusion 控件存在 Win98/XP 式 3D 凸起后完成严格隔离重塑（代码证据提交 `549aecf`）。
 
 - **采纳设计与隔离策略**：
-  1. 在 [`core/appearance.py`](../core/appearance.py) 新增第 5 档预设 `marathon`（黑夜遥测 `#0B1016` / 临床冷白 `#EEF2F6`，信号青绿 `#00A878`，禁用暖黄/琥珀色），仅当 `preset == "marathon"` 且未覆写自定义颜色时启用 [`ui/marathon_style.py`](../ui/marathon_style.py)（`ChamferBadge` 切角铭牌、`TelemetryHeader` 双语标题头、顶栏 `临床冷白 / 暗夜遥测` 快切胶囊并写回 `settings.json`，以及切回 `经典`/`Lenso` 时的完整回退规则）。
-  2. 将扁平化 `QComboBox`（无边框透明 `::drop-down` + 自定义矢量箭头）、`QSpinBox`/`QDoubleSpinBox`、`QGroupBox` 内嵌左绿杠标题、`QPushButton` 统一高度基线、`QSlider`、`QCheckBox`/`QRadioButton` 与 `QScrollArea`/`QScrollBar` 全部隔离在 [`_marathon_controls_qss`](../ui/marathon_style.py#L343) 与随包 SVG 资产（`ui/assets/marathon_*.svg`，同步收录于 [`packaging/listenscope_core.spec`](../packaging/listenscope_core.spec)），彻底消除 Fusion 3D 凸起斜角且零影响其他主题。
+  1. 在 [`core/appearance.py`](../core/appearance.py) 新增第 5 档双模工业预设（`v0.2.1` 已正式更名为 `acid_telemetry` 并保留旧 ID 静默迁移），仅当处于第 5 档预设且未覆写自定义颜色时启用独立视觉引擎（`ChamferBadge` 切角铭牌、`TelemetryHeader` 双语标题头、顶栏快切胶囊持久化写回 `settings.json` 及切回 `经典`/`Lenso` 时的完整回退规则）。
+  2. 将扁平化 `QComboBox`（无边框透明 `::drop-down` + 自定义矢量箭头）、`QSpinBox`/`QDoubleSpinBox`、`QGroupBox` 内嵌左 accent 条、`QPushButton` 统一高度基线、`QSlider`、`QCheckBox`/`QRadioButton` 与 `QScrollArea`/`QScrollBar` 全部隔离在独立样式函数与随包 SVG 资产中，彻底消除 Fusion 3D 凸起斜角且零影响其他主题。
 - **离屏视觉核对与顺带修正**：审阅 10 张 `PySide6` `offscreen` 截图期间发现分轨混音底栏 `deep_summary_lbl`（`Melody (vocals)` 行）在 `870 px` 高度下存在底部 3–6 px 裁切，遂在 [`ui/mixer_widget.py`](../ui/mixer_widget.py) 调整子页布局内距/间距与 `chord_timeline_table.setMinimumHeight(48)` 解决；其余 1280×800 窄窗、设置/外观/和弦练习弹窗及经典回退对照均核验无异常。
-- **验证与待补项**：代码提交 `549aecf` 上运行 `QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 共 **`189 passed, 6 skipped`**（其中定向外观与主题回归 `12 passed`）；Windows PyInstaller 打包 exe 对 `marathon_*.svg` 的路径加载、实机 `125%/150%` DPI 缩放及原 PR #23 待机实测项留待目标机补验。
+- **验证与待补项**：提交 `549aecf` 上运行 `QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 共 **`189 passed, 6 skipped`**（其中定向外观与主题回归 `12 passed`）。
+
+## 2026-11-18 · `v0.2.1` Acid Telemetry v2 实装、商标清理与 Windows Core Release 流水线
+
+本轮在云端 Linux 环境基于 `main` 在分支 `feat/acid-telemetry-v2-release` 完成，未调用外部 OpenCode / Command Code CLI：
+
+- **交付内容**：
+  1. **品牌合规清理**：清除代码、SVG 资产、QSS、打包 spec、文档与测试中的第三方外部题材专有名称，正式定名为 **Acid Telemetry v2（酸性遥测 / `acid_telemetry`）**，视觉核心引擎命名为 [`ui/acid_style.py`](../ui/acid_style.py) 与 `ui/assets/acid_*.svg`，仅在 [`core/appearance.py`](../core/appearance.py) `_PRESET_ALIASES` 保留静默向后兼容映射。
+  2. **Graphic Realism v2 视图端口实装**：为 `ListenScopeMainWindow`、`ChromaWidget`、`StemMixerWidget`、`ChordPracticeDialog` 与 `SettingsDialog` 全量接入 `ACID & VOID` 暗夜（`#0B0D0F`/`#CEFF18`/`#2211FF`）、`CLINICAL_LIGHT` 临床浅色（`#EEF2F6`/`#00A878`）、Clinical Paper 对比扩展坞（`#historyPaperDock`）、`HazardStripeBar`、`DotMatrixWidget`、`AcidGraphicOverlay` 与交互式 `[STATIC_LOCK]` 条码底栏 `AcidBarcodeFooter`；保持与 `经典`/`Lenso`/`Codex`/`Claude Code` 零串色双向切换。
+  3. **离屏截图实检修复**：在真实 `PySide6` 多视图多尺寸截图中定位并修正三处真实界面缺陷——移除覆盖顶栏 `#acidHeroTitle`/`#acidMicroTag`/`#telemetryPill` 实色底的高权重 `QFrame#acidTopbar QLabel` 后代规则、为 `SettingsDialog` 滚动页添加 `settingsScrollPage` 与 `setAutoFillBackground(False)` 修复浅灰滚动底块与 GroupBox 标题白缝，以及扩展 `set_acid_skin` 支持 `"light"/"dark"` 短别名。
+  4. **版本同步与 Windows Core Release CI**：同步升级 [`pyproject.toml`](../pyproject.toml) 与 [`scripts/installer.iss`](../scripts/installer.iss) 至 **`0.2.1`**，新增 [`.github/workflows/release-windows.yml`](../.github/workflows/release-windows.yml) 在 `windows-latest` 执行 `pytest`、PyInstaller 打包 Core、便携重定位冒烟校验（`--simulate --headless-smoke`）、Portable ZIP 与 Inno Setup 6 安装器编译及 GitHub Release 自动发布。
