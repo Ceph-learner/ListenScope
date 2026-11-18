@@ -203,11 +203,23 @@ class SettingsDialog(QtWidgets.QDialog):
         details.setSpacing(6)
         self._page_eyebrow = QtWidgets.QLabel()
         self._page_eyebrow.setObjectName("telemetryEyebrow")
+        self._page_eyebrow.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self._title = QtWidgets.QLabel()
         self._title.setObjectName("settingsPageHeading")
+        self._title.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self._subtitle = QtWidgets.QLabel()
         self._subtitle.setObjectName("settingsSubtitle")
         self._subtitle.setWordWrap(True)
+        self._subtitle.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         details.addWidget(self._page_eyebrow)
         details.addWidget(self._title)
         details.addWidget(self._subtitle)

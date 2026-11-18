@@ -14,7 +14,7 @@ import mido
 import numpy as np
 import pyqtgraph as pg
 import pytest
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from analysis.chord_practice import export_chord_progression_midi
 from analysis.drum_midi import export_drum_midi
@@ -439,7 +439,11 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
     dlg.done(QtWidgets.QDialog.DialogCode.Rejected)
     assert previews[-1] == initial
 
-    # 3. SettingsDialog honors dark Acid Telemetry variant and resets cleanly when switching off
+    # 3. SettingsDialog honors dark Acid Telemetry variant, shrinks to 560x500 even under wide fallback fonts, and resets cleanly
+    orig_app_font = app.font()
+    fallback_mono = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont)
+    fallback_mono.setPixelSize(12)
+    app.setFont(fallback_mono)
     s_dlg = SettingsDialog(
         probe_system(),
         ResourceLimits(),
@@ -447,17 +451,33 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         appearance=Appearance(preset="acid_telemetry", theme_mode="dark"),
     )
     try:
+        s_dlg.show()
+        app.processEvents()
         assert s_dlg._acid_variant == "dark"
         assert "酸性遥测 · 黑夜" in s_dlg._theme_summary.text()
         assert "#0B0D0F" in s_dlg.styleSheet()
         scroll_pages = s_dlg.findChildren(QtWidgets.QWidget, "settingsScrollPage")
         assert len(scroll_pages) == 3
         assert all(not p.autoFillBackground() for p in scroll_pages)
+        s_dlg.open_category("midi")
+        s_dlg.resize(560, 500)
+        app.processEvents()
+        assert s_dlg.width() == 560
+        assert s_dlg.midi_python_edit.width() >= 180
+        assert s_dlg._header.eyebrow_lbl.height() >= 10
+        assert s_dlg._page_eyebrow.height() >= 10
+
         s_dlg.apply_skin(Appearance(preset="classic", theme_mode="dark"))
+        app.processEvents()
         assert s_dlg._acid_variant is None
         assert s_dlg.styleSheet() == ""
+        s_dlg.resize(560, 500)
+        app.processEvents()
+        assert s_dlg.width() == 560
+        assert s_dlg.midi_python_edit.width() >= 180
     finally:
         s_dlg.close()
+        app.setFont(orig_app_font)
         app.processEvents()
 
     # 4. Full MainWindow + Controller integration: Classic -> Clinical Light -> Topbar Acid Dark -> Static Lock -> Follow System -> Lenso
