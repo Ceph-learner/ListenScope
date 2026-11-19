@@ -11,16 +11,19 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from core.appearance import (
     ANALYSIS_LAYOUTS,
     DEFAULT_ANALYSIS_LAYOUT,
+    FOCUS_STYLES,
     Appearance,
     LAYOUTS,
     PRESETS,
     THEME_MODES,
+    UI_SURFACE_STYLES,
 )
 from core.i18n import LANGUAGES, translate_widget_tree
 from ui.help_badge import (
     HelpBadge,
     install_focus_animations,
     set_focus_animations_enabled,
+    set_focus_ring_style,
     set_help_language,
     set_help_mode_enabled,
     set_help_theme,
@@ -377,6 +380,54 @@ QLabel#bannerNotice[tone="info"], QLabel#aiStatusBadge[tone="info"], QLabel#capt
     color: {sem["info_fg"]};
     border: 1px solid {rim};
 }}
+QFrame#bannerNoticeBox {{
+    border-radius: 5px;
+    background: {surface};
+    border: 1px solid {rim};
+    padding: 1px 4px;
+}}
+QFrame#bannerNoticeBox[tone="ok"] {{
+    background: {sem["ok_bg"]};
+    border: 1px solid {sem["ok_bd"]};
+}}
+QFrame#bannerNoticeBox[tone="warn"] {{
+    background: {sem["warn_bg"]};
+    border: 1px solid {sem["warn_bd"]};
+}}
+QFrame#bannerNoticeBox[tone="error"] {{
+    background: {sem["err_bg"]};
+    border: 1px solid {sem["err_bd"]};
+}}
+QFrame#bannerNoticeBox[tone="info"] {{
+    background: {sem["info_bg"]};
+    border: 1px solid {rim};
+}}
+QLabel#bannerNotice[inlineBanner="true"],
+QLabel#bannerNotice[inlineBanner="true"][tone="ok"],
+QLabel#bannerNotice[inlineBanner="true"][tone="warn"],
+QLabel#bannerNotice[inlineBanner="true"][tone="error"],
+QLabel#bannerNotice[inlineBanner="true"][tone="info"] {{
+    border: none;
+    background: transparent;
+    padding: 3px 6px;
+}}
+QPushButton#noticeDismissBtn {{
+    background: transparent;
+    color: {subtle_fg};
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 0px;
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 20px;
+    max-height: 20px;
+    font-weight: 800;
+}}
+QPushButton#noticeDismissBtn:hover {{
+    background: {hover};
+    color: {foreground};
+    border: 1px solid {rim};
+}}
 QGroupBox#oomBanner {{
     background: {sem["warn_bg"]};
     color: {sem["warn_fg"]};
@@ -513,6 +564,35 @@ QPlainTextEdit#diagnosticLogStream {{
 }}
 QLabel#monoTelemetry {{ font-weight: 600; color: {foreground}; }}
 """
+    surface_style = getattr(appearance, "ui_surface_style", "tactile")
+    if surface_style == "tactile":
+        rim_hi = _blend(rim, "#FFFFFF", 0.55 if is_light else 0.28)
+        rim_lo = _blend(rim, "#000000", 0.22 if is_light else 0.35)
+        qss += f"""
+QPushButton:enabled {{
+    border-top: 1px solid {rim_hi};
+    border-left: 1px solid {rim_hi};
+    border-right: 1px solid {rim_lo};
+    border-bottom: 2px solid {rim_lo};
+}}
+QPushButton:pressed:enabled {{
+    border-top: 2px solid {rim_lo};
+    border-left: 1px solid {rim_lo};
+    border-right: 1px solid {rim_hi};
+    border-bottom: 1px solid {rim_hi};
+}}
+"""
+    elif surface_style == "beveled":
+        rim_lo = _blend(rim, "#000000", 0.20 if is_light else 0.35)
+        qss += f"""
+QPushButton:enabled {{
+    border: 1px solid {rim};
+    border-bottom: 2px solid {rim_lo};
+}}
+QPushButton:pressed:enabled {{
+    border: 1px solid {accent};
+}}
+"""
     if appearance.scope == "off":
         return qss
 
@@ -538,6 +618,10 @@ def apply_plot_appearance(
     *,
     system_is_dark: Optional[bool] = None,
 ) -> None:
+    try:
+        plot.hideButtons()
+    except Exception:
+        pass
     background, foreground, _ = appearance.effective_colors(system_is_dark=system_is_dark)
     plot.setBackground(background)
     axis_color = _blend(background, foreground, 0.72)
@@ -643,24 +727,71 @@ class AppearanceDialog(QtWidgets.QDialog):
         )
         form.addRow("界面语言", lang_row)
 
-        # Help mode + Focus hover animation toggles
+        # Help mode + Focus hover animation + style
         assist_row = QtWidgets.QHBoxLayout()
-        assist_row.setSpacing(10)
+        assist_row.setSpacing(8)
         self._help_mode_chk = QtWidgets.QCheckBox("说明模式 (显示 [?] 悬浮说明)")
         self._help_mode_chk.toggled.connect(self._on_control_changed)
         self._focus_anim_chk = QtWidgets.QCheckBox("交互聚焦动画")
         self._focus_anim_chk.toggled.connect(self._on_control_changed)
+        self._focus_style_combo = QtWidgets.QComboBox()
+        for fkey, flabel in FOCUS_STYLES.items():
+            self._focus_style_combo.addItem(flabel, fkey)
+        self._focus_style_combo.currentIndexChanged.connect(self._on_control_changed)
         assist_row.addWidget(self._help_mode_chk)
         assist_row.addWidget(self._focus_anim_chk)
+        assist_row.addWidget(self._focus_style_combo)
         assist_row.addStretch(1)
         assist_row.addWidget(
             HelpBadge(
                 "说明模式与交互聚焦动画",
-                "• 说明模式：开启后在各功能旁显示 [?] 徽标，鼠标悬浮即可即时弹出中文/外语功能解释；熟悉软件后可随时关闭，界面更纯粹。\n"
-                "• 交互聚焦动画：开启后按钮、下拉框与问号徽标带有轻量丝滑的悬浮聚焦高亮动画（零显存占用）；追求极简静态时可关闭。",
+                "• 说明模式：开启后在各功能旁显示 [?] 徽标，鼠标悬浮即可即时弹出功能解释；关闭后不再弹出任何悬停说明。\n"
+                "• 交互聚焦动画：仅对按钮与下拉框等交互控件绘制轻量级极细描边 / 护栏角框 / 底线动效（零显存占用），复选框与极简开关默认保持克制。",
             )
         )
-        form.addRow("交互与引导", assist_row)
+        form.addRow("交互与聚焦", assist_row)
+
+        # Button/card surface edge style + close-to-tray toggle
+        surface_row = QtWidgets.QHBoxLayout()
+        surface_row.setSpacing(8)
+        self._surface_style_combo = QtWidgets.QComboBox()
+        for skey, slabel in UI_SURFACE_STYLES.items():
+            self._surface_style_combo.addItem(slabel, skey)
+        self._surface_style_combo.currentIndexChanged.connect(self._on_control_changed)
+        self._close_to_tray_chk = QtWidgets.QCheckBox("点击右上角 × 时最小化到系统托盘")
+        self._close_to_tray_chk.toggled.connect(self._on_control_changed)
+        surface_row.addWidget(self._surface_style_combo)
+        surface_row.addWidget(self._close_to_tray_chk, 1)
+        surface_row.addWidget(
+            HelpBadge(
+                "控件边框质感与托盘驻留",
+                "• 边框质感：提供「立体微棱边」「微倒角框」「纯粹扁平」三种按钮/卡片边缘手感，即便在酸性遥测主题下也可自由微调。\n"
+                "• 系统托盘：开启后点击窗口右上角关闭按钮（×）会最小化到 Windows 托盘后台保活运行；右键托盘菜单可彻底退出。",
+            )
+        )
+        form.addRow("质感与托盘", surface_row)
+
+        # Telemetry micro-animations intensity + music-reactive toggle
+        telem_row = QtWidgets.QHBoxLayout()
+        telem_row.setSpacing(8)
+        self._telemetry_strength_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._telemetry_strength_slider.setRange(0, 100)
+        self._telemetry_strength_slider.valueChanged.connect(self._on_control_changed)
+        self._telemetry_strength_lbl = QtWidgets.QLabel("70%")
+        self._telemetry_strength_lbl.setMinimumWidth(36)
+        self._music_reactive_chk = QtWidgets.QCheckBox("随音乐高潮动态变化")
+        self._music_reactive_chk.toggled.connect(self._on_control_changed)
+        telem_row.addWidget(self._telemetry_strength_slider, 1)
+        telem_row.addWidget(self._telemetry_strength_lbl)
+        telem_row.addWidget(self._music_reactive_chk)
+        telem_row.addWidget(
+            HelpBadge(
+                "遥测微动画强度与音乐联动",
+                "调节界面点阵、顶部电平条与电池分段进度条的动态呼吸强度（0% = 完全静止，100% = 饱满脉冲）。\n"
+                "勾选「随音乐高潮动态变化」后，动画幅度会随实时音量与高潮能量自适应起伏；点击底部 [STATIC_LOCK] 可随时一键冻结所有动画。",
+            )
+        )
+        form.addRow("遥测微动画", telem_row)
 
         self._layout = QtWidgets.QComboBox()
         self._layout.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
@@ -828,6 +959,11 @@ class AppearanceDialog(QtWidgets.QDialog):
             frameless=current.frameless,
             help_mode=current.help_mode,
             focus_animations=current.focus_animations,
+            telemetry_animation_strength=current.telemetry_animation_strength,
+            music_reactive_animations=current.music_reactive_animations,
+            focus_style=current.focus_style,
+            ui_surface_style=current.ui_surface_style,
+            close_to_tray=current.close_to_tray,
         )
         self._show_values(updated)
 
@@ -851,6 +987,11 @@ class AppearanceDialog(QtWidgets.QDialog):
             "frameless": self._frameless_chk.isChecked(),
             "help_mode": self._help_mode_chk.isChecked(),
             "focus_animations": self._focus_anim_chk.isChecked(),
+            "telemetry_animation_strength": self._telemetry_strength_slider.value(),
+            "music_reactive_animations": self._music_reactive_chk.isChecked(),
+            "focus_style": self._focus_style_combo.currentData() or "sleek",
+            "ui_surface_style": self._surface_style_combo.currentData() or "tactile",
+            "close_to_tray": self._close_to_tray_chk.isChecked(),
             **{key: ("" if preset_key == "acid_telemetry" else field.text()) for key, field in self._colors.items()},
             **{key: slider.value() for key, slider in self._sliders.items()},
         })
@@ -866,6 +1007,11 @@ class AppearanceDialog(QtWidgets.QDialog):
             self._frameless_chk,
             self._help_mode_chk,
             self._focus_anim_chk,
+            self._focus_style_combo,
+            self._surface_style_combo,
+            self._telemetry_strength_slider,
+            self._music_reactive_chk,
+            self._close_to_tray_chk,
             self._bg_image_edit,
             *self._colors.values(),
             *self._sliders.values(),
@@ -889,6 +1035,12 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._frameless_chk.setChecked(bool(values.frameless))
         self._help_mode_chk.setChecked(bool(values.help_mode))
         self._focus_anim_chk.setChecked(bool(values.focus_animations))
+        self._focus_style_combo.setCurrentIndex(max(0, self._focus_style_combo.findData(values.focus_style)))
+        self._surface_style_combo.setCurrentIndex(max(0, self._surface_style_combo.findData(values.ui_surface_style)))
+        self._telemetry_strength_slider.setValue(int(values.telemetry_animation_strength))
+        self._telemetry_strength_lbl.setText(f"{int(values.telemetry_animation_strength)}%")
+        self._music_reactive_chk.setChecked(bool(values.music_reactive_animations))
+        self._close_to_tray_chk.setChecked(bool(values.close_to_tray))
         self._bg_image_edit.setText(values.background_image)
         for key, field in self._colors.items():
             field.setText(getattr(values, key))
@@ -923,6 +1075,9 @@ class AppearanceDialog(QtWidgets.QDialog):
         appearance = self.values()
         is_acid = appearance.is_acid_locked()
         self._update_acid_lock_state(is_acid)
+        self._focus_style_combo.setEnabled(bool(appearance.focus_animations))
+        self._music_reactive_chk.setEnabled(appearance.telemetry_animation_strength > 0)
+        self._telemetry_strength_lbl.setText(f"{appearance.telemetry_animation_strength}%")
         self._layout_hint.setText(LAYOUTS[appearance.layout][1])
         for slider in self._sliders.values():
             slider.setEnabled((not is_acid) and appearance.scope != "off")
@@ -959,6 +1114,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._sample.setStyleSheet(sample_qss)
         set_help_mode_enabled(appearance.help_mode)
         set_focus_animations_enabled(appearance.focus_animations)
+        set_focus_ring_style(appearance.focus_style)
         set_help_language(appearance.language)
         translate_widget_tree(self, appearance.language)
         valid_colors = is_acid or all(field.hasAcceptableInput() for field in self._colors.values())
@@ -990,6 +1146,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         if result != QtWidgets.QDialog.DialogCode.Accepted:
             set_help_mode_enabled(self._initial_appearance.help_mode)
             set_focus_animations_enabled(self._initial_appearance.focus_animations)
+            set_focus_ring_style(self._initial_appearance.focus_style)
             set_help_language(self._initial_appearance.language)
             if self._on_preview is not None:
                 self._on_preview(self._initial_appearance)

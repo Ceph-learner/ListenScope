@@ -29,6 +29,7 @@ from ui.help_badge import HelpBadge
 from ui.acid_style import (
     AcidGraphicOverlay,
     DotMatrixWidget,
+    MarqueeLabel,
     TelemetryHeader,
     acid_colormap_lut,
     apply_acid_plot_theme,
@@ -470,7 +471,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         # Recent bounded chord transition strip + Practice action + Capo/Reset toolbar
         prog_bar = QtWidgets.QHBoxLayout()
         prog_bar.setSpacing(8)
-        self.chord_progression_lbl = QtWidgets.QLabel("最近和弦进行 (最多 12 步): -")
+        self.chord_progression_lbl = MarqueeLabel("最近和弦进行 (最多 12 步): -")
         self.chord_progression_lbl.setObjectName("chromaProgression")
         self.chord_progression_lbl.setWordWrap(False)
         self.chord_progression_lbl.setSizePolicy(
@@ -532,7 +533,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         tools_bar.addStretch(1)
         root.addLayout(tools_bar)
 
-        self.track_status_lbl = QtWidgets.QLabel("曲目会话监测 (SMTC): 待启动按进程捕获（也可随时手动点击「换歌重置」）")
+        self.track_status_lbl = MarqueeLabel("曲目会话监测 (SMTC): 待启动按进程捕获（也可随时手动点击「换歌重置」）")
         self.track_status_lbl.setWordWrap(False)
         self.track_status_lbl.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Ignored,
@@ -549,6 +550,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._label_cache: dict[int, str] = {}
 
         self.chroma_bar_plot = pg.PlotWidget(title="12-BIN CHROMA // 实时色度分布")
+        try:
+            self.chroma_bar_plot.hideButtons()
+        except Exception:
+            pass
         self.chroma_bar_plot.setBackground("#F8FAFC")
         self.chroma_bar_plot.setYRange(0.0, 1.05)
         self.chroma_bar_plot.showGrid(x=False, y=True, alpha=0.22)
@@ -565,6 +570,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         splitter.addWidget(self.chroma_bar_plot)
 
         self.chroma_hist_plot = pg.PlotWidget(title="CHROMA HEATMAP // 有界时序热图 (120s)")
+        try:
+            self.chroma_hist_plot.hideButtons()
+        except Exception:
+            pass
         self.chroma_hist_plot.setBackground("#F8FAFC")
         ay = self.chroma_hist_plot.getAxis("left")
         note_font = QtGui.QFont(self.font())
@@ -807,6 +816,28 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self._label_cache[key] = cache_val
             label.setProperty("_ls_orig_text", text)
             label.setText(translate_text(text, lang))
+
+    def update_telemetry_pulse(
+        self,
+        *,
+        energy: float = 0.0,
+        climax: float = 0.0,
+        strength: float = 0.70,
+        reactive: bool = True,
+        locked: bool = False,
+        phase: float = 0.0,
+    ) -> None:
+        s_val = float(strength) / 100.0 if float(strength) > 1.0 else float(strength)
+        eff_energy = energy if reactive else 0.35
+        eff_climax = climax if reactive else 0.0
+        for dm in self._dot_matrices:
+            dm.set_reactive_pulse(
+                energy=eff_energy,
+                climax=eff_climax,
+                strength=s_val,
+                phase=phase,
+                locked=locked,
+            )
 
     def apply_theme(
         self,

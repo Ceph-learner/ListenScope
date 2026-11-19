@@ -15,6 +15,7 @@ from ui.appearance import apply_plot_appearance
 from ui.help_badge import HelpBadge
 from ui.acid_style import (
     TelemetryHeader,
+    TelemetryPulseStrip,
     acid_colormap_lut,
     apply_acid_plot_theme,
     get_acid_palette,
@@ -72,6 +73,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         root.setContentsMargins(10, 8, 10, 10)
         root.setSpacing(8)
         self._header = TelemetryHeader("AUDIO SPECTRUM // REALTIME", "实时频谱与波形分析")
+        self._pulse_strip = TelemetryPulseStrip(bar_count=10)
+        self._header.add_right_widget(self._pulse_strip)
         self.view_combo = QtWidgets.QComboBox()
         self.view_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.view_combo.setAccessibleName("实时分析布局")
@@ -194,6 +197,11 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self._spec_img.setLookupTable(acid_colormap_lut("spectrogram", "light"))
         self.spec_plot.addItem(self._spec_img)
         self._plots = (self.wave_plot, self.fft_plot, self.log_plot, self.spec_plot)
+        for p in self._plots:
+            try:
+                p.hideButtons()
+            except Exception:
+                pass
         self._chart_cards = tuple(
             self._chart_card(tag, name, unit, plot)
             for tag, name, unit, plot in zip(
@@ -206,6 +214,26 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.view_combo.currentIndexChanged.connect(self._arrange_plots)
         self._arrange_plots()
 
+    def update_telemetry(
+        self,
+        *,
+        energy: float = 0.0,
+        climax: float = 0.0,
+        strength: float = 0.70,
+        reactive: bool = True,
+        locked: bool = False,
+        phase: float = 0.0,
+    ) -> None:
+        s_val = float(strength) / 100.0 if float(strength) > 1.0 else float(strength)
+        self._pulse_strip.set_telemetry(
+            energy=energy,
+            climax=climax,
+            strength=s_val,
+            reactive=reactive,
+            locked=locked,
+            phase=phase,
+        )
+
     def apply_theme(
         self,
         appearance: Appearance,
@@ -215,6 +243,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
     ) -> None:
         if acid_variant in ("light", "dark"):
             p = get_acid_palette(acid_variant)
+            self._pulse_strip.set_theme_color(p.accent)
             for plot in self._plots:
                 apply_acid_plot_theme(plot, appearance, acid_variant)
             wave_pen = pg.mkPen(p.plot_wave, width=1.2)
@@ -228,7 +257,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             return
 
         mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
-        _, _, accent = appearance.effective_colors(system_is_dark=system_is_dark)
+        _bg, _fg, accent = appearance.effective_colors(system_is_dark=system_is_dark)
+        self._pulse_strip.set_theme_color(accent)
         for plot in self._plots:
             apply_plot_appearance(plot, appearance, system_is_dark=system_is_dark)
         wave_pen = pg.mkPen(accent, width=1.2)
