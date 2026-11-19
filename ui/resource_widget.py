@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.logging import PerformanceRecord
+from core.logging import PerformanceRecord, active_log_dir
 from core.models import ResourceSnapshot, ResourceStatus
 from core.paths import default_export_dir
 from ui.appearance import set_widget_tone
@@ -170,9 +170,12 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         diag_bar = QtWidgets.QHBoxLayout()
         diag_note = QtWidgets.QLabel("日志与性能摘要严格有界；如在 Windows 遇到 CUDA/WASAPI 故障可一键导出脱敏诊断包：")
         diag_note.setObjectName("mutedCaption")
+        self.open_logs_btn = QtWidgets.QPushButton("打开日志目录")
+        self.open_logs_btn.clicked.connect(self._on_open_logs_clicked)
         self.export_diag_btn = QtWidgets.QPushButton("导出诊断包 (.zip)")
         self.export_diag_btn.clicked.connect(self._on_export_diag_clicked)
         diag_bar.addWidget(diag_note, 1)
+        diag_bar.addWidget(self.open_logs_btn)
         diag_bar.addWidget(self.export_diag_btn)
         log_layout.addLayout(diag_bar)
 
@@ -187,6 +190,11 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         )
         log_layout.addWidget(self.log_text)
         root.addWidget(log_group, 1)
+
+    def _on_open_logs_clicked(self) -> None:
+        log_dir = active_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(log_dir)))
 
     def _on_export_diag_clicked(self) -> None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")

@@ -192,12 +192,12 @@ def test_tooltip_guard_strictly_allows_help_badges_only(tmp_path: Path, monkeypa
 
 
 def test_no_unexpected_settooltip_calls_in_ui_source() -> None:
-    """Only ui/help_badge.py and chroma chord_progression_lbl summary property retain .setToolTip in ui/."""
+    """Only ui/help_badge.py, chroma chord_progression_lbl summary property, and QSystemTrayIcon tray label retain .setToolTip in ui/."""
     allowed_files = {"help_badge.py", "chroma_widget.py"}
     unexpected: list[str] = []
     for py_file in sorted((ROOT / "ui").glob("*.py")):
         for lineno, line in enumerate(py_file.read_text(encoding="utf-8").splitlines(), start=1):
-            if ".setToolTip(" in line and py_file.name not in allowed_files:
+            if ".setToolTip(" in line and "tray.setToolTip(" not in line and py_file.name not in allowed_files:
                 unexpected.append(f"{py_file.name}:{lineno}: {line.strip()}")
     assert unexpected == [], f"Found unexpected .setToolTip calls in ui/: {unexpected}"
 

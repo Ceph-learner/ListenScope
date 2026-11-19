@@ -67,6 +67,19 @@ try {
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $RepoRoot
 
+function Emit-BootstrapProgress {
+    param(
+        [int]$Pct,
+        [string]$Stage,
+        [string]$Speed = "",
+        [string]$Mirror = ""
+    )
+    $s = ($Stage -replace '[\|\r\n@]', ' ').Trim()
+    $sp = ($Speed -replace '[\|\r\n@]', ' ').Trim()
+    $mr = ($Mirror -replace '[\|\r\n@]', ' ').Trim()
+    Write-Host "@@LS_PROGRESS|pct=$Pct|stage=$s|speed=$sp|mirror=$mr@@"
+}
+
 function Invoke-Checked {
     param(
         [string]$Exe,
@@ -77,6 +90,45 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code ${LASTEXITCODE}: $Exe $($ArgsList -join ' ')"
     }
+}
+
+function Invoke-PipInstallWithMirrors {
+    param(
+        [string]$PythonPath,
+        [string[]]$PipArgs,
+        [int]$Pct = 70,
+        [string]$StageLabel = "安装依赖包"
+    )
+    $MirrorScript = Join-Path $PSScriptRoot "mirror_wheel_fetch.py"
+    $Mirrors = @(
+        "清华 TUNA 镜像|https://pypi.tuna.tsinghua.edu.cn/simple",
+        "阿里云镜像|https://mirrors.aliyun.com/pypi/simple",
+        "中科大 USTC 镜像|https://pypi.mirrors.ustc.edu.cn/simple",
+        "PyPI 官方源|https://pypi.org/simple"
+    )
+    if (Test-Path -LiteralPath $MirrorScript) {
+        try {
+            $Ranked = & $PythonPath $MirrorScript --pick-pypi-mirror 2>$null
+            if ($LASTEXITCODE -eq 0 -and $Ranked) {
+                $Mirrors = @($Ranked | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ -like "*|*" })
+            }
+        } catch {
+        }
+    }
+    foreach ($Entry in $Mirrors) {
+        $Parts = $Entry.Split("|", 2)
+        $Label = $Parts[0]
+        $Url = $Parts[1]
+        Emit-BootstrapProgress -Pct $Pct -Stage $StageLabel -Mirror $Label
+        $FullArgs = @("-m", "pip", "install", "--index-url", $Url, "--timeout", "25", "--retries", "2") + $PipArgs
+        Write-Host ">>> [$Label] $PythonPath $($FullArgs -join ' ')" -ForegroundColor Cyan
+        & $PythonPath @FullArgs
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        Write-Warning "[MIRROR] PyPI 源 $Label 安装失败或超时 (exit=$LASTEXITCODE)，自动切换下一个源..."
+    }
+    throw "所有 PyPI 镜像源安装均失败: $($PipArgs -join ' ')"
 }
 
 function Test-PythonSpec {
@@ -488,12 +540,17 @@ if (-not $SkipCore) {
     Write-Host "=== [1/3] 已跳过 Core 桌面环境初始化 (-SkipCore) ===" -ForegroundColor Gray
 }
 
+if (-not $CheckCudaWheels -and (-not $SkipCore -or -not $SkipAI)) {
+    Emit-BootstrapProgress -Pct 4 -Stage "检测 Python 3.12 x64 解释器..."
+}
 if (-not $SkipAI) {
     $AiVenv = if ($AiVenvPath) { $AiVenvPath } else { Join-Path $RepoRoot ".venv-ai" }
     $AiPy = Join-Path $AiVenv "Scripts\python.exe"
+    Emit-BootstrapProgress -Pct 8 -Stage "初始化独立 AI 虚拟环境 ($AiVenv)..."
     if (-not (Test-Path $AiPy)) {
         Invoke-Checked $PythonExe @("-m", "venv", $AiVenv)
     }
+    Emit-BootstrapProgress -Pct 12 -Stage "升级 AI 环境 pip..."
     Invoke-Checked $AiPy @("-m", "pip", "install", "--upgrade", "pip")
 
     if ($ResolvedCudaWheelDir) {
@@ -503,6 +560,7 @@ if (-not $SkipAI) {
             Write-Host "  - $WhlPath" -ForegroundColor Green
         }
 
+        Emit-BootstrapProgress -Pct 25 -Stage "安装本地 PyTorch cu128 Wheel..." -Mirror "本地目录"
         $TorchInstallArgs = @("-m", "pip", "install", "--find-links", $ResolvedCudaWheelDir) + $LocalWheels
         if ($MissingOnlineSpecs.Count -gt 0) {
             Write-Warning "下列包未在 $ResolvedCudaWheelDir 中找到本地 wheel，将回退到 $CudaIndexUrl 在线获取: $($MissingOnlineSpecs -join ', ')"
@@ -516,23 +574,71 @@ if (-not $SkipAI) {
         Invoke-Checked $AiPy $TorchInstallArgs
     } else {
         Write-Host "=== [2/3] 初始化隔离 RTX 5060 Ti AI Worker 环境 (.venv-ai) [$TorchSpec $TorchaudioSpec $TorchvisionSpec @ $CudaIndexUrl] ===" -ForegroundColor Green
-        $TorchInstallArgs = @("-m", "pip", "install", $TorchSpec, $TorchaudioSpec)
-        if ($TorchvisionSpec) {
-            $TorchInstallArgs += $TorchvisionSpec
+        $MirrorFetcher = Join-Path $PSScriptRoot "mirror_wheel_fetch.py"
+        $WheelCacheDir = Join-Path $AiVenv "_wheels"
+        $FetchedViaMirrorHelper = $false
+        if (Test-Path -LiteralPath $MirrorFetcher) {
+            Emit-BootstrapProgress -Pct 16 -Stage "多源测速并下载 PyTorch cu128 三件套..."
+            $FetchArgs = @(
+                $MirrorFetcher, "--fetch-cuda-wheels",
+                "--wheel-dir", $WheelCacheDir,
+                "--cuda-tag", $ExpectedCudaTag,
+                "--py-tag", $ExpectedPyTag,
+                "--plat-tag", $ExpectedPlatTag,
+                "--index-url", $CudaIndexUrl,
+                "--specs", $TorchSpec, $TorchaudioSpec
+            )
+            if ($TorchvisionSpec) { $FetchArgs += $TorchvisionSpec }
+            & $AiPy @FetchArgs
+            if ($LASTEXITCODE -eq 0) {
+                $FetchedViaMirrorHelper = $true
+            }
         }
-        if ($CudaIndexUrl) {
-            $TorchInstallArgs += @("--index-url", $CudaIndexUrl)
+
+        if ($FetchedViaMirrorHelper) {
+            Emit-BootstrapProgress -Pct 56 -Stage "正在安装已下载的 PyTorch cu128 Wheel..." -Mirror "本地缓存"
+            $CachedWheels = Get-ChildItem -LiteralPath $WheelCacheDir -Filter "*.whl" -File | ForEach-Object { $_.FullName }
+            if ($CachedWheels.Count -gt 0) {
+                Invoke-PipInstallWithMirrors -PythonPath $AiPy -PipArgs (@("--find-links", $WheelCacheDir) + $CachedWheels) -Pct 58 -StageLabel "安装 PyTorch cu128 依赖"
+            } else {
+                $FetchedViaMirrorHelper = $false
+            }
         }
-        try {
-            Invoke-Checked $AiPy $TorchInstallArgs
-        } catch {
-            Write-Warning "在线安装 CUDA PyTorch 失败。若遇到 2.75 GB cu128 wheel 下载停滞/超时，可先将官方匹配 wheel 下载到本地目录后传入 `-CudaWheelDir <目录>` 重试（详见 docs\PACKAGING.md）。"
-            throw
+
+        if (-not $FetchedViaMirrorHelper) {
+            $TorchMirrors = @(
+                "NJU 镜像|https://mirrors.nju.edu.cn/pytorch/whl/cu128",
+                "SJTU 镜像|https://mirror.sjtu.edu.cn/pytorch-wheels/cu128",
+                "阿里云镜像|https://mirrors.aliyun.com/pytorch-wheels/cu128",
+                "PyTorch 官方源|$CudaIndexUrl"
+            )
+            $TorchInstalledOk = $false
+            foreach ($TM in $TorchMirrors) {
+                $TParts = $TM.Split("|", 2)
+                $TLabel = $TParts[0]
+                $TUrl = $TParts[1]
+                Emit-BootstrapProgress -Pct 30 -Stage "通过 pip 安装 PyTorch cu128 三件套..." -Mirror $TLabel
+                $TorchInstallArgs = @("-m", "pip", "install", $TorchSpec, $TorchaudioSpec)
+                if ($TorchvisionSpec) { $TorchInstallArgs += $TorchvisionSpec }
+                if ($TUrl) { $TorchInstallArgs += @("--index-url", $TUrl, "--timeout", "30", "--retries", "2") }
+                Write-Host ">>> [$TLabel] $AiPy $($TorchInstallArgs -join ' ')" -ForegroundColor Cyan
+                & $AiPy @TorchInstallArgs
+                if ($LASTEXITCODE -eq 0) {
+                    $TorchInstalledOk = $true
+                    break
+                }
+                Write-Warning "[MIRROR] PyTorch 源 $TLabel 失败/超时 (exit=$LASTEXITCODE)，自动切换下一个源..."
+            }
+            if (-not $TorchInstalledOk) {
+                Write-Warning "在线安装 CUDA PyTorch 失败。若遇到 2.75 GB cu128 wheel 下载停滞/超时，可先将官方匹配 wheel 下载到本地目录后传入 `-CudaWheelDir <目录>` 重试（详见 docs\PACKAGING.md）。"
+                throw "所有 PyTorch cu128 镜像均安装失败。"
+            }
         }
     }
 
     # 读取已安装的 torch/torchaudio/torchvision 精确版本 (例如 2.11.0+cu128 / 0.26.0+cu128) 生成 pip 约束，
     # 防止后续从 PyPI 安装 requirements-ai.txt 时因解析 torchvision 等依赖而替换已安装的 cu128 PyTorch。
+    Emit-BootstrapProgress -Pct 65 -Stage "锁定 cu128 约束并安装 AI 分轨依赖..."
     $CudaConstraintFile = Join-Path $AiVenv "cuda-constraints.txt"
     $PinnedLines = & $AiPy -c "import importlib.metadata as m; pkgs=['torch','torchaudio','torchvision']; print('\n'.join(f'{p}=={m.version(p)}' for p in pkgs))"
     if ($LASTEXITCODE -ne 0 -or -not $PinnedLines) {
@@ -546,11 +652,10 @@ if (-not $SkipAI) {
     $PrevPipConstraint = $env:PIP_CONSTRAINT
     try {
         $env:PIP_CONSTRAINT = $CudaConstraintFile
-        Invoke-Checked $AiPy @(
-            "-m", "pip", "install",
+        Invoke-PipInstallWithMirrors -PythonPath $AiPy -PipArgs @(
             "-r", (Join-Path $RepoRoot "requirements-ai.txt"),
             "-c", $CudaConstraintFile
-        )
+        ) -Pct 72 -StageLabel "安装 requirements-ai.txt (onnxruntime-gpu/demucs/audio-separator)"
     } finally {
         if ($null -eq $PrevPipConstraint) {
             Remove-Item Env:PIP_CONSTRAINT -ErrorAction SilentlyContinue
@@ -559,6 +664,7 @@ if (-not $SkipAI) {
         }
     }
 
+    Emit-BootstrapProgress -Pct 80 -Stage "验证 PyTorch +cu128 与依赖完整性..."
     $CudaSuffixCheck = if ($ExpectedCudaTag) { "+$ExpectedCudaTag" } else { "+cu" }
     Invoke-Checked $AiPy @(
         "-c",
@@ -599,9 +705,11 @@ if ($FfmpegFound) {
 $MidiReadyCreated = $false
 $MidiPyResolved = ""
 if (-not $SkipMidi) {
+    Emit-BootstrapProgress -Pct 84 -Stage "检查 Python 3.11 (CPU MIDI 转录环境)..."
     if (-not $MidiPythonExe) {
         $MidiPythonExe = Resolve-LauncherPython -SpecVersion "3.11"
         if (-not $MidiPythonExe -and $AutoInstallPython) {
+            Emit-BootstrapProgress -Pct 86 -Stage "通过 winget 自动安装 Python 3.11..."
             $MidiPythonExe = Install-PythonViaWinget -SpecVersion "3.11"
         }
     }
@@ -616,11 +724,15 @@ if (-not $SkipMidi) {
             }
             Write-Host "=== [3/3] 初始化隔离 CPU MIDI 环境 ($MidiVenv) [$($MidiPyMeta.Version) $($MidiPyMeta.Arch)] ===" -ForegroundColor Green
             $MidiPy = Join-Path $MidiVenv "Scripts\python.exe"
+            Emit-BootstrapProgress -Pct 88 -Stage "创建独立 CPU MIDI 虚拟环境..."
             if (-not (Test-Path $MidiPy)) {
                 Invoke-Checked $MidiPythonExe @("-m", "venv", $MidiVenv)
             }
             Invoke-Checked $MidiPy @("-m", "pip", "install", "--upgrade", "pip")
-            Invoke-Checked $MidiPy @("-m", "pip", "install", "-r", (Join-Path $RepoRoot "requirements-midi.txt"))
+            Invoke-PipInstallWithMirrors -PythonPath $MidiPy -PipArgs @(
+                "-r", (Join-Path $RepoRoot "requirements-midi.txt")
+            ) -Pct 92 -StageLabel "安装 Basic Pitch MIDI 依赖"
+            Emit-BootstrapProgress -Pct 96 -Stage "校验 Basic Pitch MIDI 环境..."
             Invoke-Checked $MidiPy @("-m", "pip", "check")
             Invoke-Checked $MidiPy @("scripts\check_env.py", "--json", "--check-midi-packages", "--no-write")
             $MidiReadyCreated = $true
@@ -633,6 +745,7 @@ if (-not $SkipMidi) {
     }
 }
 
+Emit-BootstrapProgress -Pct 100 -Stage "所有环境初始化完成！"
 Write-Host ""
 Write-Host "初始化完成！启动命令示例:" -ForegroundColor Green
 Write-Host "  .\.venv-core\Scripts\python.exe capture_test.py --name QQMusic.exe --fallback-system"

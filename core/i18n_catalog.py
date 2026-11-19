@@ -658,18 +658,55 @@ DYNAMIC_REGEX_RULES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
         re.compile(r"^系统默认\s*·\s*(.+)$"),
         {"en": r"System Default · \1", "ko": r"시스템 기본 · \1", "ja": r"システム既定 · \1"},
     ),
-    (
-        re.compile(r"^酸性遥测\s*·\s*白天\s*·\s*(.+)$"),
-        {"en": r"Acid Telemetry · Light · \1", "ko": r"애시드 텔레메트리 · 라이트 · \1", "ja": r"アシッドテレメトリ · ライト · \1"},
-    ),
-    (
-        re.compile(r"^酸性遥测\s*·\s*黑夜\s*·\s*(.+)$"),
-        {"en": r"Acid Telemetry · Dark · \1", "ko": r"애시드 텔레메트리 · 다크 · \1", "ja": r"アシッドテレメトリ · ダーク · \1"},
-    ),
-    (
-        re.compile(r"^酸性遥测\s*·\s*跟随系统\s*·\s*(.+)$"),
-        {"en": r"Acid Telemetry · System · \1", "ko": r"애시드 텔레메트리 · 시스템 · \1", "ja": r"アシッドテレメトリ · システム · \1"},
-    ),
+    *[
+        rule
+        for _p_zh, _p_tr in (
+            ("酸性遥测", {"en": "Acid Telemetry", "ko": "애시드 텔레메트리", "ja": "アシッドテレメトリ"}),
+            ("经典", {"en": "Classic", "ko": "클래식", "ja": "クラシック"}),
+            ("Lenso", {"en": "Lenso", "ko": "Lenso", "ja": "Lenso"}),
+            ("Codex", {"en": "Codex", "ko": "Codex", "ja": "Codex"}),
+            ("Claude Code", {"en": "Claude Code", "ko": "Claude Code", "ja": "Claude Code"}),
+        )
+        for _m_zh, _m_tr in (
+            ("白天", {"en": "Light", "ko": "라이트", "ja": "ライト"}),
+            ("黑夜", {"en": "Dark", "ko": "다크", "ja": "ダーク"}),
+            ("跟随系统", {"en": "System", "ko": "시스템", "ja": "システム"}),
+        )
+        for rule in (
+            (
+                re.compile(rf"^{re.escape(_p_zh)}\s*·\s*{_m_zh}\s*·\s*简体中文\s*\(ZH\)$"),
+                {
+                    "en": f"{_p_tr['en']} · {_m_tr['en']} · Simplified Chinese (ZH)",
+                    "ko": f"{_p_tr['ko']} · {_m_tr['ko']} · 중국어 간체 (ZH)",
+                    "ja": f"{_p_tr['ja']} · {_m_tr['ja']} · 簡体字中国語 (ZH)",
+                },
+            ),
+            (
+                re.compile(rf"^{re.escape(_p_zh)}\s*·\s*{_m_zh}\s*·\s*日本語\s*\(JA\)$"),
+                {
+                    "en": f"{_p_tr['en']} · {_m_tr['en']} · Japanese (JA)",
+                    "ko": f"{_p_tr['ko']} · {_m_tr['ko']} · 일본어 (JA)",
+                    "ja": f"{_p_tr['ja']} · {_m_tr['ja']} · 日本語 (JA)",
+                },
+            ),
+            (
+                re.compile(rf"^{re.escape(_p_zh)}\s*·\s*{_m_zh}\s*·\s*한국어\s*\(KO\)$"),
+                {
+                    "en": f"{_p_tr['en']} · {_m_tr['en']} · Korean (KO)",
+                    "ko": f"{_p_tr['ko']} · {_m_tr['ko']} · 한국어 (KO)",
+                    "ja": f"{_p_tr['ja']} · {_m_tr['ja']} · 韓国語 (KO)",
+                },
+            ),
+            (
+                re.compile(rf"^{re.escape(_p_zh)}\s*·\s*{_m_zh}\s*·\s*(.+)$"),
+                {
+                    "en": rf"{_p_tr['en']} · {_m_tr['en']} · \1",
+                    "ko": rf"{_p_tr['ko']} · {_m_tr['ko']} · \1",
+                    "ja": rf"{_p_tr['ja']} · {_m_tr['ja']} · \1",
+                },
+            ),
+        )
+    ],
     (
         re.compile(r"如果 ListenScope 对你的扒谱、贝斯分析或和弦练习有帮助，欢迎前往 GitHub 点个 ⭐ Star 支持！\n• 项目仓库: (.+?)\s+\|\s+问题反馈: (.+?)\s+（暂为私有占位，转公开后可直提 Issue）"),
         {
@@ -805,6 +842,94 @@ DYNAMIC_REGEX_RULES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
     (
         re.compile(r"（已就绪）|\(已就绪\)"),
         {"en": " (Ready)", "ko": " (준비됨)", "ja": " (準備完了)"},
+    ),
+    (
+        re.compile(r"\[WARN\] GPU AI 暂未就绪：([^。]+)。请点击下方按钮前往「AI 与 MIDI 环境」页扫描本机 PyTorch 或一键自动配置。"),
+        {
+            "en": r"[WARN] GPU AI is not ready: \1. Click below to open AI & MIDI Setup to scan local PyTorch or run One-Click Setup.",
+            "ko": r"[WARN] GPU AI가 아직 준비되지 않음: \1. 아래 버튼을 눌러 'AI & MIDI 환경'에서 PyTorch를 스캔하거나 원클릭 구성을 실행하세요.",
+            "ja": r"[WARN] GPU AI は未準備です: \1。下のボタンから「AI・MIDI環境」へ進み、検出または一括構築を実行してください。",
+        },
+    ),
+    (
+        re.compile(r"尚未检测到可用的 PyTorch GPU 环境"),
+        {
+            "en": "No usable PyTorch GPU environment detected yet",
+            "ko": "사용 가능한 PyTorch GPU 환경이 아직 감지되지 않았습니다",
+            "ja": "利用可能な PyTorch GPU 環境がまだ検出されていません",
+        },
+    ),
+    (
+        re.compile(r"\[BUSY\] 正在执行一键环境初始化（切换页面或关闭设置窗口不会中断下载）\.\.\."),
+        {
+            "en": "[BUSY] Running turnkey environment setup (switching pages or closing Settings will not interrupt downloads)...",
+            "ko": "[BUSY] 원클릭 환경 구성을 실행 중입니다 (페이지를 이동하거나 설정 창을 닫아도 다운로드가 유지됩니다)...",
+            "ja": "[BUSY] 環境一括構築を実行中（タブ切替や設定画面を閉じてもダウンロードは継続します）...",
+        },
+    ),
+    (
+        re.compile(r"\[OK\] 环境初始化已完成并已自动写入配置！正在刷新验证环境；若刚通过 winget 新装 Python 或硬件状态未即时更新，可点击「立即重启应用」快速生效。"),
+        {
+            "en": "[OK] Environment initialized & saved automatically! Refreshing validation; click 'Restart ListenScope Now' if newly installed Python paths need a reload.",
+            "ko": "[OK] 환경 초기화 및 설정 자동 저장 완료! 검증을 새로고침하는 중이며 필요 시 '지금 ListenScope 다시 시작'을 누르세요.",
+            "ja": "[OK] 環境構築と設定保存が完了しました！検証を再確認中です。必要に応じ「今すぐ再起動」を押してください。",
+        },
+    ),
+    (
+        re.compile(r"\[WARN\] 已取消环境初始化，你可以随时重新开始。"),
+        {
+            "en": "[WARN] Setup canceled. You can restart anytime.",
+            "ko": "[WARN] 환경 설치가 취소되었습니다. 언제든 다시 시작할 수 있습니다.",
+            "ja": "[WARN] セットアップを中止しました。いつでも再開できます。",
+        },
+    ),
+    (
+        re.compile(r"源: "),
+        {
+            "en": "Mirror: ",
+            "ko": "미러: ",
+            "ja": "ミラー: ",
+        },
+    ),
+    (
+        re.compile(r"正在启动独立环境初始化流程\.\.\."),
+        {
+            "en": "Starting isolated runtime bootstrap...",
+            "ko": "독립 런타임 환경 구성을 시작하는 중...",
+            "ja": "独立ランタイムの初期化を起動中...",
+        },
+    ),
+    (
+        re.compile(r"\[ERR\] 初始化失败 \(exit=(\d+)\):"),
+        {
+            "en": r"[ERR] Setup failed (exit=\1):",
+            "ko": r"[ERR] 초기화 실패 (exit=\1):",
+            "ja": r"[ERR] 初期化失敗 (exit=\1):",
+        },
+    ),
+    (
+        re.compile(r"检测到 Python ([^\s]+)\s*无法匹配"),
+        {
+            "en": r"Detected Python \1 mismatch",
+            "ko": r"감지된 Python \1 버전 불일치",
+            "ja": r"検出された Python \1 が不一致",
+        },
+    ),
+    (
+        re.compile(r"(^|\|\s*)下载\s+"),
+        {
+            "en": r"\1Downloading ",
+            "ko": r"\1다운로드: ",
+            "ja": r"\1ダウンロード: ",
+        },
+    ),
+    (
+        re.compile(r"(^|\|\s*)连接\s+"),
+        {
+            "en": r"\1Connecting ",
+            "ko": r"\1연결: ",
+            "ja": r"\1接続: ",
+        },
     ),
 )
 
@@ -1606,6 +1731,48 @@ HELP_TRANSLATIONS: dict[str, dict[str, tuple[str, str]]] = {
         "ja": (
             "RING // BUFFER · 120秒リングバッファ",
             "固定120秒RAMリングバッファに蓄積された有効音声長です（生PCM上限約43.95 MiB、無制限に増加しません）。",
+        ),
+    },
+    "静态锁定 (STATIC_LOCK) 与遥测微动画": {
+        "en": (
+            "STATIC_LOCK & Telemetry Micro-Animations",
+            "• The pulsing dots, header meter bars, and segmented battery cells are lightweight telemetry micro-animations that can scale with live audio dynamics and climax.\n• Toggle [STATIC_LOCK] to immediately freeze spectrum/chord refreshes and all animations for clean score reading, screenshots, or minimum power draw.",
+        ),
+        "ko": (
+            "STATIC_LOCK 및 텔레메트리 미세 애니메이션",
+            "• 카드의 점멸 도트, 상단 미터 바 및 분할 배터리 진행률 바는 음악 에너지와 클라이맥스에 연동되는 경량 텔레메트리 애니메이션입니다.\n• [STATIC_LOCK]을 누르면 메인 스펙트럼/코드 갱신과 모든 애니메이션을 즉시 고정하여 악보 읽기·캡처 및 절전 모드로 전환됩니다.",
+        ),
+        "ja": (
+            "静的ロック (STATIC_LOCK) とテレメトリ演出",
+            "• ドット点滅・上部パルスバー・電池型セグメントバーは楽曲の音量や盛り上がりに合わせて反応する軽量テレメトリ演出です。\n• [STATIC_LOCK] を押すとメイン画面のスペクトル/コード更新と全アニメーションを即時凍結し、譜面確認・スクリーンショット・省電力に最適です。",
+        ),
+    },
+    "控件边框质感与托盘驻留": {
+        "en": (
+            "Button Edge Finish & System Tray Behavior",
+            "• Edge Finish: Choose between Tactile Rim, Soft Bevel, or Pure Flat button & card borders (adjustable even under Acid Telemetry).\n• Minimize to Tray: Clicking the window close (×) button sends ListenScope to the Windows system tray instead of exiting; use the tray right-click menu to quit completely.",
+        ),
+        "ko": (
+            "컨트롤 테두리 질감 및 시스템 트레이 동작",
+            "• 테두리 질감: '입체 미세 테두리 / 미세 베벨 / 플랫 스타일' 중 선택할 수 있으며 애시드 테마에서도 자유롭게 조정됩니다.\n• 시스템 트레이: 창 닫기(×) 클릭 시 종료 대신 트레이로 최소화하며 트레이 우클릭 메뉴에서 완전히 종료할 수 있습니다.",
+        ),
+        "ja": (
+            "ボタン質感とシステムトレイ常駐",
+            "• 質感スタイル:「立体リムエッジ」「ソフトベベル」「ピュアフラット」を Acid テーマ下でも好みに応じて切替できます。\n• トレイ常駐: 右上の×ボタンで終了せずトレイへ格納し、トレイアイコンの右クリックメニューから完全終了できます。",
+        ),
+    },
+    "遥测微动画强度与音乐联动": {
+        "en": (
+            "Telemetry Animation Intensity & Music Sync",
+            "Controls the motion intensity (0% = completely static, 100% = full pulse) of dot matrices, meter bars, and segmented battery bars.\nEnable Music Sync to make them surge organically with audio volume and musical climax; use [STATIC_LOCK] on the footer bar to freeze anytime.",
+        ),
+        "ko": (
+            "텔레메트리 애니메이션 강도 및 음악 연동",
+            "도트 매트릭스, 상단 미터, 배터리 분할 진행률 바의 움직임 강도(0% = 완전 정지, 100% = 최대 펄스)를 조절합니다.\n음악 에너지·클라이맥스 연동을 켜면 실시간 음량과 고조 구간에 맞춰 강도가 반응하며 하단 [STATIC_LOCK]으로 언제든 정지할 수 있습니다.",
+        ),
+        "ja": (
+            "テレメトリ演出強度＆音楽リアルタイム連動",
+            "ドット・パルスバー・電池型セグメントの駆動強度（0%=完全静止、100%=フル演出）を調整します。\n楽曲連動をオンにすると音量やサビの盛り上がりに応じて自然に強まり、下部 [STATIC_LOCK] でいつでも凍結できます。",
         ),
     },
 }

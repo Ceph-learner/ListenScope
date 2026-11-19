@@ -1,6 +1,40 @@
 # 最新交接
 
-## `v0.2.4` 发布交接：合并 PR #28、修复 Windows 冻结测试并完成双端 CI 与 Windows Release 构建（分支 `main` · 证据基线 `4b9df055cdc07b7079dd81b9f50a6a80d6fc6eb7` · Tag `v0.2.4`）
+## `v0.2.5` 开发交接：实机 UX 反馈全面打磨、一键安装持久进度与多源故障转移、托盘缩放、日志与微动画（分支 `feat/v0.2.5-ux-bootstrap-tray-marquee` · 基于 `main` `72e5700296b22d3b74af1daf9f9d905464be2b0e`）
+
+- **目标与结果**：围绕实机使用反馈完成 `v0.2.5` 全部 19 项体验与可靠性升级（版本同步至 `0.2.5`），Linux offscreen 全量测试与非硬件冒烟均已通过；待推送创建 PR、等待 CI 通过并经授权后合并与发布 Windows Release。
+- **关键改动文件**：
+  - 安装持久化、取消与多源切换：[core/bootstrap_manager.py](../core/bootstrap_manager.py)、[scripts/mirror_wheel_fetch.py](../scripts/mirror_wheel_fetch.py)、[scripts/setup_windows.ps1](../scripts/setup_windows.ps1)、[ui/settings_dialog.py](../ui/settings_dialog.py)、[main.py](../main.py)
+  - 外观字段（Schema 2 保持兼容）、质感/聚焦/动画控制与四语词典：[core/appearance.py](../core/appearance.py)、[ui/appearance.py](../ui/appearance.py)、[ui/acid_style.py](../ui/acid_style.py)、[ui/help_badge.py](../ui/help_badge.py)、[core/i18n.py](../core/i18n.py)、[core/i18n_catalog.py](../core/i18n_catalog.py)
+  - 托盘/任务栏图标、8 边缩放、可关闭通知、跑马灯、隐藏 `[A]` 与微动画联动：[ui/main_window.py](../ui/main_window.py)、[ui/spectrum_widget.py](../ui/spectrum_widget.py)、[ui/chroma_widget.py](../ui/chroma_widget.py)、[ui/mixer_widget.py](../ui/mixer_widget.py)、[ui/resource_widget.py](../ui/resource_widget.py)
+  - 磁盘滚动日志与版本配置：[core/logging.py](../core/logging.py)、[pyproject.toml](../pyproject.toml)、[scripts/installer.iss](../scripts/installer.iss)
+  - 自动化回归测试：[tests/test_ux_polish_bootstrap_tray_marquee.py](../tests/test_ux_polish_bootstrap_tray_marquee.py)、[tests/test_startup_help_bootstrap_fixes.py](../tests/test_startup_help_bootstrap_fixes.py)
+- **分支与工作区状态**：当前位于 `feat/v0.2.5-ux-bootstrap-tray-marquee`（基准提交 `72e5700296b22d3b74af1daf9f9d905464be2b0e`），完成交接更新后将统一提交并推送创建针对 `main` 的 PR；未触碰 `backup/*` 分支及 `*-backup` 标签，未提前打 Release Tag。
+- **已验证命令与实测结果（Linux offscreen 环境）**：
+  - 首次全量 `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short`：`1 failed, 204 passed, 6 skipped`——捕获 `SettingsDialog (en)` 中 `_theme_summary` 默认 `zh` 状态保留 `'Acid Telemetry · Light · 简体中文 (ZH)'` 的 CJK 泄漏；已在 [core/i18n_catalog.py](../core/i18n_catalog.py) 为全预设/明暗模式/语言组合补全翻译规则并验证 `5 passed`。
+  - 最终全量 `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short`：**`205 passed, 6 skipped in 82.45s`**（零 warning；6 skipped 为纯 Windows 平台/硬件用例）。
+  - `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python main.py --simulate --headless-smoke`：通过（exit 0）。
+  - `/home/antigravity/.venv_test/bin/python scripts/check_env.py --no-write`：通过（exit 0）。
+  - `/home/antigravity/.venv_test/bin/python scripts/probe_media_session.py --self-test-mock --json`：通过（exit 0，`reset_count=1`）。
+- **未在云端验证的项目（须 Windows 11 + RTX 5060 Ti 实机复测）**：
+  - Win11 任务栏图标（`WM_SETICON`）、系统托盘图标、关闭窗口进托盘与托盘右键完全退出。
+  - 无边框窗口（`>=940×620`）8 方向边缘拖拽调整大小与 DPI 居中。
+  - Microsoft YaHei UI 下「和弦名与级数」字距、顶部无重叠、2-Stem/进程跑马灯观感与可关闭横幅交互。
+  - 实网环境下点击设置「一键自动配置 AI + MIDI」测试切换设置页不断线、电池进度与速率、慢源自动切换、安装完一键重启生效与日志落盘。
+  - 目标机 WASAPI 音频捕获、GPU 分轨与音乐能量/高潮驱动遥测动画流畅度、PyInstaller/Inno Setup 安装包产物。
+- **Windows 目标机可复制复测命令**：
+  ```powershell
+  # 1. 在源码目录跑通本地非硬件/Windows测试并验证一键脚本语法与源测速模块
+  python -m pytest -q --tb=short
+  python scripts\mirror_wheel_fetch.py --self-test-pypi
+
+  # 2. 启动软件实机验收 GUI / 托盘 / 8 边缩放 / 一键安装持久化 / 磁盘日志
+  python main.py
+  # 日志目录位于 %LOCALAPPDATA%\ListenScope\logs\listenscope.log（或在「设置 -> 系统诊断 / 主题与外观」点击「打开日志目录」）
+  ```
+- **下一步**：推送 `feat/v0.2.5-ux-bootstrap-tray-marquee` 并创建合并到 `main` 的 PR；等待 GitHub Actions `tests.yml` 全绿，再请用户确认后合并 PR 并打 `v0.2.5` Tag 触发 Windows Release 构建。
+
+## 历史交接：`v0.2.4` 发布（PR #28 `d7f186f` + Windows 跨平台测试与版本收口 `4b9df05` · Tag `v0.2.4`）
 
 - **目标与结果**：根据 `v0.2.2` 首轮实机反馈完成三项体验与初始化修复并合并 [PR #28](https://github.com/Ceph-learner/ListenScope/pull/28)（`d7f186f`）；`v0.2.3`（Tag 保留未发 Release）Windows 构建发现 [`test_run_external_python_capture_output_and_frozen_filtering`](../tests/test_startup_help_bootstrap_fixes.py) 未在 Windows 下 Mock `ctypes.WinDLL` + `subprocess.Popen`（触发 `WinError 193`，其余 205 项均通过），于 `4b9df05` 修复该测试 Mock 并顺延版本至 `0.2.4`，双端 CI 与 [GitHub Release `v0.2.4`](https://github.com/Ceph-learner/ListenScope/releases/tag/v0.2.4) 均一次通过。
   1. **严格仅在 `[?]` 问号徽标处悬浮弹出说明**：新增应用级事件过滤器 `_TooltipOnlyOnHelpBadgeFilter`（[`install_tooltip_guard`](../ui/help_badge.py)）统一拦截所有非 `HelpBadge` 控件的 `QEvent.Type.ToolTip`（调用 `QToolTip.hideText()` 并吞掉事件），清理 `ui/` 普通控件 `.setToolTip(...)`（仅 `help_badge.py` 与 `chroma_widget.py` 的 `chord_progression_lbl` 内部契约属性保留 `.setToolTip(`，且后者运行时弹窗已被过滤器阻断）。

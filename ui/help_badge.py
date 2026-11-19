@@ -25,6 +25,7 @@ class _HelpTheme:
 
 _HELP_MODE_ENABLED: bool = True
 _FOCUS_ANIMATIONS_ENABLED: bool = True
+_FOCUS_STYLE: str = "sleek"
 _CURRENT_LANGUAGE: str = "zh"
 _CURRENT_THEME: _HelpTheme = _HelpTheme()
 _LIVE_BADGES: "weakref.WeakSet[HelpBadge]" = weakref.WeakSet()
@@ -38,6 +39,24 @@ def is_help_mode_enabled() -> bool:
 
 def is_focus_animations_enabled() -> bool:
     return _FOCUS_ANIMATIONS_ENABLED
+
+
+def get_focus_ring_style() -> str:
+    return _FOCUS_STYLE
+
+
+def set_focus_ring_style(style: str) -> None:
+    """Set focus ring visual mode ('sleek', 'brackets', 'underline') across live windows."""
+    global _FOCUS_STYLE
+    norm = str(style or "sleek").strip().lower()
+    if norm not in ("sleek", "brackets", "underline"):
+        norm = "sleek"
+    _FOCUS_STYLE = norm
+    for anim in list(_LIVE_ANIMATORS):
+        try:
+            anim.set_style(norm)
+        except RuntimeError:
+            pass
 
 
 def set_help_mode_enabled(enabled: bool) -> None:
@@ -482,7 +501,7 @@ class HelpBadge(QtWidgets.QAbstractButton):
 
 
 class _FocusOverlay(QtWidgets.QWidget):
-    """Transparent click-through overlay that draws a crisp animated focus/hover outline."""
+    """Transparent click-through overlay that draws a sleek animated focus/hover highlight."""
 
     def __init__(self, parent: QtWidgets.QWidget) -> None:
         super().__init__(parent)
@@ -493,7 +512,13 @@ class _FocusOverlay(QtWidgets.QWidget):
         self._alpha: float = 0.0
         self._accent = QtGui.QColor(_CURRENT_THEME.accent)
         self._is_acid: bool = _CURRENT_THEME.is_acid
+        self._style: str = _FOCUS_STYLE
         self.hide()
+
+    def set_style(self, style: str) -> None:
+        self._style = style
+        if self.isVisible():
+            self.update()
 
     def set_state(self, rect: QtCore.QRectF, alpha: float) -> None:
         parent = self.parentWidget()
@@ -528,33 +553,45 @@ class _FocusOverlay(QtWidgets.QWidget):
             return
         p = QtGui.QPainter(self)
         p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-        r = self._rect.adjusted(-1.0, -1.0, 1.0, 1.0)
-        radius = 2.0 if self._is_acid else 6.0
+        r = self._rect.adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = 1.5 if self._is_acid else 5.0
 
-        # Outer subtle halo
-        halo = QtGui.QColor(self._accent)
-        halo.setAlpha(int(48 * self._alpha))
-        p.setPen(QtGui.QPen(halo, 3.0))
-        p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(r, radius, radius)
+        if self._style == "underline":
+            rail = QtGui.QColor(self._accent)
+            rail.setAlpha(int(215 * self._alpha))
+            p.setPen(QtGui.QPen(rail, 2.0, QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenCapStyle.SquareCap))
+            inset = min(6.0, r.width() * 0.12)
+            y = r.bottom() - 0.5
+            p.drawLine(QtCore.QPointF(r.left() + inset, y), QtCore.QPointF(r.right() - inset, y))
+        elif self._style == "brackets":
+            tick = max(4.0, min(7.0, min(r.width(), r.height()) * 0.28))
+            col = QtGui.QColor(self._accent)
+            col.setAlpha(int(215 * self._alpha))
+            p.setPen(QtGui.QPen(col, 1.5, QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenCapStyle.SquareCap))
+            br = r.adjusted(-1.5, -1.5, 1.5, 1.5)
+            # Four minimal crisp corner calipers
+            p.drawLine(QtCore.QPointF(br.left(), br.top()), QtCore.QPointF(br.left() + tick, br.top()))
+            p.drawLine(QtCore.QPointF(br.left(), br.top()), QtCore.QPointF(br.left(), br.top() + tick))
+            p.drawLine(QtCore.QPointF(br.right(), br.top()), QtCore.QPointF(br.right() - tick, br.top()))
+            p.drawLine(QtCore.QPointF(br.right(), br.top()), QtCore.QPointF(br.right(), br.top() + tick))
+            p.drawLine(QtCore.QPointF(br.left(), br.bottom()), QtCore.QPointF(br.left() + tick, br.bottom()))
+            p.drawLine(QtCore.QPointF(br.left(), br.bottom()), QtCore.QPointF(br.left(), br.bottom() - tick))
+            p.drawLine(QtCore.QPointF(br.right(), br.bottom()), QtCore.QPointF(br.right() - tick, br.bottom()))
+            p.drawLine(QtCore.QPointF(br.right(), br.bottom()), QtCore.QPointF(br.right(), br.bottom() - tick))
+        else:
+            # 'sleek': subtle hairline edge + delicate micro-tint, zero bulky outer box
+            wash = QtGui.QColor(self._accent)
+            wash.setAlpha(int(18 * self._alpha))
+            edge = QtGui.QColor(self._accent)
+            edge.setAlpha(int(175 * self._alpha))
+            p.setBrush(wash)
+            p.setPen(QtGui.QPen(edge, 1.25))
+            p.drawRoundedRect(r, radius, radius)
 
-        # Crisp inner focus edge
-        edge = QtGui.QColor(self._accent)
-        edge.setAlpha(int(185 * self._alpha))
-        p.setPen(QtGui.QPen(edge, 1.25))
-        p.drawRoundedRect(r, radius, radius)
-
-        # Acid corner ticks for graphic realism feel
-        if self._is_acid and r.width() >= 28 and r.height() >= 20:
-            tick = 4.0
-            tick_col = QtGui.QColor(self._accent)
-            tick_col.setAlpha(int(235 * self._alpha))
-            p.setPen(QtGui.QPen(tick_col, 1.8))
-            # Top-left & bottom-right micro brackets
-            p.drawLine(QtCore.QPointF(r.left(), r.top()), QtCore.QPointF(r.left() + tick, r.top()))
-            p.drawLine(QtCore.QPointF(r.left(), r.top()), QtCore.QPointF(r.left(), r.top() + tick))
-            p.drawLine(QtCore.QPointF(r.right(), r.bottom()), QtCore.QPointF(r.right() - tick, r.bottom()))
-            p.drawLine(QtCore.QPointF(r.right(), r.bottom()), QtCore.QPointF(r.right(), r.bottom() - tick))
+            glint = QtGui.QColor(self._accent)
+            glint.setAlpha(int(220 * self._alpha))
+            p.setPen(QtGui.QPen(glint, 1.6))
+            p.drawLine(QtCore.QPointF(r.left() + radius, r.top()), QtCore.QPointF(r.left() + min(18.0, r.width() * 0.35), r.top()))
         p.end()
 
 
@@ -610,12 +647,12 @@ class FocusRingAnimator(QtCore.QObject):
         self._alpha: float = 0.0
 
         self._anim = QtCore.QVariantAnimation(self)
-        self._anim.setDuration(135)
+        self._anim.setDuration(115)
         self._anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
         self._anim.valueChanged.connect(self._on_step)
 
         self._fade_anim = QtCore.QVariantAnimation(self)
-        self._fade_anim.setDuration(130)
+        self._fade_anim.setDuration(115)
         self._fade_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
         self._fade_anim.valueChanged.connect(self._on_fade)
 
@@ -633,6 +670,9 @@ class FocusRingAnimator(QtCore.QObject):
         self._enabled = bool(enabled)
         if not self._enabled:
             self._reset_focus_state()
+
+    def set_style(self, style: str) -> None:
+        self._overlay.set_style(style)
 
     def set_accent(self, accent: str, *, is_acid: bool) -> None:
         self._overlay.set_accent(accent, is_acid=is_acid)
@@ -655,16 +695,30 @@ class FocusRingAnimator(QtCore.QObject):
     def _focus_widget(self, w: QtWidgets.QWidget) -> None:
         if not self._enabled or not self._root.isVisible() or not w.isVisible() or not w.isEnabled():
             return
-        if w.objectName() in ("winCloseBtn", "winMinBtn", "winMaxBtn", "windowCtrlBtn", "windowCloseBtn"):
+        if w.objectName() in (
+            "winCloseBtn",
+            "winMinBtn",
+            "winMaxBtn",
+            "windowCtrlBtn",
+            "windowCloseBtn",
+            "acidStaticLockBtn",
+            "noticeDismissBtn",
+        ):
             return
-        target_rect = self._widget_rect_in_root(w)
+        if isinstance(w, QtWidgets.QCheckBox):
+            # Avoid boxing wide checkbox label text; subtly underline indicator+label instead if small
+            target_rect = self._widget_rect_in_root(w)
+            if target_rect.width() > 260:
+                return
+        else:
+            target_rect = self._widget_rect_in_root(w)
         if target_rect.width() < 16 or target_rect.height() < 14:
             return
         self._current_target = w
         if self._overlay.isVisible() and not self._overlay._rect.isEmpty():
             self._start_rect = QtCore.QRectF(self._overlay._rect)
         else:
-            self._start_rect = target_rect.adjusted(2.0, 2.0, -2.0, -2.0)
+            self._start_rect = target_rect.adjusted(1.5, 1.5, -1.5, -1.5)
         self._end_rect = target_rect
 
         self._anim.stop()

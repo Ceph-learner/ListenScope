@@ -7,11 +7,137 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+import sys
 import threading
-from typing import Optional
+from typing import Any, Optional
 
 from .models import AIJobRequest, AIJobResult
+from .paths import default_work_dir
+
+_FILE_HANDLER_LOCK = threading.Lock()
+_ACTIVE_FILE_HANDLER: Optional[RotatingFileHandler] = None
+_ACTIVE_LOG_DIR: Optional[Path] = None
+_PREV_QT_MSG_HANDLER: Any = None
+_QT_HANDLER_INSTALLED = False
+
+
+def resolve_log_dir(work_dir: Optional[Path | str] = None) -> Path:
+    """Return bounded log directory (`work_dir/logs` or sibling `logs` avoiding `C:` when app root writable)."""
+    base = Path(work_dir) if work_dir is not None else default_work_dir()
+    if work_dir is None or base == Path("workspace_outputs"):
+        return base.parent / "logs" if base.name == "workspace_outputs" else base / "logs"
+    return base / "logs"
+
+
+def active_log_dir() -> Path:
+    if _ACTIVE_LOG_DIR is not None:
+        return _ACTIVE_LOG_DIR
+    return resolve_log_dir()
+
+
+def setup_application_file_logging(log_dir: Optional[Path | str] = None) -> Path:
+    """Install bounded UTF-8 rotating file logging (3MB x 4) and exception/Qt warning capture."""
+    global _ACTIVE_FILE_HANDLER, _ACTIVE_LOG_DIR, _PREV_QT_MSG_HANDLER, _QT_HANDLER_INSTALLED
+    target_dir = Path(log_dir) if log_dir is not None else resolve_log_dir()
+    with _FILE_HANDLER_LOCK:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        _ACTIVE_LOG_DIR = target_dir
+        log_file = target_dir / "listenscope.log"
+        root_logger = logging.getLogger()
+
+        if _ACTIVE_FILE_HANDLER is not None:
+            try:
+                existing_base = Path(_ACTIVE_FILE_HANDLER.baseFilename).resolve()
+            except Exception:
+                existing_base = None
+            if existing_base == log_file.resolve():
+                return log_file
+            try:
+                root_logger.removeHandler(_ACTIVE_FILE_HANDLER)
+                _ACTIVE_FILE_HANDLER.close()
+            except Exception:
+                pass
+            _ACTIVE_FILE_HANDLER = None
+
+        handler = RotatingFileHandler(
+            log_file,
+            maxBytes=3 * 1024 * 1024,
+            backupCount=4,
+            encoding="utf-8",
+            delay=True,
+        )
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] [%(threadName)s] %(name)s: %(message)s")
+        )
+        root_logger.addHandler(handler)
+        if root_logger.level > logging.INFO:
+            root_logger.setLevel(logging.INFO)
+        _ACTIVE_FILE_HANDLER = handler
+
+        # Capture unhandled main-thread / worker-thread exceptions cleanly into logs
+        app_logger = logging.getLogger("listenscope.runtime")
+        orig_excepthook = getattr(sys, "_ls_orig_excepthook", sys.excepthook)
+        if not hasattr(sys, "_ls_orig_excepthook"):
+            setattr(sys, "_ls_orig_excepthook", orig_excepthook)
+
+        def _ls_excepthook(exc_type, exc_value, exc_tb) -> None:
+            app_logger.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
+            orig_excepthook(exc_type, exc_value, exc_tb)
+
+        sys.excepthook = _ls_excepthook
+
+        if hasattr(threading, "excepthook"):
+            orig_thread_hook = getattr(threading, "_ls_orig_excepthook", threading.excepthook)
+            if not hasattr(threading, "_ls_orig_excepthook"):
+                setattr(threading, "_ls_orig_excepthook", orig_thread_hook)
+
+            def _ls_thread_hook(args) -> None:
+                app_logger.error(
+                    "Unhandled thread exception in %s",
+                    getattr(args, "thread", None),
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+                orig_thread_hook(args)
+
+            threading.excepthook = _ls_thread_hook
+
+        if not _QT_HANDLER_INSTALLED:
+            try:
+                from PySide6 import QtCore
+
+                def _qt_msg_handler(mode, _ctx, message) -> None:
+                    msg_txt = str(message or "").strip()
+                    if not msg_txt:
+                        return
+                    qt_logger = logging.getLogger("listenscope.qt")
+                    if mode == QtCore.QtMsgType.QtCriticalMsg or mode == QtCore.QtMsgType.QtFatalMsg:
+                        qt_logger.error("%s", msg_txt)
+                    elif mode == QtCore.QtMsgType.QtWarningMsg:
+                        qt_logger.warning("%s", msg_txt)
+
+                _PREV_QT_MSG_HANDLER = QtCore.qInstallMessageHandler(_qt_msg_handler)
+                _QT_HANDLER_INSTALLED = True
+            except Exception:
+                pass
+
+        return log_file
+
+
+def teardown_application_file_logging() -> None:
+    """Flush and close the active rotating log handler cleanly during shutdown."""
+    global _ACTIVE_FILE_HANDLER
+    with _FILE_HANDLER_LOCK:
+        if _ACTIVE_FILE_HANDLER is not None:
+            try:
+                logging.getLogger().removeHandler(_ACTIVE_FILE_HANDLER)
+                _ACTIVE_FILE_HANDLER.flush()
+                _ACTIVE_FILE_HANDLER.close()
+            except Exception:
+                pass
+            _ACTIVE_FILE_HANDLER = None
 
 
 class BoundedMemoryLogHandler(logging.Handler):

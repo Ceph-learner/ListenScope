@@ -57,9 +57,16 @@ from audio.system_loopback import (
     SyntheticSimulationBackend,
     WasapiSystemLoopbackBackend,
 )
+from core.bootstrap_manager import get_bootstrap_manager
 from core.config import AIConfig, AnalysisConfig, AudioConfig, ResourceLimits
 from core.diagnostics import export_diagnostic_bundle
-from core.logging import BoundedMemoryLogHandler, PerformanceLogger
+from core.logging import (
+    BoundedMemoryLogHandler,
+    PerformanceLogger,
+    resolve_log_dir,
+    setup_application_file_logging,
+    teardown_application_file_logging,
+)
 from core.media_session import (
     MediaSessionSnapshot,
     TrackChangeTracker,
@@ -89,7 +96,7 @@ from core.system_probe import (
     scan_local_pytorch_installations,
 )
 from streaming.live_separator import ExperimentalLiveSeparator
-from ui.main_window import ListenScopeMainWindow
+from ui.main_window import ListenScopeMainWindow, _load_app_icon
 
 
 def _discover_ai_python_executable(*, allow_broad_scan: bool = True) -> Optional[str]:
@@ -229,11 +236,15 @@ class ListenScopeController:
                 midi_python_executable = _discover_midi_python_executable()
         self._midi_python_executable: str = str(midi_python_executable or "").strip()
 
-        # Bounded diagnostic logging
+        # Rotating file + bounded diagnostic logging
+        setup_application_file_logging(resolve_log_dir(self.work_dir))
         self.log_handler = BoundedMemoryLogHandler(maxlen=500)
         self.log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
         logging.getLogger().addHandler(self.log_handler)
         logging.getLogger().setLevel(logging.INFO)
+        self._telem_energy: float = 0.0
+        self._telem_avg: float = 0.08
+        self._telem_climax: float = 0.0
 
         self.audio_config = AudioConfig()
         self.analysis_config = AnalysisConfig()
@@ -482,6 +493,8 @@ class ListenScopeController:
         w.chroma_widget.transpose_semitones_changed.connect(self._on_transpose_semitones_changed)
         w.mixer_widget.metronome_overlay_toggled.connect(self._on_metronome_overlay_toggled)
         w.resource_panel.export_diagnostics_requested.connect(self._on_export_diagnostic_bundle)
+        w.restart_requested.connect(self.restart_application)
+        get_bootstrap_manager().completed.connect(self._on_bootstrap_completed)
 
     def refresh_sources(self) -> None:
         procs = enumerate_audio_processes(include_all_running=False)
@@ -1697,6 +1710,63 @@ class ListenScopeController:
             self._practice_dirty = True
             self.window.show_banner_message(f"⚠️ 外观已生效，但写入本地设置失败: {exc}")
 
+    @QtCore.Slot(bool, str, str, str)
+    def _on_bootstrap_completed(self, ok: bool, message: str, ai_py: str, midi_py: str) -> None:
+        if not ok:
+            return
+        changed = False
+        if ai_py:
+            self.ai_job_manager.ai_python_executable = ai_py
+            self.live_separator.ai_python_executable = ai_py
+            self.window._ai_python_executable = ai_py
+            changed = True
+        if midi_py:
+            self._midi_python_executable = midi_py
+            self.window._midi_python_executable = midi_py
+            changed = True
+        if changed:
+            try:
+                save_settings(self._build_persisted_settings(), self._settings_path)
+                self._practice_dirty = False
+            except OSError as exc:
+                self._practice_dirty = True
+                logging.getLogger(__name__).warning("Failed to save settings after bootstrap: %s", exc)
+            if ai_py and not self.use_mock_ai_for_demo:
+                self._schedule_external_ai_probe(ai_py)
+        self.window.show_banner_message(
+            "✅ 一键环境配置已完成并自动保存路径。若未立即刷新或刚安装 Python，可在设置页点击「立即重启」或手动重启应用。",
+            tone="ok",
+        )
+
+    def restart_application(self) -> None:
+        """Persist state, cleanly shut down workers/devices, spawn fresh process, and exit."""
+        try:
+            save_settings(self._build_persisted_settings(), self._settings_path)
+        except Exception:
+            pass
+        cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, *sys.argv]
+        self.shutdown()
+        try:
+            spawn_kw: dict[str, Any] = {"cwd": str(self.work_dir.parent if self.work_dir.name == "workspace_outputs" else os.getcwd())}
+            if sys.platform == "win32":
+                spawn_kw["creationflags"] = (
+                    getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+                )
+            else:
+                spawn_kw["start_new_session"] = True
+            subprocess.Popen(cmd, **spawn_kw)
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Failed to relaunch ListenScope: %s", exc)
+        if hasattr(self, "window") and self.window is not None:
+            try:
+                self.window.force_quit()
+            except Exception:
+                pass
+        app = QtWidgets.QApplication.instance()
+        if isinstance(app, QtWidgets.QApplication):
+            app.quit()
+
     def _on_settings_applied(
         self,
         limits: ResourceLimits,
@@ -1874,6 +1944,19 @@ class ListenScopeController:
                 else None
             )
             self.window.update_analysis_snapshot(asnap, spectrogram=spec_hist, chroma_history=chroma_hist)
+            raw_e = max(0.0, min(1.0, (float(asnap.rms_dbfs) + 52.0) / 46.0)) if asnap.rms_dbfs > -68.0 else 0.0
+            raw_p = max(0.0, min(1.0, (float(asnap.peak_dbfs) + 38.0) / 36.0)) if asnap.peak_dbfs > -60.0 else 0.0
+            self._telem_energy = 0.55 * self._telem_energy + 0.45 * raw_e
+            self._telem_avg = 0.96 * self._telem_avg + 0.04 * self._telem_energy
+            surge = max(0.0, (self._telem_energy - self._telem_avg) * 2.8)
+            target_climax = max(0.0, min(1.0, 0.55 * surge + 0.45 * max(0.0, raw_p - 0.35)))
+            self._telem_climax = 0.60 * self._telem_climax + 0.40 * target_climax
+            self.window.update_music_telemetry(self._telem_energy, self._telem_climax)
+        else:
+            self._telem_energy *= 0.88
+            self._telem_climax *= 0.85
+            if self._tick_counter % 2 == 0:
+                self.window.update_music_telemetry(self._telem_energy, self._telem_climax)
 
         # Update capture stats, 120s history overview waveform & resource monitor on tick 1 and every ~4 ticks (~200ms)
         if self._tick_counter == 1 or self._tick_counter % 4 == 0:
@@ -1906,6 +1989,10 @@ class ListenScopeController:
             return
         self._shutdown_done = True
         self._probe_seq += 1
+        try:
+            get_bootstrap_manager().completed.disconnect(self._on_bootstrap_completed)
+        except (RuntimeError, TypeError):
+            pass
         if getattr(self, "_practice_dirty", False) and hasattr(self, "window") and self.window is not None:
             try:
                 save_settings(self._build_persisted_settings(), self._settings_path)
@@ -1926,6 +2013,7 @@ class ListenScopeController:
         self.ai_job_manager.shutdown()
         self.resource_manager.close()
         logging.getLogger().removeHandler(self.log_handler)
+        teardown_application_file_logging()
         if hasattr(self, "window") and self.window is not None:
             self.window.set_closing_handler(None)
             self.window.deleteLater()
@@ -1949,7 +2037,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         set_app_id.restype = ctypes.c_long
         set_app_id("ListenScope.Desktop")
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    app.setWindowIcon(QtGui.QIcon(str(get_bundle_root() / "ui" / "assets" / "listenscope.ico")))
+    app_icon = _load_app_icon()
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
     ctrl = ListenScopeController(
         use_mock_ai_for_demo=args.simulate,
         ai_python_executable=args.ai_python,
@@ -1961,7 +2051,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     ctrl.window.show()
     if args.headless_smoke:
-        QtCore.QTimer.singleShot(300, ctrl.window.close)
+        QtCore.QTimer.singleShot(300, ctrl.window.force_quit)
     ret = app.exec()
     ctrl.shutdown()
     del ctrl

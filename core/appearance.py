@@ -38,6 +38,16 @@ LAYOUTS = {
     "split": ("B · 双栏扒谱（默认）", "左侧切换音轨，右侧查看分析，历史波形在下方。"),
     "practice": ("C · 练习优先", "历史波形置顶并放大，下方并排显示分析和音轨。"),
 }
+FOCUS_STYLES = {
+    "sleek": "极简流光框 (推荐)",
+    "brackets": "精密四角卡标",
+    "underline": "底部高亮轨",
+}
+UI_SURFACE_STYLES = {
+    "tactile": "微立体质感边缘 (推荐)",
+    "flat": "极简平面锐利",
+    "beveled": "硬朗机械棱边",
+}
 
 
 def _choice(raw, choices, default):
@@ -86,6 +96,11 @@ class Appearance:
     frameless: bool = True
     help_mode: bool = True
     focus_animations: bool = True
+    telemetry_animation_strength: int = 70
+    music_reactive_animations: bool = True
+    focus_style: str = "sleek"
+    ui_surface_style: str = "tactile"
+    close_to_tray: bool = True
 
     @classmethod
     def from_mapping(cls, raw):
@@ -102,6 +117,10 @@ class Appearance:
         help_mode = raw_help_mode if isinstance(raw_help_mode, bool) else True
         raw_focus_anim = raw.get("focus_animations")
         focus_animations = raw_focus_anim if isinstance(raw_focus_anim, bool) else True
+        raw_music_react = raw.get("music_reactive_animations")
+        music_reactive_animations = raw_music_react if isinstance(raw_music_react, bool) else True
+        raw_close_tray = raw.get("close_to_tray")
+        close_to_tray = raw_close_tray if isinstance(raw_close_tray, bool) else True
         return cls(
             preset=preset,
             font_size=_number(raw.get("font_size"), 11, 20, 12),
@@ -121,6 +140,11 @@ class Appearance:
             frameless=frameless,
             help_mode=help_mode,
             focus_animations=focus_animations,
+            telemetry_animation_strength=_number(raw.get("telemetry_animation_strength"), 0, 100, 70),
+            music_reactive_animations=music_reactive_animations,
+            focus_style=_choice(raw.get("focus_style"), FOCUS_STYLES, "sleek"),
+            ui_surface_style=_choice(raw.get("ui_surface_style"), UI_SURFACE_STYLES, "tactile"),
+            close_to_tray=close_to_tray,
         )
 
     def resolve_theme_mode(self, *, system_is_dark: bool | None = None) -> str:

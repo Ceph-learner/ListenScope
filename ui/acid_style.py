@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -190,9 +191,10 @@ ACID_PALETTES: dict[str, AcidPalette] = {
     ),
 }
 
-_FONT_SANS = '"Segoe UI", "Microsoft YaHei UI", "Roboto", "Noto Sans CJK SC", "DejaVu Sans", sans-serif'
-_FONT_DISPLAY = '"Segoe UI", "Roboto Condensed", "Microsoft YaHei UI", "Noto Sans CJK SC", "DejaVu Sans", sans-serif'
-_FONT_MONO = '"Cascadia Code", "Consolas", "Liberation Mono", "DejaVu Sans Mono", "Noto Sans CJK SC", monospace'
+_FONT_SANS = '"Segoe UI", "Microsoft YaHei UI", "Malgun Gothic", "Yu Gothic UI", "Noto Sans CJK SC", "DejaVu Sans", sans-serif'
+_FONT_DISPLAY = '"Segoe UI", "Microsoft YaHei UI", "Malgun Gothic", "Yu Gothic UI", "Noto Sans CJK SC", "DejaVu Sans", sans-serif'
+_FONT_MONO = '"Cascadia Code", "Consolas", "Microsoft YaHei UI", "Malgun Gothic", "Yu Gothic UI", "DejaVu Sans Mono", monospace'
+_FONT_UI_CJK = '"Segoe UI", "Microsoft YaHei UI", "Malgun Gothic", "Yu Gothic UI", "Cascadia Code", "Consolas", sans-serif'
 
 _LUT_CACHE: dict[tuple[str, str], np.ndarray] = {}
 
@@ -437,7 +439,7 @@ class AcidGraphicOverlay(QtWidgets.QWidget):
 
 
 class DotMatrixWidget(QtWidgets.QWidget):
-    """Five-pip hardware telemetry confidence indicator (e.g. ●●●●○)."""
+    """Five-pip telemetry pulse confidence indicator (遥测微动画点阵，支持音乐动态脉冲)."""
 
     def __init__(
         self,
@@ -450,6 +452,11 @@ class DotMatrixWidget(QtWidgets.QWidget):
         self._total = max(1, int(total))
         self._filled = max(0, min(self._total, int(filled)))
         self._color = QtGui.QColor(color)
+        self._pulse_phase: float = 0.0
+        self._energy: float = 0.0
+        self._climax: float = 0.0
+        self._strength: float = 0.70
+        self._locked: bool = False
         self.setFixedSize(self._total * 11 + 2, 12)
 
     @property
@@ -465,24 +472,565 @@ class DotMatrixWidget(QtWidgets.QWidget):
         self._color = col
         self.update()
 
+    def set_reactive_pulse(
+        self,
+        *,
+        energy: float,
+        climax: float,
+        strength: float,
+        phase: float,
+        locked: bool = False,
+    ) -> None:
+        self._energy = max(0.0, min(1.0, float(energy)))
+        self._climax = max(0.0, min(1.0, float(climax)))
+        self._strength = max(0.0, min(1.0, float(strength)))
+        self._pulse_phase = float(phase)
+        self._locked = bool(locked)
+        if self.isVisible():
+            self.update()
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        del event
         if not self.isVisible():
             return
         p = QtGui.QPainter(self)
         p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-        off_pen = QtGui.QColor(self._color)
-        off_pen.setAlpha(110)
+        eff_strength = 0.0 if self._locked else self._strength
+        amp = eff_strength * (0.25 + 0.55 * self._energy + 0.40 * self._climax)
         for i in range(self._total):
-            x = 2 + i * 11
-            y = 2
-            rect = QtCore.QRectF(x, y, 7.0, 7.0)
+            x = 2.0 + i * 11.0
+            y = 2.0
+            scale = 1.0
+            if i < self._filled and eff_strength > 0.02 and self._energy > 0.04:
+                wave = 0.5 + 0.5 * math.sin(self._pulse_phase * (1.4 + self._climax * 1.6) - i * 0.65)
+                scale = 0.88 + 0.24 * amp * wave
+            dia = 7.0 * scale
+            off = (7.0 - dia) * 0.5
+            rect = QtCore.QRectF(x + off, y + off, dia, dia)
             if i < self._filled:
-                p.setPen(QtGui.QPen(self._color, 1.1))
-                p.setBrush(self._color)
+                col = QtGui.QColor(self._color)
+                alpha = 210 + int(45 * min(1.0, amp))
+                col.setAlpha(min(255, alpha))
+                p.setPen(QtGui.QPen(col, 1.1))
+                p.setBrush(col)
             else:
-                p.setPen(QtGui.QPen(off_pen, 1.1))
+                off_pen = QtGui.QColor(self._color)
+                off_pen.setAlpha(95)
+                p.setPen(QtGui.QPen(off_pen, 1.05))
                 p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             p.drawEllipse(rect)
+        p.end()
+
+
+class TelemetryPulseStrip(QtWidgets.QWidget):
+    """Compact vertical segmented micro-pulse bars reacting to music dynamics and animation strength."""
+
+    def __init__(
+        self,
+        bar_count: int = 6,
+        color: str = "#00A878",
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._bars = max(3, int(bar_count))
+        self._color = QtGui.QColor(color)
+        self._track = QtGui.QColor(color)
+        self._track.setAlpha(45)
+        self._energy: float = 0.0
+        self._climax: float = 0.0
+        self._strength: float = 0.70
+        self._reactive: bool = True
+        self._locked: bool = False
+        self._phase: float = 0.0
+        self.setFixedSize(self._bars * 5 + 2, 14)
+
+    def set_theme_color(self, color: str) -> None:
+        self._color = QtGui.QColor(color)
+        self._track = QtGui.QColor(color)
+        self._track.setAlpha(42)
+        if self.isVisible():
+            self.update()
+
+    def set_telemetry(
+        self,
+        *,
+        energy: float,
+        climax: float,
+        strength: float,
+        reactive: bool,
+        locked: bool,
+        phase: float,
+    ) -> None:
+        self._energy = max(0.0, min(1.0, float(energy)))
+        self._climax = max(0.0, min(1.0, float(climax)))
+        self._strength = max(0.0, min(1.0, float(strength)))
+        self._reactive = bool(reactive)
+        self._locked = bool(locked)
+        self._phase = float(phase)
+        if self.isVisible():
+            self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        del event
+        if not self.isVisible():
+            return
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
+        eff = 0.0 if self._locked else self._strength
+        h_max = float(self.height() - 2)
+        base_level = 0.16 if eff <= 0.02 else (
+            (0.22 + 0.56 * self._energy + 0.28 * self._climax)
+            if self._reactive
+            else 0.42
+        )
+        for i in range(self._bars):
+            wave = 0.5 + 0.5 * math.sin(self._phase * (1.6 + self._climax * 2.2) + i * 0.9)
+            frac = max(0.14, min(1.0, base_level * (0.55 + 0.65 * wave * max(0.2, eff))))
+            if eff <= 0.02:
+                frac = 0.18
+            bh = max(2.0, h_max * frac)
+            x = 1 + i * 5
+            p.fillRect(QtCore.QRectF(x, 1.0, 3.0, h_max), self._track)
+            p.fillRect(QtCore.QRectF(x, 1.0 + (h_max - bh), 3.0, bh), self._color)
+        p.end()
+
+
+class SegmentedBatteryProgressBar(QtWidgets.QWidget):
+    """Segmented battery-cell progress gauge with inter-cell gaps and sweeping telemetry pulse."""
+
+    def __init__(
+        self,
+        cells: int = 16,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._cells = max(6, int(cells))
+        self._min = 0
+        self._max = 100
+        self._value = 0
+        self._text_visible = True
+        self._format = "%p%"
+        self._active = False
+        self._phase = 0.0
+        self._strength = 0.70
+        self._energy = 0.0
+        self._climax = 0.0
+        self._locked = False
+        self._accent = QtGui.QColor("#00A878")
+        self._accent_hi = QtGui.QColor("#77DCE4")
+        self._shell_bg = QtGui.QColor("#F8FAFC")
+        self._shell_border = QtGui.QColor("#090D14")
+        self._empty_cell = QtGui.QColor("#E2E8F0")
+        self._text_fg = QtGui.QColor("#090D14")
+        self._is_acid = True
+
+        self._anim_timer = QtCore.QTimer(self)
+        self._anim_timer.setInterval(55)
+        self._anim_timer.timeout.connect(self._on_tick)
+
+        self.setMinimumHeight(22)
+        self.setMaximumHeight(24)
+        self.setMinimumWidth(160)
+
+    def minimum(self) -> int:
+        return self._min
+
+    def maximum(self) -> int:
+        return self._max
+
+    def setRange(self, minimum: int, maximum: int) -> None:
+        self._min = int(minimum)
+        self._max = max(self._min + 1, int(maximum))
+        self.setValue(self._value)
+
+    def value(self) -> int:
+        return self._value
+
+    def setValue(self, val: int) -> None:
+        clamped = max(self._min, min(self._max, int(val)))
+        if clamped != self._value:
+            self._value = clamped
+            self.update()
+
+    def setTextVisible(self, visible: bool) -> None:
+        self._text_visible = bool(visible)
+        self.update()
+
+    def setFormat(self, fmt: str) -> None:
+        self._format = str(fmt or "%p%")
+        self.update()
+
+    def set_active(self, active: bool) -> None:
+        want = bool(active)
+        if want == self._active:
+            return
+        self._active = want
+        if want and not self._locked and self._strength > 0.02:
+            if not self._anim_timer.isActive():
+                self._anim_timer.start()
+        else:
+            self._anim_timer.stop()
+        self.update()
+
+    def set_theme_colors(
+        self,
+        *,
+        accent: str,
+        accent_hi: str,
+        shell_bg: str,
+        shell_border: str,
+        empty_cell: str,
+        text_fg: str,
+        is_acid: bool = True,
+    ) -> None:
+        self._accent = QtGui.QColor(accent)
+        self._accent_hi = QtGui.QColor(accent_hi)
+        self._shell_bg = QtGui.QColor(shell_bg)
+        self._shell_border = QtGui.QColor(shell_border)
+        self._empty_cell = QtGui.QColor(empty_cell)
+        self._text_fg = QtGui.QColor(text_fg)
+        self._is_acid = bool(is_acid)
+        self.update()
+
+    def set_telemetry_params(
+        self,
+        *,
+        strength: float,
+        energy: float = 0.0,
+        climax: float = 0.0,
+        locked: bool = False,
+    ) -> None:
+        self._strength = max(0.0, min(1.0, float(strength)))
+        self._energy = max(0.0, min(1.0, float(energy)))
+        self._climax = max(0.0, min(1.0, float(climax)))
+        self._locked = bool(locked)
+        if self._active and not self._locked and self._strength > 0.02:
+            if not self._anim_timer.isActive():
+                self._anim_timer.start()
+        elif not self._active or self._locked or self._strength <= 0.02:
+            self._anim_timer.stop()
+        if self.isVisible():
+            self.update()
+
+    def _on_tick(self) -> None:
+        if not self.isVisible() or not self._active or self._locked or self._strength <= 0.02:
+            return
+        step = 0.16 + 0.14 * self._strength + 0.14 * self._climax
+        self._phase = (self._phase + step) % max(1.0, float(self._cells))
+        self.update()
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        self._anim_timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        if self._active and not self._locked and self._strength > 0.02 and not self._anim_timer.isActive():
+            self._anim_timer.start()
+        super().showEvent(event)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        del event
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, not self._is_acid)
+
+        w = float(self.width())
+        h = float(self.height())
+        if w < 30 or h < 12:
+            p.end()
+            return
+
+        txt_w = 38.0 if self._text_visible else 0.0
+        cap_w = 4.0
+        body_rect = QtCore.QRectF(1.0, 2.0, max(12.0, w - txt_w - cap_w - 6.0), h - 4.0)
+        radius = 1.5 if self._is_acid else 4.0
+
+        # Outer battery body
+        p.setPen(QtGui.QPen(self._shell_border, 1.2))
+        p.setBrush(self._shell_bg)
+        p.drawRoundedRect(body_rect, radius, radius)
+
+        # Positive battery terminal nub
+        cap_h = max(6.0, body_rect.height() * 0.46)
+        cap_rect = QtCore.QRectF(
+            body_rect.right(),
+            body_rect.center().y() - cap_h * 0.5,
+            cap_w,
+            cap_h,
+        )
+        p.setBrush(self._shell_border)
+        p.drawRect(cap_rect)
+
+        # Inner segmented cells with clean 2.5px spacing
+        inner = body_rect.adjusted(3.0, 3.0, -3.0, -3.0)
+        gap = 2.5
+        cell_w = max(2.0, (inner.width() - gap * (self._cells - 1)) / self._cells)
+        ratio = max(0.0, min(1.0, (self._value - self._min) / max(1, self._max - self._min)))
+        filled_exact = ratio * self._cells
+        filled_full = int(filled_exact)
+
+        sweep_idx = self._phase if (self._active and not self._locked and self._strength > 0.02) else -1.0
+        for idx in range(self._cells):
+            cx = inner.left() + idx * (cell_w + gap)
+            crect = QtCore.QRectF(cx, inner.top(), cell_w, inner.height())
+            if idx < filled_full:
+                col = QtGui.QColor(self._accent)
+                if sweep_idx >= 0.0:
+                    dist = abs(idx - (sweep_idx % max(1, filled_full)))
+                    if dist < 1.5:
+                        k = (1.5 - dist) / 1.5 * self._strength
+                        col = QtGui.QColor(
+                            int(col.red() + (self._accent_hi.red() - col.red()) * k),
+                            int(col.green() + (self._accent_hi.green() - col.green()) * k),
+                            int(col.blue() + (self._accent_hi.blue() - col.blue()) * k),
+                        )
+                p.fillRect(crect, col)
+            elif idx == filled_full and self._active and not self._locked and self._strength > 0.02:
+                pulse_a = int(70 + 135 * (0.5 + 0.5 * math.sin(self._phase * 1.4)) * self._strength)
+                col = QtGui.QColor(self._accent)
+                col.setAlpha(pulse_a)
+                p.fillRect(crect, col)
+            else:
+                p.fillRect(crect, self._empty_cell)
+
+        if self._text_visible:
+            pct = int(round(ratio * 100))
+            txt = self._format.replace("%p", str(pct))
+            f = QtGui.QFont(self.font())
+            f.setBold(True)
+            f.setPixelSize(max(10, min(12, int(h * 0.55))))
+            p.setFont(f)
+            p.setPen(self._text_fg)
+            p.drawText(
+                QtCore.QRectF(cap_rect.right() + 4.0, 0.0, txt_w, h),
+                QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                txt,
+            )
+        p.end()
+
+
+class MarqueeLabel(QtWidgets.QLabel):
+    """Single-line label that scrolls smoothly at a moderate speed only when text overflows width."""
+
+    def __init__(self, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._offset: float = 0.0
+        self._pause_ticks: int = 28
+        self._gap_px: int = 44
+        self._speed_px_per_tick: float = 1.25  # ~35 px/s @ 35ms -> moderate, readable
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(35)
+        self._timer.timeout.connect(self._on_tick)
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        if text != self.text():
+            self._offset = 0.0
+            self._pause_ticks = 28
+        super().setText(text)
+        self._update_scroll_state()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._update_scroll_state()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._update_scroll_state()
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def _needs_scroll(self) -> bool:
+        if self.wordWrap() or not self.text():
+            return False
+        cr = self.contentsRect()
+        if cr.width() <= 16:
+            return False
+        return self.fontMetrics().horizontalAdvance(self.text()) > cr.width() + 2
+
+    def _update_scroll_state(self) -> None:
+        if self.isVisible() and self._needs_scroll():
+            if not self._timer.isActive():
+                self._timer.start()
+        else:
+            self._timer.stop()
+            if self._offset != 0.0:
+                self._offset = 0.0
+                self.update()
+
+    def _on_tick(self) -> None:
+        if not self.isVisible() or not self._needs_scroll():
+            self._timer.stop()
+            return
+        if self._pause_ticks > 0:
+            self._pause_ticks -= 1
+            return
+        text_w = self.fontMetrics().horizontalAdvance(self.text())
+        cycle = text_w + self._gap_px
+        self._offset += self._speed_px_per_tick
+        if self._offset >= cycle:
+            self._offset = 0.0
+            self._pause_ticks = 30
+        self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        if not self._needs_scroll():
+            super().paintEvent(event)
+            return
+        opt = QtWidgets.QStyleOption()
+        opt.initFrom(self)
+        p = QtGui.QPainter(self)
+        self.style().drawPrimitive(QtWidgets.QStyle.PrimitiveElement.PE_Widget, opt, p, self)
+        cr = self.contentsRect()
+        p.setClipRect(cr)
+        p.setFont(self.font())
+        p.setPen(self.palette().color(QtGui.QPalette.ColorRole.WindowText))
+        txt = self.text()
+        text_w = self.fontMetrics().horizontalAdvance(txt)
+        x = float(cr.left()) - self._offset
+        y_rect = QtCore.QRectF(x, float(cr.top()), float(text_w + 4), float(cr.height()))
+        p.drawText(y_rect, QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, txt)
+        second_x = x + text_w + self._gap_px
+        if second_x < cr.right():
+            p.drawText(
+                QtCore.QRectF(second_x, float(cr.top()), float(text_w + 4), float(cr.height())),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                txt,
+            )
+        p.end()
+
+
+class MarqueeComboBox(QtWidgets.QComboBox):
+    """ComboBox that smoothly scrolls overflowing current name & widens popup so items avoid '...'."""
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._offset: float = 0.0
+        self._pause_ticks: int = 28
+        self._gap_px: int = 40
+        self._speed_px_per_tick: float = 1.25  # ~35 px/s @ 35ms
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(35)
+        self._timer.timeout.connect(self._on_tick)
+        self.currentIndexChanged.connect(self._reset_scroll)
+        try:
+            self.view().setTextElideMode(QtCore.Qt.TextElideMode.ElideNone)
+        except Exception:
+            pass
+
+    def _reset_scroll(self, *_args) -> None:
+        self._offset = 0.0
+        self._pause_ticks = 28
+        self._update_scroll_state()
+
+    def _text_rect(self) -> QtCore.QRect:
+        opt = QtWidgets.QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        r = self.style().subControlRect(
+            QtWidgets.QStyle.ComplexControl.CC_ComboBox,
+            opt,
+            QtWidgets.QStyle.SubControl.SC_ComboBoxEditField,
+            self,
+        )
+        return r.adjusted(2, 0, -2, 0)
+
+    def _needs_scroll(self) -> bool:
+        txt = self.currentText()
+        if not txt:
+            return False
+        tr_rect = self._text_rect()
+        if tr_rect.width() <= 16:
+            return False
+        return self.fontMetrics().horizontalAdvance(txt) > tr_rect.width() + 2
+
+    def _update_scroll_state(self) -> None:
+        if self.isVisible() and self._needs_scroll():
+            if not self._timer.isActive():
+                self._timer.start()
+        else:
+            self._timer.stop()
+            if self._offset != 0.0:
+                self._offset = 0.0
+                self.update()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._update_scroll_state()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._update_scroll_state()
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def _on_tick(self) -> None:
+        if not self.isVisible() or not self._needs_scroll():
+            self._timer.stop()
+            return
+        if self._pause_ticks > 0:
+            self._pause_ticks -= 1
+            return
+        txt_w = self.fontMetrics().horizontalAdvance(self.currentText())
+        if txt_w <= 0:
+            return
+        cycle = txt_w + self._gap_px
+        self._offset += self._speed_px_per_tick
+        if self._offset >= cycle:
+            self._offset = 0.0
+            self._pause_ticks = 30
+        self.update()
+
+    def showPopup(self) -> None:  # type: ignore[override]
+        try:
+            view = self.view()
+            fm = view.fontMetrics()
+            max_w = self.width()
+            for i in range(self.count()):
+                w = fm.horizontalAdvance(self.itemText(i)) + 36
+                if w > max_w:
+                    max_w = w
+            view.setMinimumWidth(min(720, max_w))
+        except Exception:
+            pass
+        super().showPopup()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        if not self._needs_scroll():
+            super().paintEvent(event)
+            return
+        opt = QtWidgets.QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        opt.currentText = ""
+        p = QtWidgets.QStylePainter(self)
+        p.drawComplexControl(QtWidgets.QStyle.ComplexControl.CC_ComboBox, opt)
+
+        tr_rect = self._text_rect()
+        p.setClipRect(tr_rect)
+        p.setFont(self.font())
+        role = QtGui.QPalette.ColorRole.Text if self.isEnabled() else QtGui.QPalette.ColorRole.Disabled
+        color = self.palette().color(
+            QtGui.QPalette.ColorGroup.Active if self.isEnabled() else QtGui.QPalette.ColorGroup.Disabled,
+            QtGui.QPalette.ColorRole.Text,
+        )
+        del role
+        p.setPen(color)
+        txt = self.currentText()
+        txt_w = self.fontMetrics().horizontalAdvance(txt)
+        x = float(tr_rect.left()) - self._offset
+        p.drawText(
+            QtCore.QRectF(x, float(tr_rect.top()), float(txt_w + 4), float(tr_rect.height())),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            txt,
+        )
+        second_x = x + txt_w + self._gap_px
+        if second_x < tr_rect.right():
+            p.drawText(
+                QtCore.QRectF(second_x, float(tr_rect.top()), float(txt_w + 4), float(tr_rect.height())),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                txt,
+            )
         p.end()
 
 
@@ -514,29 +1062,37 @@ class HazardStripeBar(QtWidgets.QWidget):
 
 
 class AcidBarcodeFooter(QtWidgets.QWidget):
-    """High-contrast acid telemetry footer strip with stencil, [STATIC_LOCK] toggle, and barcode."""
+    """High-contrast acid telemetry footer strip with stencil, [STATIC_LOCK] toggle + help, and barcode."""
 
     static_lock_toggled = QtCore.Signal(bool)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        from ui.help_badge import HelpBadge
+
         self._bg = QtGui.QColor("#CEFF18")
         self._fg = QtGui.QColor("#090D10")
         self._locked = False
-        self.setFixedHeight(24)
+        self.setFixedHeight(26)
 
         row = QtWidgets.QHBoxLayout(self)
         row.setContentsMargins(12, 2, 114, 2)
-        row.setSpacing(8)
+        row.setSpacing(6)
         row.addStretch(1)
 
         self.lock_btn = QtWidgets.QPushButton("[STATIC_LOCK: OFF]")
         self.lock_btn.setObjectName("acidStaticLockBtn")
         self.lock_btn.setCheckable(True)
         self.lock_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.lock_btn.setFixedHeight(18)
+        self.lock_btn.setFixedHeight(19)
         self.lock_btn.toggled.connect(self._on_lock_btn_toggled)
+        self.lock_help = HelpBadge(
+            "静态锁定 (STATIC_LOCK) 与遥测微动画",
+            "• 右侧卡片上的跳动圆点、信号能量柱及电池分段条属于「遥测微动画」，开启音乐动态响应后会随音量与高潮实时变化。\n"
+            "• 点击 [STATIC_LOCK] 可立即冻结主屏幕实时频谱/和弦刷新与全部微动画，方便静态读谱或截图并进一步降低功耗。",
+        )
         row.addWidget(self.lock_btn)
+        row.addWidget(self.lock_help)
 
     def _on_lock_btn_toggled(self, checked: bool) -> None:
         self._locked = bool(checked)
@@ -587,7 +1143,7 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
             f_mono.setBold(True)
             f_mono.setPixelSize(10)
             p.setFont(f_mono)
-            raw = "LISTENSCOPE_V0.2.4 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
+            raw = "LISTENSCOPE_V0.2.5 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
             elided = QtGui.QFontMetrics(f_mono).elidedText(raw, QtCore.Qt.TextElideMode.ElideRight, avail_w)
             p.drawText(QtCore.QRect(text_left, 0, avail_w, h), QtCore.Qt.AlignmentFlag.AlignVCenter, elided)
 
@@ -610,14 +1166,29 @@ def _acid_asset_url(filename: str) -> str:
     return path.as_posix() if path.exists() else ""
 
 
+def _mix_hex(hex_a: str, hex_b: str, t: float) -> str:
+    """Linearly interpolate two hex colors (`#RRGGBB`) by weight `t` in [0, 1]."""
+    ca = QtGui.QColor(hex_a)
+    cb = QtGui.QColor(hex_b)
+    if not ca.isValid() or not cb.isValid():
+        return hex_a
+    w = max(0.0, min(1.0, float(t)))
+    r = int(round(ca.red() * (1.0 - w) + cb.red() * w))
+    g = int(round(ca.green() * (1.0 - w) + cb.green() * w))
+    b = int(round(ca.blue() * (1.0 - w) + cb.blue() * w))
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
 def _acid_controls_qss(
     p: AcidPalette,
     *,
     variant: str,
     base_px: int,
     mono_family: str,
+    cjk_family: str = _FONT_UI_CJK,
+    surface_style: str = "tactile",
 ) -> str:
-    """Dedicated flat v2 Acid Telemetry control QSS (zero 3D bevel, zero Glow, sharp 0px edges)."""
+    """Dedicated Acid Telemetry control QSS supporting tactile/beveled/flat edge finishes and balanced CJK fonts."""
     is_light = variant == "light"
     btn_px = max(10, base_px - 1)
     chev_down = _acid_asset_url("acid_chevron_down_light.svg" if is_light else "acid_chevron_down_dark.svg")
@@ -631,6 +1202,41 @@ def _acid_controls_qss(
     tab_sel_bg = "#090D14" if is_light else p.accent
     tab_sel_fg = "#FFFFFF" if is_light else p.text_inverse
     table_sel_fg = "#065F46" if is_light else p.accent
+
+    surf = surface_style if surface_style in ("tactile", "flat", "beveled") else "tactile"
+    if surf == "tactile":
+        rim_hi = "#FFFFFF" if is_light else _mix_hex(p.border_strong, "#FFFFFF", 0.34)
+        rim_lo = _mix_hex(p.border_strong, "#000000", 0.28)
+        btn_border = (
+            f"border-top: 1px solid {rim_hi};"
+            f" border-left: 1px solid {rim_hi};"
+            f" border-right: 1px solid {rim_lo};"
+            f" border-bottom: 2px solid {rim_lo};"
+        )
+        btn_pressed_border = (
+            f"border-top: 2px solid {rim_lo};"
+            f" border-left: 1px solid {rim_lo};"
+            f" border-right: 1px solid {rim_hi};"
+            f" border-bottom: 1px solid {rim_hi};"
+            f" padding: 5px 9px 3px 11px;"
+        )
+        primary_hi = _mix_hex(p.accent, "#FFFFFF", 0.42)
+        primary_lo = _mix_hex(p.accent, "#090D10", 0.38)
+        primary_border = (
+            f"border-top: 1px solid {primary_hi};"
+            f" border-left: 1px solid {primary_hi};"
+            f" border-right: 1px solid {primary_lo};"
+            f" border-bottom: 2px solid {primary_lo};"
+        )
+    elif surf == "beveled":
+        btn_border = f"border: 1px solid {p.border_strong}; border-bottom: 2px solid {p.border_strong};"
+        btn_pressed_border = f"border: 1px solid {p.accent}; padding: 5px 9px 3px 11px;"
+        primary_lo = _mix_hex(p.accent, "#090D10", 0.35)
+        primary_border = f"border: 1px solid {p.accent}; border-bottom: 2px solid {primary_lo};"
+    else:
+        btn_border = f"border: 1px solid {p.border_strong};"
+        btn_pressed_border = f"border: 1px solid {p.accent};"
+        primary_border = f"border: 1px solid {p.accent};"
 
     return f"""
 /* Acid Segmented Pill Track (Topbar Skin Switcher) */
@@ -646,9 +1252,10 @@ QPushButton#acidPillBtn {{
     border-radius: 0px;
     padding: 3px 9px;
     min-height: 18px;
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {max(10, base_px - 2)}px;
     font-weight: 700;
+    letter-spacing: 0px;
     outline: none;
 }}
 QPushButton#acidPillBtn:hover {{
@@ -661,17 +1268,18 @@ QPushButton#acidPillBtn:checked {{
     font-weight: 800;
 }}
 
-/* Global Zero-Bevel Flat Buttons & Action Rails */
+/* Crisp Tactile Action Rails & Buttons */
 QPushButton, QToolButton {{
     background-color: {p.bg_elevated};
     color: {p.text_primary};
-    border: 1px solid {p.border_strong};
+    {btn_border}
     border-radius: 0px;
     padding: 4px 10px;
     min-height: 20px;
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {btn_px}px;
     font-weight: 600;
+    letter-spacing: 0px;
     outline: none;
 }}
 QPushButton:hover:enabled {{
@@ -682,7 +1290,7 @@ QPushButton:hover:enabled {{
 QPushButton:pressed:enabled {{
     background-color: {p.bg_hover};
     color: {p.text_primary};
-    border-color: {p.accent};
+    {btn_pressed_border}
 }}
 QPushButton:checked {{
     background-color: {p.accent_soft};
@@ -693,14 +1301,14 @@ QPushButton:checked {{
 QPushButton:disabled {{
     background-color: {p.bg_elevated};
     color: {p.text_muted};
-    border-color: {p.border};
+    border: 1px solid {p.border};
 }}
 QPushButton#analysisAction:enabled,
 QPushButton#settingsSave:enabled,
 QPushButton#acidPrimaryBtn:enabled {{
     background-color: {p.accent};
     color: {p.text_inverse};
-    border: 1px solid {p.accent};
+    {primary_border}
     font-weight: 800;
 }}
 QPushButton#analysisAction:hover:enabled,
@@ -723,7 +1331,7 @@ QPushButton#settingsSave {{
 QPushButton#appearanceEntry:enabled {{
     background-color: {p.bg_elevated};
     color: {p.text_primary};
-    border: 1px solid {p.border_strong};
+    {btn_border}
     font-weight: 700;
 }}
 QPushButton#appearanceEntry:hover:enabled {{
@@ -733,7 +1341,7 @@ QPushButton#appearanceEntry:hover:enabled {{
 }}
 QPushButton#captureBtn:checked {{
     background-color: {p.accent};
-    border: 1px solid {p.accent};
+    {primary_border}
     color: {p.text_inverse};
     font-weight: 800;
 }}
@@ -746,10 +1354,11 @@ QPushButton#emergencyStopBtn {{
     background-color: {p.danger};
     color: #FFFFFF;
     border: 1px solid {p.danger};
+    border-bottom: 2px solid #9A0E22;
     border-radius: 0px;
     min-height: 20px;
     padding: 4px 12px;
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {btn_px}px;
     font-weight: 800;
     outline: none;
@@ -758,6 +1367,25 @@ QPushButton#emergencyStopBtn:hover {{
     background-color: #D91432;
     border-color: #FFFFFF;
     color: #FFFFFF;
+}}
+QPushButton#noticeDismissBtn {{
+    background-color: transparent;
+    color: {p.text_secondary};
+    border: 1px solid transparent;
+    border-radius: 0px;
+    padding: 0px;
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 20px;
+    max-height: 20px;
+    font-family: {mono_family};
+    font-size: {base_px}px;
+    font-weight: 800;
+}}
+QPushButton#noticeDismissBtn:hover {{
+    background-color: {p.bg_hover};
+    color: {p.text_primary};
+    border: 1px solid {p.border_strong};
 }}
 QPushButton#acidStaticLockBtn {{
     background-color: transparent;
@@ -887,8 +1515,9 @@ QLineEdit, QPlainTextEdit, QTextEdit {{
     border-radius: 0px;
     padding: 3px 7px;
     min-height: 20px;
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {btn_px}px;
+    letter-spacing: 0px;
     selection-background-color: {p.accent};
     selection-color: {p.text_inverse};
 }}
@@ -902,8 +1531,9 @@ QComboBox, QFontComboBox {{
     border-radius: 0px;
     padding: 3px 26px 3px 8px;
     min-height: 20px;
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {btn_px}px;
+    letter-spacing: 0px;
     outline: none;
 }}
 QComboBox:hover, QComboBox:on, QFontComboBox:hover {{
@@ -951,8 +1581,9 @@ QSpinBox, QDoubleSpinBox {{
     border-radius: 0px;
     padding: 3px 22px 3px 8px;
     min-height: 20px;
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {btn_px}px;
+    letter-spacing: 0px;
     outline: none;
     selection-background-color: {p.accent};
     selection-color: {p.text_inverse};
@@ -1106,9 +1737,10 @@ QTabBar::tab {{
     border-radius: 0px;
     padding: 6px 14px;
     margin-right: 2px;
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {btn_px}px;
     font-weight: 600;
+    letter-spacing: 0px;
     outline: none;
 }}
 QTabBar::tab:hover {{
@@ -1133,8 +1765,9 @@ QTableWidget {{
     gridline-color: {p.bg_elevated};
     selection-background-color: {p.bg_elevated};
     selection-color: {table_sel_fg};
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {btn_px}px;
+    letter-spacing: 0px;
     outline: 0;
 }}
 QHeaderView::section {{
@@ -1144,9 +1777,10 @@ QHeaderView::section {{
     border-bottom: 1px solid {p.border_strong};
     border-right: 1px solid {p.border};
     padding: 4px 8px;
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {max(10, base_px - 2)}px;
     font-weight: 800;
+    letter-spacing: 0px;
 }}
 QTableWidget#practiceTable {{
     background-color: {p.bg_panel};
@@ -1250,7 +1884,16 @@ def acid_stylesheet(appearance: Appearance, variant: str = "dark") -> str:
     sans_family = _FONT_SANS
     display_family = _FONT_DISPLAY
     mono_family = _FONT_MONO
-    controls_qss = _acid_controls_qss(p, variant=p.variant, base_px=base_px, mono_family=mono_family)
+    cjk_family = _FONT_UI_CJK
+    surface_style = getattr(appearance, "ui_surface_style", "tactile")
+    controls_qss = _acid_controls_qss(
+        p,
+        variant=p.variant,
+        base_px=base_px,
+        mono_family=mono_family,
+        cjk_family=cjk_family,
+        surface_style=surface_style,
+    )
     primary_tone_fg = "#065F46" if is_light else p.accent
     return f"""
 QMainWindow, QDialog {{
@@ -1325,9 +1968,10 @@ QGroupBox {{
     border-radius: 0px;
     margin-top: 10px;
     padding: 12px 10px 9px 10px;
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {mono_px}px;
     font-weight: 700;
+    letter-spacing: 0px;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
@@ -1445,8 +2089,41 @@ QLabel#statusBadge, QLabel#captureStatus, QLabel#aiStatusBadge, QLabel#bannerNot
     background-color: {p.bg_code};
     color: {p.text_primary};
     border: 1px solid {p.border_strong};
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {mono_px}px;
+    letter-spacing: 0px;
+}}
+QFrame#bannerNoticeBox {{
+    border-radius: 0px;
+    background-color: {p.bg_code};
+    border: 1px solid {p.border_strong};
+    border-left: 4px solid {p.accent_secondary};
+    padding: 1px 4px;
+}}
+QFrame#bannerNoticeBox[tone="ok"] {{
+    background-color: {p.status_ok_bg};
+    border: 1px solid {p.status_ok_bd};
+    border-left: 4px solid {p.accent};
+}}
+QFrame#bannerNoticeBox[tone="warn"] {{
+    background-color: {p.status_warn_bg};
+    border: 1px solid {p.status_warn_bd};
+    border-left: 4px solid {p.accent_secondary};
+}}
+QFrame#bannerNoticeBox[tone="error"] {{
+    background-color: {p.status_danger_bg};
+    border: 1px solid {p.status_danger_bd};
+    border-left: 4px solid {p.status_danger_bd};
+}}
+QFrame#bannerNoticeBox[tone="info"] {{
+    background-color: {p.bg_code};
+    border: 1px solid {p.border};
+    border-left: 4px solid {p.accent_secondary};
+}}
+QLabel#bannerNotice[inlineBanner="true"] {{
+    border: none;
+    background-color: transparent;
+    padding: 3px 6px;
 }}
 QLabel#bannerNotice {{
     border-left: 4px solid {p.accent_secondary};
@@ -1492,6 +2169,13 @@ QLabel#captureStatus[tone="info"] {{
 }}
 QLabel#bannerNotice[tone="info"] {{
     border-left: 4px solid {p.accent_secondary};
+}}
+QLabel#bannerNotice[inlineBanner="true"][tone="ok"],
+QLabel#bannerNotice[inlineBanner="true"][tone="warn"],
+QLabel#bannerNotice[inlineBanner="true"][tone="error"],
+QLabel#bannerNotice[inlineBanner="true"][tone="info"] {{
+    border: none;
+    background-color: transparent;
 }}
 QGroupBox#oomBanner {{
     background-color: {p.status_warn_bg};
@@ -1542,9 +2226,10 @@ QLabel#chromaWarnHero {{
 }}
 QLabel#chromaSubtle {{
     color: {p.text_primary};
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {mono_px}px;
     font-weight: 600;
+    letter-spacing: 0px;
 }}
 QLabel#chromaSubtle[tone="warn"] {{
     color: {p.accent_secondary};
@@ -1561,8 +2246,9 @@ QLabel#chromaProgression {{
     border-left: 3px solid {p.accent};
     border-radius: 0px;
     color: {p.text_primary};
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-weight: 600;
+    letter-spacing: 0px;
 }}
 QLabel#chromaTrackStatus {{
     padding: 4px 10px;
@@ -1570,8 +2256,9 @@ QLabel#chromaTrackStatus {{
     border: 1px solid {p.border};
     border-radius: 0px;
     color: {p.text_secondary};
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {mono_px}px;
+    letter-spacing: 0px;
 }}
 QLabel#chromaTrackStatus[tone="warn"] {{
     background-color: {p.status_warn_bg};
@@ -1690,9 +2377,10 @@ QPushButton#settingsNavButton {{
     text-align: left;
     padding: 7px 9px;
     color: {p.text_secondary};
-    font-family: {mono_family};
+    font-family: {cjk_family};
     font-size: {mono_px}px;
     font-weight: 600;
+    letter-spacing: 0px;
 }}
 QPushButton#settingsNavButton:hover {{
     background-color: {p.bg_elevated};
@@ -1747,6 +2435,10 @@ def apply_acid_plot_theme(
     is_history: bool = False,
 ) -> None:
     p = get_acid_palette(variant)
+    try:
+        plot.hideButtons()
+    except Exception:
+        pass
     bg = p.hist_plot_bg if is_history else p.plot_bg
     axis_col = p.hist_plot_axis if is_history else p.plot_axis
     title_col = p.dock_ink if is_history else p.text_primary

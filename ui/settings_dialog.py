@@ -15,9 +15,23 @@ from dataclasses import replace
 
 from PySide6 import QtCore, QtGui, QtSvg, QtWidgets
 
-from core.appearance import Appearance, LAYOUTS, PRESETS, THEME_MODES
+from core.appearance import (
+    Appearance,
+    FOCUS_STYLES,
+    LAYOUTS,
+    PRESETS,
+    THEME_MODES,
+    UI_SURFACE_STYLES,
+)
+from core.bootstrap_manager import (
+    clean_bootstrap_line,
+    decode_bootstrap_bytes,
+    discover_installed_runtime_pythons,
+    get_bootstrap_manager,
+)
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
 from core.i18n import LANGUAGES, translate_widget_tree
+from core.logging import active_log_dir
 from core.models import SystemHardwareReport
 from core.paths import (
     default_export_dir,
@@ -40,8 +54,9 @@ from core.system_probe import (
     scan_local_pytorch_installations,
 )
 from ui.appearance import detect_system_is_dark, set_widget_tone
-from ui.help_badge import HelpBadge, install_focus_animations, wrap_with_help
+from ui.help_badge import HelpBadge, install_focus_animations, set_focus_ring_style, wrap_with_help
 from ui.acid_style import (
+    SegmentedBatteryProgressBar,
     TelemetryHeader,
     acid_stylesheet,
     get_acid_palette,
@@ -51,29 +66,10 @@ from ui.acid_style import (
 GITHUB_REPO_URL = "https://github.com/Ceph-learner/ListenScope"
 GITHUB_ISSUES_URL = "https://github.com/Ceph-learner/ListenScope/issues"
 
-_ANSI_ESCAPE_RE = re.compile(
-    r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\[(?:\d{1,3};)*\d{1,3}m"
-)
-_PS_TILDE_LINE_RE = re.compile(r"^\|?\s*~+\s*$")
-
-
-def _decode_bootstrap_bytes(raw: bytes) -> str:
-    """Decode PowerShell/console subprocess output (UTF-8 first, CP936/GBK fallback)."""
-    for enc in ("utf-8", "cp936", "gbk"):
-        try:
-            return raw.decode(enc)
-        except (LookupError, UnicodeDecodeError):
-            continue
-    return raw.decode("utf-8", errors="replace")
-
-
-def _clean_bootstrap_line(text: str) -> str:
-    """Strip VT100/ANSI escapes and PowerShell diagnostic tilde underlines."""
-    cleaned = _ANSI_ESCAPE_RE.sub("", str(text)).replace("\x1b", "").replace("\r", "")
-    cleaned = re.sub(r"^\s*\|\s*", "", cleaned).strip()
-    if not cleaned or _PS_TILDE_LINE_RE.match(cleaned):
-        return ""
-    return cleaned
+# Re-exported cleanly for tests & diagnostics backward compatibility
+_decode_bootstrap_bytes = decode_bootstrap_bytes
+_clean_bootstrap_line = clean_bootstrap_line
+_discover_installed_runtime_pythons = discover_installed_runtime_pythons
 
 SETTINGS_CATEGORIES = {
     "appearance": ("外观与布局", "切换工作区、黑夜/白天/跟随系统主题、语言、数据路径与开源项目反馈"),
@@ -118,49 +114,16 @@ def _open_web_url(url: str) -> None:
     QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
 
 
-def _discover_installed_runtime_pythons(app_root: Path) -> tuple[str, str]:
-    """Locate newly bootstrapped AI and MIDI Python executables beside app root or short Windows paths."""
-    ai_candidates = [
-        app_root / "runtime" / "ai" / "python.exe",
-        app_root / "runtime" / "ai" / "Scripts" / "python.exe",
-        app_root / "runtimes" / "ai" / "python.exe",
-        app_root / "runtimes" / "ai" / "Scripts" / "python.exe",
-        app_root / ".venv-ai" / "Scripts" / "python.exe",
-        app_root / "runtime" / "ai" / "bin" / "python",
-        app_root / ".venv-ai" / "bin" / "python",
-    ]
-    midi_candidates = [
-        app_root / "m" / "python.exe",
-        app_root / "m" / "Scripts" / "python.exe",
-        app_root / "runtime" / "midi" / "python.exe",
-        app_root / "runtime" / "midi" / "Scripts" / "python.exe",
-        app_root / "runtimes" / "midi" / "python.exe",
-        app_root / "runtimes" / "midi" / "Scripts" / "python.exe",
-        app_root / ".venv-midi" / "Scripts" / "python.exe",
-        app_root / "m" / "bin" / "python",
-        app_root / "runtime" / "midi" / "bin" / "python",
-        app_root / ".venv-midi" / "bin" / "python",
-    ]
-    if sys.platform == "win32":
-        for drive in ("D:", "C:", "E:"):
-            midi_candidates.append(Path(f"{drive}\\LS-midi\\.venv-midi\\Scripts\\python.exe"))
-            midi_candidates.append(Path(f"{drive}\\LS-midi\\m\\Scripts\\python.exe"))
-
-    ai_found = next((str(p) for p in ai_candidates if p.exists()), "")
-    midi_found = next((str(p) for p in midi_candidates if p.exists()), "")
-    return ai_found, midi_found
-
-
 class SettingsDialog(QtWidgets.QDialog):
     """Shows real SystemHardwareReport (`设置 -> 系统状态`), local PyTorch scanner, turnkey environment setup, and ResourceLimits/AIConfig."""
 
     _probe_finished = QtCore.Signal(object)
     _midi_probe_finished = QtCore.Signal(object)
     _pytorch_scan_finished = QtCore.Signal(object)
-    _bootstrap_progress = QtCore.Signal(str)
-    _bootstrap_finished = QtCore.Signal(bool, str)
     appearance_requested = QtCore.Signal(object)
     appearance_changed = QtCore.Signal(object)
+    restart_requested = QtCore.Signal()
+    bootstrap_runtimes_ready = QtCore.Signal(str, str)
 
     def __init__(
         self,
@@ -198,12 +161,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self._updated_appearance: Appearance = appearance
         self._verified_ai_probe: Optional[dict[str, Any]] = None
         self._dialog_closed = False
-        self._bootstrap_running = False
+        self._bootstrap_mgr = get_bootstrap_manager()
+        self._bootstrap_running = bool(self._bootstrap_mgr.snapshot().get("running", False))
         self._probe_finished.connect(self._on_ai_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
         self._midi_probe_finished.connect(self._on_midi_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
         self._pytorch_scan_finished.connect(self._on_pytorch_scan_finished, QtCore.Qt.ConnectionType.QueuedConnection)
-        self._bootstrap_progress.connect(self._on_bootstrap_progress, QtCore.Qt.ConnectionType.QueuedConnection)
-        self._bootstrap_finished.connect(self._on_bootstrap_finished, QtCore.Qt.ConnectionType.QueuedConnection)
+        self._bootstrap_mgr.state_changed.connect(self._on_bootstrap_state_changed)
+        self._bootstrap_mgr.completed.connect(self._on_bootstrap_finished)
+        self._bootstrap_signals_connected = True
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 14)
@@ -327,24 +292,68 @@ class SettingsDialog(QtWidgets.QDialog):
         appearance_form.addRow("界面语言与壳体:", quick_lang_row)
 
         assist_row = QtWidgets.QHBoxLayout()
-        assist_row.setSpacing(10)
+        assist_row.setSpacing(8)
         self.help_mode_chk = QtWidgets.QCheckBox("说明模式 (显示 [?] 悬浮说明)")
         self.help_mode_chk.setChecked(bool(appearance.help_mode))
         self.help_mode_chk.toggled.connect(self._on_quick_appearance_changed)
         self.focus_anim_chk = QtWidgets.QCheckBox("交互聚焦动画")
         self.focus_anim_chk.setChecked(bool(appearance.focus_animations))
         self.focus_anim_chk.toggled.connect(self._on_quick_appearance_changed)
+        self.focus_style_combo = QtWidgets.QComboBox()
+        for fkey, flabel in FOCUS_STYLES.items():
+            self.focus_style_combo.addItem(flabel, fkey)
+        self.focus_style_combo.setCurrentIndex(max(0, self.focus_style_combo.findData(appearance.focus_style)))
+        self.focus_style_combo.setEnabled(bool(appearance.focus_animations))
+        self.focus_style_combo.currentIndexChanged.connect(self._on_quick_appearance_changed)
         assist_row.addWidget(self.help_mode_chk)
         assist_row.addWidget(self.focus_anim_chk)
+        assist_row.addWidget(self.focus_style_combo)
         assist_row.addStretch(1)
         assist_row.addWidget(
             HelpBadge(
                 "说明模式与交互聚焦动画",
-                "• 说明模式：开启后在各功能旁显示 [?] 徽标，鼠标悬浮即可即时弹出功能解释；关闭后全局隐藏所有问号。\n"
-                "• 交互聚焦动画：开启后按钮、下拉框与问号徽标带有轻量丝滑的悬浮聚焦高亮动画（零显存占用）；关闭后回归静态极简。",
+                "• 说明模式：开启后在各功能旁显示 [?] 徽标，鼠标悬浮即可即时弹出功能解释；关闭后全局隐藏所有问号并禁止一切悬浮提示。\n"
+                "• 交互聚焦动画：支持「极细描边 / 护栏角框 / 底线脉冲」，仅对按钮与下拉框克制绘制（零显存占用）。",
             )
         )
-        appearance_form.addRow("交互与引导:", assist_row)
+        appearance_form.addRow("交互与聚焦:", assist_row)
+
+        surface_row = QtWidgets.QHBoxLayout()
+        surface_row.setSpacing(8)
+        self.surface_style_combo = QtWidgets.QComboBox()
+        for skey, slabel in UI_SURFACE_STYLES.items():
+            self.surface_style_combo.addItem(slabel, skey)
+        self.surface_style_combo.setCurrentIndex(max(0, self.surface_style_combo.findData(appearance.ui_surface_style)))
+        self.surface_style_combo.currentIndexChanged.connect(self._on_quick_appearance_changed)
+        self.close_to_tray_chk = QtWidgets.QCheckBox("点击右上角 × 时最小化到系统托盘")
+        self.close_to_tray_chk.setChecked(bool(appearance.close_to_tray))
+        self.close_to_tray_chk.toggled.connect(self._on_quick_appearance_changed)
+        surface_row.addWidget(self.surface_style_combo)
+        surface_row.addWidget(self.close_to_tray_chk, 1)
+        appearance_form.addRow("质感与托盘:", surface_row)
+
+        telem_row = QtWidgets.QHBoxLayout()
+        telem_row.setSpacing(8)
+        self.telemetry_strength_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.telemetry_strength_slider.setRange(0, 100)
+        self.telemetry_strength_slider.setValue(int(appearance.telemetry_animation_strength))
+        self.telemetry_strength_slider.valueChanged.connect(self._on_quick_appearance_changed)
+        self.telemetry_strength_lbl = QtWidgets.QLabel(f"{int(appearance.telemetry_animation_strength)}%")
+        self.telemetry_strength_lbl.setMinimumWidth(36)
+        self.music_reactive_chk = QtWidgets.QCheckBox("随音乐高潮动态变化")
+        self.music_reactive_chk.setChecked(bool(appearance.music_reactive_animations))
+        self.music_reactive_chk.setEnabled(int(appearance.telemetry_animation_strength) > 0)
+        self.music_reactive_chk.toggled.connect(self._on_quick_appearance_changed)
+        telem_row.addWidget(self.telemetry_strength_slider, 1)
+        telem_row.addWidget(self.telemetry_strength_lbl)
+        telem_row.addWidget(self.music_reactive_chk)
+        telem_row.addWidget(
+            HelpBadge(
+                "遥测微动画强度与音乐联动",
+                "控制点阵、顶部信号条与分段电池进度条的呼吸强度（0% = 完全静态，100% = 饱满动态），并可选是否随音乐音量与高潮起伏；也可点主界面底部 [STATIC_LOCK] 一键冻结。",
+            )
+        )
+        appearance_form.addRow("遥测微动画:", telem_row)
 
         edit_appearance = QtWidgets.QPushButton("编辑外观与字体…")
         edit_appearance.setObjectName("appearanceEntry")
@@ -392,8 +401,12 @@ class SettingsDialog(QtWidgets.QDialog):
         open_export_btn = QtWidgets.QPushButton("打开导出目录")
         open_export_btn.setAutoDefault(False)
         open_export_btn.clicked.connect(lambda: _open_directory(export_dir))
+        self.open_logs_btn = QtWidgets.QPushButton("打开日志目录")
+        self.open_logs_btn.setAutoDefault(False)
+        self.open_logs_btn.clicked.connect(lambda: _open_directory(active_log_dir()))
         dir_btns.addWidget(open_app_btn)
         dir_btns.addWidget(open_export_btn)
+        dir_btns.addWidget(self.open_logs_btn)
         dir_btns.addStretch(1)
         storage_form.addRow(dir_btns)
         appearance_layout.addWidget(storage_box)
@@ -479,6 +492,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self.status_alert_lbl.setObjectName("bannerNotice")
         set_widget_tone(self.status_alert_lbl, "warn")
         st_layout.addWidget(self.status_alert_lbl)
+
+        self._status_diag_actions = QtWidgets.QHBoxLayout()
+        self.status_goto_env_btn = QtWidgets.QPushButton("前往 AI 与 MIDI 环境 →")
+        self.status_goto_env_btn.setObjectName("analysisAction")
+        self.status_goto_env_btn.setAutoDefault(False)
+        self.status_goto_env_btn.clicked.connect(lambda: self.open_category("midi"))
+        self.status_open_logs_btn = QtWidgets.QPushButton("打开日志目录")
+        self.status_open_logs_btn.setAutoDefault(False)
+        self.status_open_logs_btn.clicked.connect(lambda: _open_directory(active_log_dir()))
+        self._status_diag_actions.addWidget(self.status_goto_env_btn)
+        self._status_diag_actions.addWidget(self.status_open_logs_btn)
+        self._status_diag_actions.addStretch(1)
+        st_layout.addLayout(self._status_diag_actions)
+
         self._refresh_status_alert(hardware_report)
 
         self._add_page("status", status_tab)
@@ -722,9 +749,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setup_midi_only_btn.setAutoDefault(False)
         self.setup_midi_only_btn.clicked.connect(lambda: self._run_turnkey_bootstrap(skip_ai=True))
 
+        self.cancel_bootstrap_btn = QtWidgets.QPushButton("取消安装")
+        self.cancel_bootstrap_btn.setAutoDefault(False)
+        self.cancel_bootstrap_btn.setEnabled(False)
+        self.cancel_bootstrap_btn.clicked.connect(self._cancel_bootstrap)
+
         boot_btns1.addWidget(self.scan_pytorch_btn)
         boot_btns1.addWidget(self.setup_all_btn)
         boot_btns1.addWidget(self.setup_midi_only_btn)
+        boot_btns1.addWidget(self.cancel_bootstrap_btn)
         boot_btns1.addStretch(1)
         bootstrap_layout.addLayout(boot_btns1)
 
@@ -747,18 +780,49 @@ class SettingsDialog(QtWidgets.QDialog):
         boot_btns2.addStretch(1)
         bootstrap_layout.addLayout(boot_btns2)
 
+        chk_restart_row = QtWidgets.QHBoxLayout()
         self.auto_install_py_chk = QtWidgets.QCheckBox("缺 Python 3.12/3.11 时自动用 winget 安装")
         self.auto_install_py_chk.setChecked(True)
-        bootstrap_layout.addWidget(self.auto_install_py_chk)
+        self.restart_app_btn = QtWidgets.QPushButton("立即重启 ListenScope 生效")
+        self.restart_app_btn.setObjectName("acidPrimaryBtn")
+        self.restart_app_btn.setAutoDefault(False)
+        self.restart_app_btn.setVisible(False)
+        self.restart_app_btn.clicked.connect(self._on_restart_clicked)
+        chk_restart_row.addWidget(self.auto_install_py_chk)
+        chk_restart_row.addStretch(1)
+        chk_restart_row.addWidget(self.restart_app_btn)
+        bootstrap_layout.addLayout(chk_restart_row)
+
+        prog_row = QtWidgets.QHBoxLayout()
+        prog_row.setSpacing(8)
+        self.bootstrap_progress = SegmentedBatteryProgressBar(cells=18)
+        self.bootstrap_progress.setRange(0, 100)
+        self.bootstrap_progress.setValue(0)
+        self.bootstrap_progress.setFixedHeight(22)
+        self.bootstrap_progress.setMinimumWidth(220)
+        self.bootstrap_meta_lbl = QtWidgets.QLabel("待命：支持多源下载，低速或断流时自动切换高速镜像")
+        self.bootstrap_meta_lbl.setObjectName("mutedCaption")
+        self.bootstrap_meta_lbl.setWordWrap(True)
+        prog_row.addWidget(self.bootstrap_progress)
+        prog_row.addWidget(self.bootstrap_meta_lbl, 1)
+        bootstrap_layout.addLayout(prog_row)
 
         self.bootstrap_status_lbl = QtWidgets.QLabel(
-            "准备就绪：点击「扫描本机 PyTorch 环境」自动查找电脑已安装的 PyTorch；若未安装会给出官方下载地址与安装指令。"
+            "准备就绪：点击「扫描本机 PyTorch 环境」自动查找电脑已安装的 PyTorch；若未安装可点击「一键自动配置 AI + MIDI」在同级目录自动配置（切换页面不会中断）。"
         )
         self.bootstrap_status_lbl.setWordWrap(True)
         self.bootstrap_status_lbl.setObjectName("bannerNotice")
         self.bootstrap_status_lbl.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         set_widget_tone(self.bootstrap_status_lbl, "info")
         bootstrap_layout.addWidget(self.bootstrap_status_lbl)
+
+        self.bootstrap_log_view = QtWidgets.QPlainTextEdit()
+        self.bootstrap_log_view.setObjectName("diagnosticLogStream")
+        self.bootstrap_log_view.setReadOnly(True)
+        self.bootstrap_log_view.setMaximumBlockCount(150)
+        self.bootstrap_log_view.setFixedHeight(104)
+        self.bootstrap_log_view.setPlaceholderText("一键环境初始化进度与镜像切换日志将显示在这里...")
+        bootstrap_layout.addWidget(self.bootstrap_log_view)
         env_layout.addWidget(bootstrap_group)
 
         py_row = QtWidgets.QVBoxLayout()
@@ -847,6 +911,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._orig_ai_cfg = ai_config
         install_focus_animations(self)
         self.apply_skin(appearance, acid_variant=self._acid_variant or "", _translate=False)
+        self._sync_bootstrap_ui(self._bootstrap_mgr.snapshot())
         self.open_category("appearance")
 
     @staticmethod
@@ -877,6 +942,31 @@ class SettingsDialog(QtWidgets.QDialog):
         icon_color = self._icon_color(appearance, self._acid_variant)
         for key, btn in self._category_buttons.items():
             btn.setIcon(QtGui.QIcon(_category_icon(key, color=icon_color)))
+        if hasattr(self, "bootstrap_progress"):
+            if self._acid_variant in ("light", "dark"):
+                p = get_acid_palette(self._acid_variant)
+                self.bootstrap_progress.set_theme_colors(
+                    accent=p.accent,
+                    accent_hi=p.accent_secondary,
+                    shell_bg=p.bg_code,
+                    shell_border=p.border_strong,
+                    empty_cell=p.bg_elevated,
+                    text_fg=p.text_primary,
+                    is_acid=True,
+                )
+            else:
+                mode = appearance.resolve_theme_mode(system_is_dark=detect_system_is_dark())
+                bg, fg, accent = appearance.effective_colors(system_is_dark=detect_system_is_dark())
+                is_l = mode == "light"
+                self.bootstrap_progress.set_theme_colors(
+                    accent=accent,
+                    accent_hi=QtGui.QColor(accent).lighter(135).name(),
+                    shell_bg=bg,
+                    shell_border="#CBD5E1" if is_l else "#475569",
+                    empty_cell="#E2E8F0" if is_l else "#1E293B",
+                    text_fg=fg,
+                    is_acid=False,
+                )
         if self.parent() is None:
             if self._acid_variant in ("light", "dark"):
                 self.setStyleSheet(acid_stylesheet(appearance, self._acid_variant))
@@ -916,24 +1006,50 @@ class SettingsDialog(QtWidgets.QDialog):
         self._layout_summary.setText(LAYOUTS[appearance.layout][0])
         font_label = "工业标准字体 (已锁定)" if appearance.is_acid_locked() else (appearance.font_family or "系统默认")
         self._font_summary.setText(f"{font_label} · {appearance.font_size} px")
+        sync_widgets = [
+            getattr(self, name, None)
+            for name in (
+                "language_combo",
+                "frameless_chk",
+                "help_mode_chk",
+                "focus_anim_chk",
+                "focus_style_combo",
+                "surface_style_combo",
+                "close_to_tray_chk",
+                "telemetry_strength_slider",
+                "music_reactive_chk",
+            )
+        ]
+        blockers = [QtCore.QSignalBlocker(w) for w in sync_widgets if w is not None]
         if hasattr(self, "language_combo"):
-            blocker1 = QtCore.QSignalBlocker(self.language_combo)
             idx = self.language_combo.findData(appearance.language)
             if idx >= 0:
                 self.language_combo.setCurrentIndex(idx)
-            del blocker1
         if hasattr(self, "frameless_chk"):
-            blocker2 = QtCore.QSignalBlocker(self.frameless_chk)
             self.frameless_chk.setChecked(bool(appearance.frameless))
-            del blocker2
         if hasattr(self, "help_mode_chk"):
-            blocker3 = QtCore.QSignalBlocker(self.help_mode_chk)
             self.help_mode_chk.setChecked(bool(appearance.help_mode))
-            del blocker3
         if hasattr(self, "focus_anim_chk"):
-            blocker4 = QtCore.QSignalBlocker(self.focus_anim_chk)
             self.focus_anim_chk.setChecked(bool(appearance.focus_animations))
-            del blocker4
+        if hasattr(self, "focus_style_combo"):
+            fidx = self.focus_style_combo.findData(appearance.focus_style)
+            if fidx >= 0:
+                self.focus_style_combo.setCurrentIndex(fidx)
+            self.focus_style_combo.setEnabled(bool(appearance.focus_animations))
+        if hasattr(self, "surface_style_combo"):
+            sidx = self.surface_style_combo.findData(appearance.ui_surface_style)
+            if sidx >= 0:
+                self.surface_style_combo.setCurrentIndex(sidx)
+        if hasattr(self, "close_to_tray_chk"):
+            self.close_to_tray_chk.setChecked(bool(appearance.close_to_tray))
+        if hasattr(self, "telemetry_strength_slider"):
+            self.telemetry_strength_slider.setValue(int(appearance.telemetry_animation_strength))
+        if hasattr(self, "telemetry_strength_lbl"):
+            self.telemetry_strength_lbl.setText(f"{int(appearance.telemetry_animation_strength)}%")
+        if hasattr(self, "music_reactive_chk"):
+            self.music_reactive_chk.setChecked(bool(appearance.music_reactive_animations))
+            self.music_reactive_chk.setEnabled(int(appearance.telemetry_animation_strength) > 0)
+        del blockers
         if _translate:
             translate_widget_tree(self, appearance.language)
 
@@ -942,12 +1058,43 @@ class SettingsDialog(QtWidgets.QDialog):
         frameless = bool(self.frameless_chk.isChecked())
         help_mode = bool(self.help_mode_chk.isChecked()) if hasattr(self, "help_mode_chk") else True
         focus_anim = bool(self.focus_anim_chk.isChecked()) if hasattr(self, "focus_anim_chk") else True
+        focus_style = (
+            str(self.focus_style_combo.currentData() or "sleek")
+            if hasattr(self, "focus_style_combo")
+            else self._appearance.focus_style
+        )
+        surface_style = (
+            str(self.surface_style_combo.currentData() or "tactile")
+            if hasattr(self, "surface_style_combo")
+            else self._appearance.ui_surface_style
+        )
+        close_to_tray = (
+            bool(self.close_to_tray_chk.isChecked())
+            if hasattr(self, "close_to_tray_chk")
+            else self._appearance.close_to_tray
+        )
+        telem_strength = (
+            int(self.telemetry_strength_slider.value())
+            if hasattr(self, "telemetry_strength_slider")
+            else self._appearance.telemetry_animation_strength
+        )
+        music_reactive = (
+            bool(self.music_reactive_chk.isChecked())
+            if hasattr(self, "music_reactive_chk")
+            else self._appearance.music_reactive_animations
+        )
+        set_focus_ring_style(focus_style)
         updated = replace(
             self._appearance,
             language=lang,
             frameless=frameless,
             help_mode=help_mode,
             focus_animations=focus_anim,
+            focus_style=focus_style,
+            ui_surface_style=surface_style,
+            close_to_tray=close_to_tray,
+            telemetry_animation_strength=telem_strength,
+            music_reactive_animations=music_reactive,
         )
         self.update_appearance_summary(updated)
         self.appearance_changed.emit(updated)
@@ -975,30 +1122,52 @@ class SettingsDialog(QtWidgets.QDialog):
         self._page_map["midi"].ensureWidgetVisible(self.midi_python_edit)
         self.midi_python_edit.setFocus()
 
+    def _disconnect_bootstrap_signals(self) -> None:
+        if not getattr(self, "_bootstrap_signals_connected", False):
+            return
+        self._bootstrap_signals_connected = False
+        mgr = getattr(self, "_bootstrap_mgr", None)
+        if mgr is None:
+            return
+        for sig, slot in (
+            (mgr.state_changed, self._on_bootstrap_state_changed),
+            (mgr.completed, self._on_bootstrap_finished),
+        ):
+            try:
+                sig.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._dialog_closed = True
+        self._disconnect_bootstrap_signals()
         super().closeEvent(event)
 
     def done(self, result: int) -> None:  # type: ignore[override]
         self._dialog_closed = True
+        self._disconnect_bootstrap_signals()
         super().done(result)
 
     def _refresh_status_alert(self, r: SystemHardwareReport) -> None:
         if not r.gpu_ai_ready or not r.is_windows:
-            warn_text = r.gpu_ai_block_reason or ""
-            if not r.pytorch.installed:
-                warn_text = f"{warn_text}\n{PYTORCH_DOWNLOAD_GUIDE}".strip()
+            parts: list[str] = []
             if not r.is_windows:
-                warn_text = (
-                    f"[WARN] 当前在 {r.os_system} 运行：WASAPI Process Loopback 与 RTX 5060 Ti CUDA 未在 Windows 真机验证。\n"
-                    + warn_text
+                parts.append(
+                    f"[WARN] 当前在 {r.os_system} 运行：WASAPI Process Loopback 与 RTX 5060 Ti CUDA 未在 Windows 真机验证。"
                 )
-            self.status_alert_lbl.setText(warn_text.strip())
+            if not r.gpu_ai_ready:
+                reason = r.gpu_ai_block_reason or "尚未检测到可用的 PyTorch GPU 环境"
+                parts.append(
+                    f"[WARN] GPU AI 暂未就绪：{reason}。请点击下方按钮前往「AI 与 MIDI 环境」页扫描本机 PyTorch 或一键自动配置。"
+                )
+            self.status_alert_lbl.setText("\n".join(parts))
             set_widget_tone(self.status_alert_lbl, "warn")
             self.status_alert_lbl.setVisible(True)
         else:
             self.status_alert_lbl.setVisible(False)
             self.status_alert_lbl.setText("")
+        if hasattr(self, "status_goto_env_btn"):
+            self.status_goto_env_btn.setVisible(not r.gpu_ai_ready)
 
     def _scan_local_pytorch(self) -> None:
         self.scan_pytorch_btn.setEnabled(False)
@@ -1110,14 +1279,6 @@ class SettingsDialog(QtWidgets.QDialog):
         if wheel_dir:
             cmd.extend(["-CudaWheelDir", wheel_dir])
 
-        self._bootstrap_running = True
-        self.setup_all_btn.setEnabled(False)
-        self.setup_midi_only_btn.setEnabled(False)
-        if hasattr(self, "auto_install_py_chk"):
-            self.auto_install_py_chk.setEnabled(False)
-        set_widget_tone(self.bootstrap_status_lbl, "info")
-        self.bootstrap_status_lbl.setText("[BUSY] 正在执行一键环境初始化，请稍候（将在软件同级目录建立隔离环境）...")
-
         proc_env = os.environ.copy()
         proc_env["PYTHONUTF8"] = "1"
         proc_env["PYTHONIOENCODING"] = "utf-8"
@@ -1125,73 +1286,97 @@ class SettingsDialog(QtWidgets.QDialog):
         proc_env["TERM"] = "dumb"
         proc_env["DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION"] = "0"
 
-        def _worker() -> None:
-            last_lines: list[str] = []
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    cwd=str(get_bundle_root()),
-                    env=proc_env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    **subprocess_no_window_kwargs(),
-                )
-                assert proc.stdout is not None
-                for raw_bytes in iter(proc.stdout.readline, b""):
-                    line = _clean_bootstrap_line(_decode_bootstrap_bytes(raw_bytes))
-                    if line:
-                        last_lines.append(line)
-                        if len(last_lines) > 10:
-                            last_lines = last_lines[-10:]
-                        if not self._dialog_closed:
-                            try:
-                                self._bootstrap_progress.emit("\n".join(last_lines[-3:]))
-                            except RuntimeError:
-                                pass
-                rc = proc.wait()
-                if not self._dialog_closed:
-                    if rc == 0:
-                        self._bootstrap_finished.emit(True, "[OK] 一键环境初始化完成，正在自动识别并验证解释器...")
-                    else:
-                        tail = "\n".join(last_lines[-6:])
-                        self._bootstrap_finished.emit(False, f"[ERR] 初始化失败 (exit={rc}):\n{tail}")
-            except Exception as exc:
-                if not self._dialog_closed:
-                    self._bootstrap_finished.emit(False, f"[ERR] 启动初始化脚本失败: {exc}")
+        self._bootstrap_mgr.start(
+            cmd=cmd,
+            cwd=str(get_bundle_root()),
+            env=proc_env,
+            target_root=target_root,
+            popen_factory=lambda *args, **kwargs: subprocess.Popen(*args, **kwargs),
+        )
 
-        threading.Thread(target=_worker, name="ListenScope-TurnkeySetup", daemon=True).start()
+    def _cancel_bootstrap(self) -> None:
+        self._bootstrap_mgr.cancel()
+        if hasattr(self, "cancel_bootstrap_btn"):
+            self.cancel_bootstrap_btn.setEnabled(False)
 
-    @QtCore.Slot(str)
-    def _on_bootstrap_progress(self, tail: str) -> None:
-        if not self._dialog_closed:
-            self.bootstrap_status_lbl.setText(f"[BUSY] 初始化进度:\n{tail}")
+    def _on_restart_clicked(self) -> None:
+        self.restart_requested.emit()
+        self.accept()
 
-    @QtCore.Slot(bool, str)
-    def _on_bootstrap_finished(self, ok: bool, message: str) -> None:
+    def _sync_bootstrap_ui(self, snap: dict[str, Any]) -> None:
         if self._dialog_closed:
             return
-        self._bootstrap_running = False
-        self.setup_all_btn.setEnabled(True)
-        self.setup_midi_only_btn.setEnabled(True)
+        running = bool(snap.get("running", False))
+        self._bootstrap_running = running
+        self.setup_all_btn.setEnabled(not running)
+        self.setup_midi_only_btn.setEnabled(not running)
         if hasattr(self, "auto_install_py_chk"):
-            self.auto_install_py_chk.setEnabled(True)
+            self.auto_install_py_chk.setEnabled(not running)
+        if hasattr(self, "cancel_bootstrap_btn"):
+            self.cancel_bootstrap_btn.setEnabled(running)
+        if hasattr(self, "bootstrap_progress"):
+            self.bootstrap_progress.set_active(running)
+            self.bootstrap_progress.setValue(int(snap.get("progress_pct", 0)))
+        if hasattr(self, "bootstrap_meta_lbl"):
+            stage = str(snap.get("stage", "") or "").strip()
+            speed = str(snap.get("speed", "") or "").strip()
+            mirror = str(snap.get("mirror", "") or "").strip()
+            parts = [p for p in (stage, speed, f"源: {mirror}" if mirror else "") if p]
+            self.bootstrap_meta_lbl.setText(
+                " | ".join(parts) if parts else "待命：支持多源下载，低速或断流时自动切换高速镜像"
+            )
+        tone = str(snap.get("tone", "info") or "info")
+        set_widget_tone(self.bootstrap_status_lbl, tone)
+        status_text = str(snap.get("status_text", "") or "")
+        if status_text:
+            self.bootstrap_status_lbl.setText(status_text)
+        if hasattr(self, "bootstrap_log_view"):
+            logs = snap.get("log_lines") or []
+            joined = "\n".join(str(x) for x in logs[-120:])
+            if joined != self.bootstrap_log_view.toPlainText():
+                self.bootstrap_log_view.setPlainText(joined)
+                bar = self.bootstrap_log_view.verticalScrollBar()
+                if bar is not None:
+                    bar.setValue(bar.maximum())
+        if hasattr(self, "restart_app_btn"):
+            self.restart_app_btn.setVisible(bool(snap.get("needs_restart_hint", False)) and not running)
+
+    @QtCore.Slot(object)
+    def _on_bootstrap_state_changed(self, snap: object) -> None:
+        if self._dialog_closed or not isinstance(snap, dict):
+            return
+        self._sync_bootstrap_ui(snap)
+
+    @QtCore.Slot(bool, str, str, str)
+    def _on_bootstrap_finished(self, ok: bool, message: str, ai_py: str, midi_py: str) -> None:
+        if self._dialog_closed:
+            return
+        self._sync_bootstrap_ui(self._bootstrap_mgr.snapshot())
         set_widget_tone(self.bootstrap_status_lbl, "ok" if ok else "error")
         self.bootstrap_status_lbl.setText(message)
         if ok:
-            ai_py, midi_py = _discover_installed_runtime_pythons(get_app_root())
-            fallback_root = getattr(self, "_bootstrap_target_root", None)
-            if fallback_root is not None and fallback_root != get_app_root():
-                fb_ai, fb_midi = _discover_installed_runtime_pythons(fallback_root)
-                ai_py = ai_py or fb_ai
-                midi_py = midi_py or fb_midi
+            if not ai_py and not midi_py:
+                disc_ai, disc_midi = _discover_installed_runtime_pythons(get_app_root())
+                fallback_root = getattr(self, "_bootstrap_target_root", None)
+                if fallback_root is not None and fallback_root != get_app_root():
+                    fb_ai, fb_midi = _discover_installed_runtime_pythons(fallback_root)
+                    disc_ai = disc_ai or fb_ai
+                    disc_midi = disc_midi or fb_midi
+                ai_py = ai_py or disc_ai
+                midi_py = midi_py or disc_midi
             cur_ai = self.ai_python_edit.text().strip()
             if ai_py and (not cur_ai or not Path(cur_ai).exists()):
                 self.ai_python_edit.setText(ai_py)
-            if midi_py:
+                cur_ai = ai_py
+            cur_midi = self.midi_python_edit.text().strip()
+            if midi_py and (not cur_midi or not Path(cur_midi).exists() or midi_py != cur_midi):
                 self.midi_python_edit.setText(midi_py)
-            if self.ai_python_edit.text().strip():
+                cur_midi = midi_py
+            if cur_ai or cur_midi:
+                self.bootstrap_runtimes_ready.emit(cur_ai, cur_midi)
+            if cur_ai:
                 self._verify_ai_environment()
-            if self.midi_python_edit.text().strip():
+            if cur_midi:
                 self._verify_midi_environment()
 
     def _browse_ai_python(self) -> None:
@@ -1304,6 +1489,14 @@ class SettingsDialog(QtWidgets.QDialog):
             summary += f"\n\n{PYTORCH_DOWNLOAD_GUIDE}"
         self.ai_probe_result_lbl.setText(summary)
         set_widget_tone(self.ai_probe_result_lbl, "ok" if gpu_ready else "warn")
+        if hasattr(self, "bootstrap_status_lbl") and "正在刷新验证环境" in self.bootstrap_status_lbl.text():
+            if gpu_ready:
+                set_widget_tone(self.bootstrap_status_lbl, "ok")
+                self.bootstrap_status_lbl.setText(
+                    "[OK] 环境配置与验证全部完成（GPU AI 已就绪），点下方「保存设置」即可立即开始分轨！"
+                )
+            elif hasattr(self, "restart_app_btn"):
+                self.restart_app_btn.setVisible(True)
 
     @QtCore.Slot(object)
     def _on_midi_probe_finished(self, result: Any) -> None:
@@ -1427,6 +1620,31 @@ class SettingsDialog(QtWidgets.QDialog):
                 frameless=bool(self.frameless_chk.isChecked()),
                 help_mode=bool(self.help_mode_chk.isChecked()),
                 focus_animations=bool(self.focus_anim_chk.isChecked()),
+                focus_style=(
+                    str(self.focus_style_combo.currentData() or "sleek")
+                    if hasattr(self, "focus_style_combo")
+                    else self._appearance.focus_style
+                ),
+                ui_surface_style=(
+                    str(self.surface_style_combo.currentData() or "tactile")
+                    if hasattr(self, "surface_style_combo")
+                    else self._appearance.ui_surface_style
+                ),
+                close_to_tray=(
+                    bool(self.close_to_tray_chk.isChecked())
+                    if hasattr(self, "close_to_tray_chk")
+                    else self._appearance.close_to_tray
+                ),
+                telemetry_animation_strength=(
+                    int(self.telemetry_strength_slider.value())
+                    if hasattr(self, "telemetry_strength_slider")
+                    else self._appearance.telemetry_animation_strength
+                ),
+                music_reactive_animations=(
+                    bool(self.music_reactive_chk.isChecked())
+                    if hasattr(self, "music_reactive_chk")
+                    else self._appearance.music_reactive_animations
+                ),
             )
             if self._verified_ai_probe is not None and str(self._verified_ai_probe.get("python_executable", "")) != entered_py:
                 self._verified_ai_probe = None

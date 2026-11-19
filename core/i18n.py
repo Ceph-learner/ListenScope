@@ -492,6 +492,65 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
     "分析和弦与节奏": {"en": "Analyze Chords & Rhythm", "ko": "코드 & 리듬 분석", "ja": "コード＆リズム解析"},
     "导出扒谱表 (.md/.csv)": {"en": "Export Sheet (.md/.csv)", "ko": "채보 시트 내보내기 (.md/.csv)", "ja": "耳コピ表出力 (.md/.csv)"},
     "取消任务": {"en": "Cancel Job", "ko": "작업 취소", "ja": "ジョブ中止"},
+    # UX Polish, Animations, Surface Styles, Tray, Bootstrap Progress & Logs
+    "极简流光框 (推荐)": {"en": "Minimal Glow Rim (Recommended)", "ko": "미니멀 글로우 림 (권장)", "ja": "ミニマル発光リム (推奨)"},
+    "精密四角卡标": {"en": "Corner Brackets", "ko": "코너 브래킷", "ja": "精密コーナーブラケット"},
+    "底部高亮轨": {"en": "Bottom Highlight Rail", "ko": "하단 하이라이트 레일", "ja": "ボトムハイライトレール"},
+    "微立体质感边缘 (推荐)": {"en": "Subtle Tactile Edge (Recommended)", "ko": "입체 미세 질감 (권장)", "ja": "微立体リムエッジ (推奨)"},
+    "极简平面锐利": {"en": "Crisp Flat Edge", "ko": "플랫 샤프 엣지", "ja": "フラットシャープ"},
+    "硬朗机械棱边": {"en": "Hard Mechanical Bevel", "ko": "하드 메카니컬 베벨", "ja": "ハードメカニカルベベル"},
+    "交互与聚焦": {"en": "Interaction & Focus", "ko": "상호작용 및 포커스", "ja": "操作とフォーカス"},
+    "交互与聚焦:": {"en": "Interaction & Focus:", "ko": "상호작용 및 포커스:", "ja": "操作とフォーカス:"},
+    "质感与托盘": {"en": "Finish & Tray", "ko": "질감 및 트레이", "ja": "質感とトレイ"},
+    "质感与托盘:": {"en": "Finish & Tray:", "ko": "질감 및 트레이:", "ja": "質感とトレイ:"},
+    "遥测微动画": {"en": "Telemetry Animations", "ko": "텔레메트리 애니메이션", "ja": "テレメトリ演出"},
+    "遥测微动画:": {"en": "Telemetry Animations:", "ko": "텔레메트리 애니메이션:", "ja": "テレメトリ演出:"},
+    "点击右上角 × 时最小化到系统托盘": {
+        "en": "Minimize to tray on close (×)",
+        "ko": "닫기(×) 클릭 시 시스템 트레이로 최소화",
+        "ja": "×ボタン押下時にシステムトレイへ最小化",
+    },
+    "随音乐高潮动态变化": {
+        "en": "React to music dynamics & climax",
+        "ko": "음악 에너지·클라이맥스 연동",
+        "ja": "楽曲の音量・盛り上がりに連動",
+    },
+    "遥测动画随音乐实时响应": {
+        "en": "React to music dynamics & climax",
+        "ko": "음악 에너지·클라이맥스 연동",
+        "ja": "楽曲の音量・盛り上がりに連動",
+    },
+    "打开日志目录": {"en": "Open Logs Folder", "ko": "로그 폴더 열기", "ja": "ログフォルダを開く"},
+    "前往 AI 与 MIDI 环境 →": {"en": "Go to AI & MIDI Setup →", "ko": "AI & MIDI 환경으로 이동 →", "ja": "AI・MIDI環境へ進む →"},
+    "取消安装": {"en": "Cancel Setup", "ko": "설치 취소", "ja": "導入中止"},
+    "立即重启 ListenScope 生效": {
+        "en": "Restart ListenScope Now",
+        "ko": "지금 ListenScope 다시 시작",
+        "ja": "今すぐ ListenScope を再起動",
+    },
+    "待命：支持多源下载，低速或断流时自动切换高速镜像": {
+        "en": "Standby: multi-mirror download enabled with automatic slow-mirror failover",
+        "ko": "대기 중: 다중 미러 및 저속/끊김 시 자동 미러 전환 지원",
+        "ja": "待機中: マルチミラー対応・低速時は高速ミラーへ自動切替",
+    },
+    "准备就绪：点击「扫描本机 PyTorch 环境」自动查找电脑已安装的 PyTorch；若未安装可点击「一键自动配置 AI + MIDI」在同级目录自动配置（切换页面不会中断）。": {
+        "en": "Ready: Scan local PyTorch installations or click 'One-Click AI + MIDI Setup' to auto-configure beside the app (continues safely if you switch pages).",
+        "ko": "준비됨: 로컬 PyTorch 환경을 스캔하거나 '원클릭 AI + MIDI 설정'으로 앱 폴더에 자동 구성하세요(페이지 이동 시에도 중단되지 않음).",
+        "ja": "準備完了: 「ローカル PyTorch 検出」または「AI + MIDI 一括構築」でアプリ同階層へ自動構築します（画面切替でも中断されません）。",
+    },
+    "一键环境初始化进度与镜像切换日志将显示在这里...": {
+        "en": "Turnkey setup progress and mirror-switch logs will appear here...",
+        "ko": "원클릭 환경 구성 진행 상황 및 미러 전환 로그가 여기에 표시됩니다...",
+        "ja": "環境セットアップの進捗とミラー切替ログがここに表示されます...",
+    },
+    "显示主界面": {"en": "Show ListenScope", "ko": "창 보이기", "ja": "メイン画面を表示"},
+    "打开设置": {"en": "Open Settings", "ko": "설정 열기", "ja": "設定を開く"},
+    "退出 ListenScope": {"en": "Quit ListenScope", "ko": "ListenScope 종료", "ja": "ListenScope を終了"},
+    "[OK] 环境配置与验证全部完成（GPU AI 已就绪），点下方「保存设置」即可立即开始分轨！": {
+        "en": "[OK] Environment setup and verification succeeded (GPU AI Ready). Click Save below to start!",
+        "ko": "[OK] 환경 구성 및 검증 완료(GPU AI 준비됨). 아래 저장을 누르면 바로 사용할 수 있습니다!",
+        "ja": "[OK] 環境構築と検証が完了しました（GPU AI 準備完了）。「設定を保存」を押してすぐ利用できます！",
+    },
 }
 
 _PREFIX_REPLACEMENTS: tuple[tuple[str, dict[str, str]], ...] = (
@@ -624,7 +683,7 @@ def translate_widget_tree(root: QtWidgets.QWidget, lang: str) -> None:
             _translate_cached(w, w.text(), "_ls_orig_text", code, apply_fn=w.setText)
         elif isinstance(w, QtWidgets.QGroupBox):
             _translate_cached(w, w.title(), "_ls_orig_title", code, apply_fn=w.setTitle)
-        elif isinstance(w, QtWidgets.QLineEdit):
+        elif isinstance(w, (QtWidgets.QLineEdit, QtWidgets.QPlainTextEdit)):
             _translate_cached(
                 w,
                 w.placeholderText(),

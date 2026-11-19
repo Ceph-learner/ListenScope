@@ -21,9 +21,22 @@ ListenScope 是 Windows 本地音乐分析与练习工作台。入口 [main.py](
 - CPU 分析：频谱、Chroma、和弦与 BPM；高频标签、x 轴缓冲与性能表格通过缓存与签名去重降低内存波动与重绘开销。
 - **外观、主题、字体、四语本地化与同级便携存储**：默认启用 **「酸性遥测 (`Acid Telemetry v2`, 预设 ID `acid_telemetry`, 默认 `theme_mode="light"` 临床浅色)」** 双模工业预设（[`ui/acid_style.py`](../ui/acid_style.py)、`ui/assets/acid_*.svg`、全新酸性几何图标 `ui/assets/listenscope.svg` / `listenscope.ico` 与 [`packaging/listenscope_core.spec`](../packaging/listenscope_core.spec) 打包绑定），含 `CLINICAL_LIGHT` 临床浅色（`#EEF2F6` / `#00A878`）与 `ACID & VOID` 暗夜（`#0B0D0F` / `#CEFF18` / `#2211FF`）顶栏快切持久化；在酸性遥测主题下**自动锁定字体家族、自定义三色、液态玻璃光学与自定义背景壁纸**（仅保留 `11–20 px` 字号、白天/黑夜/跟随系统模式、语言、无边框圆角与工作区布局可调），而在非酸性主题（`经典`/`Lenso`/`Codex`/`Claude Code`）下开放本机字体扫描实时预览、自定义颜色与**自定义背景图片上传（带可读性遮罩）**。支持 **中 (`zh`) / 英 (`en`) / 韩 (`ko`) / 日 (`ja`) 四语切换**（[`core/i18n.py`](../core/i18n.py)：内置英文遥测代号固定，仅替换中文文案，英文模式下仅显示英文且绝不重复显示两次）、默认**无边框圆角窗口（`frameless=True`，10px 圆角、顶栏拖拽移动与最小化/最大化/关闭按钮、启动自动适配屏幕分辨率并居中、切换选项锁定几何位置不跳动）**、单行紧凑不换行的最近和弦带（`Am[vi] → F[IV] → C[I] → G[V]`）、可调 `0–24 dB` 贝斯独听增益（默认 `+12 dB`，`>12 dB` 护耳警告，可选写入导出 WAV）、本机 PyTorch 自动扫描器（[`scan_local_pytorch_installations`](../core/system_probe.py)）与官方下载链接指引、设置页 GitHub 仓库/Star/Issues 反馈入口以及全界面 `[?]` 悬浮/点击说明徽标（[`HelpBadge`](../ui/help_badge.py)）。配置与导出（[`core/paths.py`](../core/paths.py)）优先保存在程序同级目录（不写 `C:\`），仅在只读目录回退用户目录。
 
-GPU 分轨和 CPU MIDI 各用独立环境（Core 仍保持零 Torch/CUDA/TF，面向目标基线 Windows 11 · RTX 5060 Ti 8GB VRAM · 16GB RAM）。实验性近实时分轨位于 [streaming](../streaming)，默认关闭。软件版本 `0.2.4`（[pyproject.toml](../pyproject.toml)、[installer.iss](../scripts/installer.iss)）。
+GPU 分轨和 CPU MIDI 各用独立环境（Core 仍保持零 Torch/CUDA/TF，面向目标基线 Windows 11 · RTX 5060 Ti 8GB VRAM · 16GB RAM）。实验性近实时分轨位于 [streaming](../streaming)，默认关闭。软件版本 `0.2.5`（[pyproject.toml](../pyproject.toml)、[installer.iss](../scripts/installer.iss)、[acid_style.py](../ui/acid_style.py)）。
 
 ## 当前验证基线
+
+- **`v0.2.5` 开发分支预合并验证（分支 `feat/v0.2.5-ux-bootstrap-tray-marquee` · 基于 `main` `72e5700`）**：
+  - Linux offscreen / 非硬件校验：
+    - `QT_QPA_PLATFORM=offscreen pytest -q --tb=short`：**205 passed, 6 skipped**（1 个旧 4 语断言因 `SettingsDialog` 默认 `zh` 摘要残留 `简体中文 (ZH)` 暴露后已在 [i18n_catalog.py](../core/i18n_catalog.py) 修复并全量重跑通过；6 skipped 为纯 Windows 测试）。
+    - `QT_QPA_PLATFORM=offscreen python main.py --simulate --headless-smoke`：通过（exit 0）。
+    - `python scripts/check_env.py --no-write`：通过（exit 0）。
+    - `python scripts/probe_media_session.py --self-test-mock --json`：通过（exit 0，`reset_count=1`）。
+  - 核心变更：
+    - **一键 AI/MIDI 安装持久进度、取消与多源故障转移**（[bootstrap_manager.py](../core/bootstrap_manager.py)、[mirror_wheel_fetch.py](../scripts/mirror_wheel_fetch.py)、[setup_windows.ps1](../scripts/setup_windows.ps1)、[settings_dialog.py](../ui/settings_dialog.py)）：切换/关闭设置窗口不中断后台安装；展示分段电池百分比进度条、实时下载速率（MB/s）、当前源与可滚动日志；速度过慢自动切换 PyTorch `cu128` 轮子镜像与 PyPI 镜像；完成后自动持久化环境路径并提供「立即重启 ListenScope 生效」按钮；验证结束后清除 stale 状态提示，并与诊断页去重。
+    - **字体间距、重叠修复与滚动长名称**（[acid_style.py](../ui/acid_style.py)、[main_window.py](../ui/main_window.py)、[chroma_widget.py](../ui/chroma_widget.py)）：调整 CJK UI 字体栈顺序（`Segoe UI / Microsoft YaHei UI / Malgun Gothic / Yu Gothic UI` 优先于等宽代码体），消除「和弦名与级数」字距不均；修复顶部 `RAM` 左侧字幕遮挡；新增适中速度跑马灯（`MarqueeLabel` / `MarqueeComboBox`）避免进程列表、2-Stem 模型名、和弦进行与媒体信息省略号截断。
+    - **`STATIC_LOCK` 助记、遥测微动画强度与音乐联动**（[appearance.py](../core/appearance.py)、[acid_style.py](../ui/acid_style.py)、[mixer_widget.py](../ui/mixer_widget.py)、[help_badge.py](../ui/help_badge.py)）：补充 `[STATIC_LOCK]` `[?]` 说明；分轨与安装采用 `SegmentedBatteryProgressBar`，顶部与和弦/调性卡片配备 `TelemetryPulseStrip` / `DotMatrixWidget` 动画（支持 `0–100%` 强度调节、随实时 RMS/高潮动态增强或关闭、或 `[STATIC_LOCK]` 冻结）。
+    - **可调边框质感、聚焦样式、可关闭提示、`×` 最小化托盘、8 边缩放、隐藏图表 `[A]` 与滚动磁盘日志**（[logging.py](../core/logging.py)、[main_window.py](../ui/main_window.py)、[settings_dialog.py](../ui/settings_dialog.py)、[appearance.py](../ui/appearance.py)）：`ui_surface_style`（`tactile`/`beveled`/`flat`）、`focus_style`（`sleek`/`brackets`/`underline`）、全局通知与 OOM 横幅新增 `×` 关闭；多 DPI SVG+ICO 任务栏图标（Win32 `WM_SETICON` + DWM 圆角）、系统托盘与 `close_to_tray` 开关；无边框窗口 `>=940×620` 八方向拖拽缩放；全部 PyQtGraph 图表隐藏 `[A]` 按钮；UTF-8 滚动日志（3 MiB × 4 份）+ 异常挂钩 + 「打开日志目录」按钮；四语全覆盖（EN/KO 零中文泄漏）。
+  - Windows 11 真机待验证项（云端 Linux 无法实测）：Win11 任务栏/托盘图标与最小化托盘退出行为、无边框 8 边拖拽缩放在高 DPI 下的手感、Microsoft YaHei UI 中文排版、国内真实网络下一键配置镜像切换、`cu128` 实机 GPU 音频分轨与音乐联动动画流畅度、以及 PyInstaller / Inno Setup 打包产物。
 
 - **`v0.2.4` 发布验证基线（PR #28 `d7f186f` + Windows 跨平台测试与版本收口 `4b9df05`，基于 `main` `c0461a0` · Tag `v0.2.4`）**：
   - 针对 `v0.2.2` 首轮实机反馈完成三类体验与初始化修复，合入 PR #28 后因 `v0.2.3` 首轮 Windows CI 在 [`test_run_external_python_capture_output_and_frozen_filtering`](../tests/test_startup_help_bootstrap_fixes.py) 触发 `WinError 193`（Windows 冻结路径调用 `ctypes.WinDLL` + `subprocess.Popen` 而原测试只 Mock 了 Linux `subprocess.run`），于 `4b9df05` 补全双平台 Mock 断言并顺延发布 `v0.2.4`：

@@ -31,7 +31,13 @@ from ui.chroma_widget import (
     transpose_note_name,
 )
 from ui.help_badge import HelpBadge
-from ui.acid_style import TelemetryHeader, apply_acid_plot_theme, get_acid_palette
+from ui.acid_style import (
+    SegmentedBatteryProgressBar,
+    TelemetryHeader,
+    TelemetryPulseStrip,
+    apply_acid_plot_theme,
+    get_acid_palette,
+)
 
 
 def _fmt_sec(sec: float) -> str:
@@ -104,6 +110,10 @@ class _StemTrackRow(QtWidgets.QFrame):
 
         # Waveform preview plot
         self.wave_plot = pg.PlotWidget()
+        try:
+            self.wave_plot.hideButtons()
+        except Exception:
+            pass
         self.wave_plot.setMaximumHeight(54)
         self.wave_plot.setMinimumHeight(44)
         self.wave_plot.setBackground("#F8FAFC")
@@ -204,17 +214,20 @@ class StemMixerWidget(QtWidgets.QWidget):
         root.setContentsMargins(10, 8, 10, 10)
         root.setSpacing(7)
 
-        root.addWidget(TelemetryHeader("STEM WORKSTATION // MIX & MIDI", "分轨混音 · 深度扒谱 · MIDI 转录"))
+        self._header = TelemetryHeader("STEM WORKSTATION // MIX & MIDI", "分轨混音 · 深度扒谱 · MIDI 转录")
+        self._pulse_strip = TelemetryPulseStrip(bar_count=10)
+        self._header.add_right_widget(self._pulse_strip)
+        root.addWidget(self._header)
 
-        # AI Job status & progress bar
+        # AI Job status & segmented battery progress bar
         job_box = QtWidgets.QGroupBox("AI SEPARATION // 分轨任务队列")
         job_l = QtWidgets.QHBoxLayout(job_box)
         self.job_status_lbl = QtWidgets.QLabel("空闲：请在下方 120s 历史时间轴选择片段并启动 2-Stem 或 4-Stem 分轨")
         self.job_status_lbl.setWordWrap(True)
-        self.job_progress = QtWidgets.QProgressBar()
+        self.job_progress = SegmentedBatteryProgressBar(cells=16)
         self.job_progress.setRange(0, 100)
         self.job_progress.setValue(0)
-        self.job_progress.setFixedWidth(200)
+        self.job_progress.setFixedSize(212, 22)
         self.cancel_btn = QtWidgets.QPushButton("取消任务")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_ai_requested.emit)
@@ -239,6 +252,11 @@ class StemMixerWidget(QtWidgets.QWidget):
         btn_cpu.clicked.connect(lambda: self.oom_action_requested.emit(OOMRecoveryAction.CPU_FALLBACK.value))
         for b in (btn_seg, btn_light, btn_cpu):
             oom_l.addWidget(b)
+        self.oom_dismiss_btn = QtWidgets.QPushButton("×")
+        self.oom_dismiss_btn.setObjectName("noticeDismissBtn")
+        self.oom_dismiss_btn.setFixedSize(22, 22)
+        self.oom_dismiss_btn.clicked.connect(lambda: self.oom_banner.setVisible(False))
+        oom_l.addWidget(self.oom_dismiss_btn)
         self.oom_banner.setVisible(False)
         root.addWidget(self.oom_banner)
 
@@ -466,6 +484,10 @@ class StemMixerWidget(QtWidgets.QWidget):
         pr_tab = QtWidgets.QWidget()
         pr_l = QtWidgets.QVBoxLayout(pr_tab)
         self.piano_roll_plot = pg.PlotWidget(title="PIANO ROLL // MIDI 钢琴卷帘预览 (单击可跳转播放)")
+        try:
+            self.piano_roll_plot.hideButtons()
+        except Exception:
+            pass
         self.piano_roll_plot.setBackground("#F8FAFC")
         self.piano_roll_plot.showGrid(x=True, y=True, alpha=0.22)
         self.piano_roll_plot.setLabel("bottom", "Time", units="s")
@@ -574,6 +596,32 @@ class StemMixerWidget(QtWidgets.QWidget):
             "practice": [630, 500],
         }[layout])
 
+    def update_telemetry(
+        self,
+        *,
+        energy: float = 0.0,
+        climax: float = 0.0,
+        strength: float = 0.70,
+        reactive: bool = True,
+        locked: bool = False,
+        phase: float = 0.0,
+    ) -> None:
+        s_val = float(strength) / 100.0 if float(strength) > 1.0 else float(strength)
+        self._pulse_strip.set_telemetry(
+            energy=energy,
+            climax=climax,
+            strength=s_val,
+            reactive=reactive,
+            locked=locked,
+            phase=phase,
+        )
+        self.job_progress.set_telemetry_params(
+            strength=s_val,
+            energy=energy if reactive else 0.35,
+            climax=climax if reactive else 0.0,
+            locked=locked,
+        )
+
     def apply_theme(
         self,
         appearance: Appearance,
@@ -588,6 +636,16 @@ class StemMixerWidget(QtWidgets.QWidget):
             row.apply_theme(appearance, system_is_dark=system_is_dark, acid_variant=acid_variant)
         if acid_variant in ("light", "dark"):
             p = get_acid_palette(acid_variant)
+            self._pulse_strip.set_theme_color(p.accent)
+            self.job_progress.set_theme_colors(
+                accent=p.accent,
+                accent_hi=p.accent_secondary,
+                shell_bg=p.bg_code,
+                shell_border=p.border_strong,
+                empty_cell=p.bg_elevated,
+                text_fg=p.text_primary,
+                is_acid=True,
+            )
             apply_acid_plot_theme(self.piano_roll_plot, appearance, acid_variant)
             self._piano_roll_cursor.setPen(pg.mkPen(p.plot_pr_cursor, width=1.6))
             if self._piano_roll_item is not None:
@@ -596,7 +654,18 @@ class StemMixerWidget(QtWidgets.QWidget):
         else:
             apply_plot_appearance(self.piano_roll_plot, appearance, system_is_dark=system_is_dark)
             mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
-            _, _, accent = appearance.effective_colors(system_is_dark=system_is_dark)
+            bg, fg, accent = appearance.effective_colors(system_is_dark=system_is_dark)
+            self._pulse_strip.set_theme_color(accent)
+            is_l = mode == "light"
+            self.job_progress.set_theme_colors(
+                accent=accent,
+                accent_hi=QtGui.QColor(accent).lighter(135).name(),
+                shell_bg=bg,
+                shell_border="#CBD5E1" if is_l else "#475569",
+                empty_cell="#E2E8F0" if is_l else "#1E293B",
+                text_fg=fg,
+                is_acid=False,
+            )
             self._piano_roll_cursor.setPen(pg.mkPen("#DC2626" if mode == "light" else "#FF6B6B", width=1.6))
             if self._piano_roll_item is not None:
                 self._piano_roll_item.setOpts(brush=accent, pen=pg.mkPen(accent, width=0.8))
@@ -927,6 +996,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         )
         self.cancel_btn.setEnabled(running)
         self.clear_results_btn.setEnabled(bool(self._rows) and not running)
+        self.job_progress.set_active(running)
         self.job_progress.setValue(int(round(prog.progress * 100)))
         self.job_status_lbl.setText(f"[{prog.state.value}] {prog.message}")
         if running:
@@ -935,6 +1005,7 @@ class StemMixerWidget(QtWidgets.QWidget):
     def handle_ai_result(self, res: AIJobResult) -> None:
         self.cancel_btn.setEnabled(False)
         self.clear_results_btn.setEnabled(bool(self._rows))
+        self.job_progress.set_active(False)
         if res.state == AIJobState.COMPLETED:
             self.job_progress.setValue(100)
             self.job_status_lbl.setText(
@@ -953,6 +1024,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
     def clear_results(self) -> None:
         self.load_stem_paths({})
+        self.job_progress.set_active(False)
         self.job_progress.setValue(0)
         self.job_status_lbl.setText("分轨结果已清除。可在历史时间轴重新选择片段。")
 

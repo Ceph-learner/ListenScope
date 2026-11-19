@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import ctypes
 from dataclasses import replace
 from pathlib import Path
+import sys
 from typing import Any, Optional
 
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
+
+try:
+    from PySide6 import QtSvg
+except Exception:  # pragma: no cover
+    QtSvg = None  # type: ignore[assignment]
 
 from ai.models import MODEL_REGISTRY, list_models
 from audio.playback import StemMixerEngine
@@ -46,6 +53,7 @@ from .help_badge import (
     install_focus_animations,
     install_tooltip_guard,
     set_focus_animations_enabled,
+    set_focus_ring_style,
     set_help_language,
     set_help_mode_enabled,
     set_help_theme,
@@ -54,7 +62,9 @@ from .acid_style import (
     AcidBarcodeFooter,
     ChamferBadge,
     HazardStripeBar,
+    MarqueeComboBox,
     TelemetryHeader,
+    TelemetryPulseStrip,
     acid_stylesheet,
     apply_acid_plot_theme,
     get_acid_palette,
@@ -143,16 +153,40 @@ QTabBar::tab:selected {
 """
 
 
+_CACHED_APP_ICON: Optional[QtGui.QIcon] = None
+
+
 def _load_app_icon() -> QtGui.QIcon:
-    """Load the Acid Telemetry graphic realism emblem from `ui/assets/listenscope.ico` or `.svg`."""
+    """Load the Acid Telemetry emblem as explicit multi-DPI pixmaps + ICO for reliable Windows taskbar & tray icons."""
+    global _CACHED_APP_ICON
+    if _CACHED_APP_ICON is not None and not _CACHED_APP_ICON.isNull():
+        return _CACHED_APP_ICON
     assets_dir = get_bundle_root() / "ui" / "assets"
+    if not (assets_dir / "listenscope.svg").exists() and not (assets_dir / "listenscope.ico").exists():
+        assets_dir = Path(__file__).resolve().parent / "assets"
     icon = QtGui.QIcon()
-    ico_path = assets_dir / "listenscope.ico"
     svg_path = assets_dir / "listenscope.svg"
+    ico_path = assets_dir / "listenscope.ico"
+    if svg_path.exists() and QtSvg is not None:
+        try:
+            renderer = QtSvg.QSvgRenderer(str(svg_path))
+            if renderer.isValid():
+                for px in (16, 20, 24, 32, 48, 64, 128, 256):
+                    pm = QtGui.QPixmap(px, px)
+                    pm.fill(QtCore.Qt.GlobalColor.transparent)
+                    painter = QtGui.QPainter(pm)
+                    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+                    renderer.render(painter, QtCore.QRectF(0, 0, px, px))
+                    painter.end()
+                    if not pm.isNull():
+                        icon.addPixmap(pm)
+        except Exception:
+            pass
     if ico_path.exists():
         icon.addFile(str(ico_path))
-    if svg_path.exists():
+    if svg_path.exists() and icon.isNull():
         icon.addFile(str(svg_path))
+    _CACHED_APP_ICON = icon
     return icon
 
 
@@ -267,7 +301,7 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         root.addWidget(banner)
 
         ctrl = QtWidgets.QHBoxLayout()
-        self.model_combo = QtWidgets.QComboBox()
+        self.model_combo = MarqueeComboBox()
         self.model_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         for m in list_models(stem_mode="2stem", ai_config=ai_config, include_experimental=False):
             self.model_combo.addItem(f"{m.display_name} [{m.architecture}]", m.model_id)
@@ -425,6 +459,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ab_bookmark_save_requested = QtCore.Signal(str)
     ab_bookmark_select_requested = QtCore.Signal(int)
     ab_bookmark_delete_requested = QtCore.Signal(int)
+    restart_requested = QtCore.Signal()
 
     def __init__(
         self,
@@ -440,6 +475,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope — AUDIO TELEMETRY · A/B LOOP · SAFE AI SEPARATION")
+        self.setMinimumSize(940, 620)
+        self.setMouseTracking(True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
         app_icon = _load_app_icon()
         if not app_icon.isNull():
             self.setWindowIcon(app_icon)
@@ -463,6 +501,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._style_hints_connected = False
         self._frameless_applied: Optional[bool] = None
         self._drag_offset: Optional[QtCore.QPoint] = None
+        self._resize_edges = QtCore.Qt.Edge(0)
+        self._resize_start_global: Optional[QtCore.QPoint] = None
+        self._resize_start_geom: Optional[QtCore.QRect] = None
+        self._win11_dwm_rounded: bool = False
+        self._force_quit: bool = False
+        self._tray_icon: Optional[QtWidgets.QSystemTrayIcon] = None
+        self._tray_notified: bool = False
+        self._telemetry_phase: float = 0.0
         self._initial_centered = False
 
         self._last_capture_status_txt = "未捕获"
@@ -485,6 +531,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._play_shortcut.activated.connect(self.toggle_playback_requested.emit)
 
         self._shell_frame = _MainShellFrame(self)
+        self._shell_frame.setMouseTracking(True)
+        self._shell_frame.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
+        self._shell_frame.installEventFilter(self)
+        self.installEventFilter(self)
         self.setCentralWidget(self._shell_frame)
         main_layout = QtWidgets.QVBoxLayout(self._shell_frame)
         self._workspace_layout = main_layout
@@ -510,7 +560,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._brand_eye = QtWidgets.QLabel("LISTENSCOPE // AUDIO TELEMETRY")
         self._brand_eye.setObjectName("telemetryEyebrow")
         self._brand_eye.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
         brand_title_row = QtWidgets.QHBoxLayout()
@@ -522,23 +572,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Preferred,
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
+        self._header_pulse = TelemetryPulseStrip(bar_count=8)
         self._acid_hero_echo_lbl = QtWidgets.QLabel("WORKBENCH")
         self._acid_hero_echo_lbl.setObjectName("acidEchoTitle")
-        self._acid_hero_echo_lbl.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Preferred,
-            QtWidgets.QSizePolicy.Policy.Preferred,
-        )
         self._acid_hero_echo_lbl.setVisible(False)
         self._acid_hero_sub_lbl = QtWidgets.QLabel("实时频谱 · 120s 分轨终端")
         self._acid_hero_sub_lbl.setObjectName("acidHeroSub")
-        self._acid_hero_sub_lbl.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Ignored,
-            QtWidgets.QSizePolicy.Policy.Preferred,
-        )
         self._acid_hero_sub_lbl.setVisible(False)
         brand_title_row.addWidget(self._brand_title)
-        brand_title_row.addWidget(self._acid_hero_echo_lbl)
-        brand_title_row.addWidget(self._acid_hero_sub_lbl, 1)
+        brand_title_row.addWidget(self._header_pulse)
+        brand_title_row.addStretch(1)
         brand_txt.addWidget(self._brand_eye)
         brand_txt.addLayout(brand_title_row)
 
@@ -623,7 +666,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_io.setSpacing(6)
         self._src_pill = QtWidgets.QLabel("AUDIO_IN // 音源")
         self._src_pill.setObjectName("telemetryPill")
-        self.source_combo = QtWidgets.QComboBox()
+        self.source_combo = MarqueeComboBox()
         self.source_combo.setMinimumWidth(200)
         self.source_combo.setMaximumWidth(400)
         self.source_combo.setSizeAdjustPolicy(
@@ -666,12 +709,27 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         main_layout.addWidget(topbar_frame)
 
         # Dismissible warning / notice banner
+        self._notice_bar = QtWidgets.QFrame()
+        self._notice_bar.setObjectName("bannerNoticeBox")
+        self._notice_bar.setVisible(False)
+        notice_l = QtWidgets.QHBoxLayout(self._notice_bar)
+        notice_l.setContentsMargins(6, 2, 4, 2)
+        notice_l.setSpacing(6)
         self.notice_banner = QtWidgets.QLabel("")
         self.notice_banner.setObjectName("bannerNotice")
+        self.notice_banner.setProperty("inlineBanner", True)
         self.notice_banner.setWordWrap(True)
         self.notice_banner.setVisible(False)
+        self.notice_dismiss_btn = QtWidgets.QPushButton("×")
+        self.notice_dismiss_btn.setObjectName("noticeDismissBtn")
+        self.notice_dismiss_btn.setAccessibleName("关闭提示横幅")
+        self.notice_dismiss_btn.setFixedSize(22, 22)
+        self.notice_dismiss_btn.clicked.connect(self.dismiss_banner)
+        notice_l.addWidget(self.notice_banner, 1)
+        notice_l.addWidget(self.notice_dismiss_btn, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        set_widget_tone(self._notice_bar, "warn")
         set_widget_tone(self.notice_banner, "warn")
-        main_layout.addWidget(self.notice_banner)
+        main_layout.addWidget(self._notice_bar)
 
         # 2. CENTER TABS (Slash-indexed Telemetry navigation)
         self.tabs = QtWidgets.QTabWidget()
@@ -794,6 +852,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         # Interactive 120s Waveform Overview + Draggable A/B Selector + Live Playhead
         self.history_overview_plot = pg.PlotWidget()
+        try:
+            self.history_overview_plot.hideButtons()
+        except Exception:
+            pass
         self.history_overview_plot.setMinimumHeight(56)
         self.history_overview_plot.setMaximumHeight(70)
         self.history_overview_plot.setBackground("#F8FAFC")
@@ -853,7 +915,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.bookmark_save_btn = QtWidgets.QPushButton("保存当前 A/B")
         self.bookmark_save_btn.clicked.connect(self._on_bookmark_save_clicked)
 
-        self.bookmark_combo = QtWidgets.QComboBox()
+        self.bookmark_combo = MarqueeComboBox()
         self.bookmark_combo.setMinimumWidth(180)
         self.bookmark_jump_btn = QtWidgets.QPushButton("跳转此书签")
         self.bookmark_jump_btn.setEnabled(False)
@@ -876,7 +938,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         bottom_l.addLayout(bookmark_row)
 
         row_b = QtWidgets.QHBoxLayout()
-        self.ai_2stem_combo = QtWidgets.QComboBox()
+        self.ai_2stem_combo = MarqueeComboBox()
         self.ai_2stem_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
@@ -922,6 +984,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         main_layout.addWidget(self._acid_footer)
 
         self.center_on_screen()
+        self._init_system_tray()
         install_tooltip_guard(self)
         self.apply_appearance(appearance, force_theme=True)
 
@@ -948,6 +1011,93 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         super().showEvent(event)
         if not self._initial_centered:
             self.center_on_screen()
+        self._apply_windows_taskbar_and_rounding()
+
+    def _init_system_tray(self) -> None:
+        if self._tray_icon is not None:
+            return
+        try:
+            if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+                return
+        except Exception:
+            return
+        tray = QtWidgets.QSystemTrayIcon(_load_app_icon(), self)
+        tray.setToolTip("ListenScope")
+        menu = QtWidgets.QMenu(self)
+        act_show = menu.addAction("显示主界面")
+        act_show.triggered.connect(self.show_from_tray)
+        act_settings = menu.addAction("打开设置")
+        act_settings.triggered.connect(lambda: (self.show_from_tray(), self.open_settings_dialog()))
+        menu.addSeparator()
+        act_quit = menu.addAction("退出 ListenScope")
+        act_quit.triggered.connect(self.force_quit)
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._on_tray_activated)
+        tray.show()
+        self._tray_icon = tray
+
+    def _on_tray_activated(self, reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QtWidgets.QSystemTrayIcon.ActivationReason.Trigger,
+            QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self.show_from_tray()
+
+    def show_from_tray(self) -> None:
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def force_quit(self) -> None:
+        self._force_quit = True
+        app = QtWidgets.QApplication.instance()
+        if isinstance(app, QtWidgets.QApplication):
+            app.setQuitOnLastWindowClosed(True)
+        self.close()
+
+    def _apply_windows_taskbar_and_rounding(self) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        if not hwnd:
+            return
+        # Re-apply explicit Win32 WM_SETICON so frameless windows still render the taskbar emblem crisp & non-generic
+        try:
+            user32 = ctypes.windll.user32
+            assets_dir = get_bundle_root() / "ui" / "assets"
+            ico_path = assets_dir / "listenscope.ico"
+            if not ico_path.exists():
+                ico_path = Path(__file__).resolve().parent / "assets" / "listenscope.ico"
+            if ico_path.exists():
+                lr_loadfromfile = 0x0010
+                image_icon = 1
+                h_big = user32.LoadImageW(None, str(ico_path), image_icon, 48, 48, lr_loadfromfile)
+                h_small = user32.LoadImageW(None, str(ico_path), image_icon, 16, 16, lr_loadfromfile)
+                if h_big:
+                    user32.SendMessageW(hwnd, 0x0080, 1, h_big)
+                if h_small:
+                    user32.SendMessageW(hwnd, 0x0080, 0, h_small)
+                self._win32_hicons = (h_big, h_small)
+        except Exception:
+            pass
+        # Enable native Windows 11 DWM rounded corners (DWMWCP_ROUND=2) when available
+        try:
+            win_ver = sys.getwindowsversion()
+            if getattr(win_ver, "build", 0) >= 22000 and getattr(self, "_frameless_applied", False):
+                dwmapi = ctypes.windll.dwmapi
+                pref = ctypes.c_int(2)
+                hr = dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+                if hr == 0:
+                    self._win11_dwm_rounded = True
+                    self.clearMask()
+        except Exception:
+            pass
 
     def _toggle_maximize_restore(self) -> None:
         if self.isMaximized():
@@ -968,21 +1118,30 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         was_visible = self.isVisible()
         saved_geom = self.geometry() if was_visible else None
         self._frameless_applied = want_frameless
-        flags = self.windowFlags()
+        self._win11_dwm_rounded = False
+        flags = (
+            QtCore.Qt.WindowType.Window
+            | QtCore.Qt.WindowType.WindowSystemMenuHint
+            | QtCore.Qt.WindowType.WindowMinimizeButtonHint
+            | QtCore.Qt.WindowType.WindowMaximizeButtonHint
+            | QtCore.Qt.WindowType.WindowCloseButtonHint
+        )
         if want_frameless:
             flags |= QtCore.Qt.WindowType.FramelessWindowHint
-        else:
-            flags &= ~QtCore.Qt.WindowType.FramelessWindowHint
         self.setWindowFlags(flags)
+        icon = _load_app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         if was_visible:
             self.show()
             if saved_geom is not None and saved_geom.isValid():
                 self.setGeometry(saved_geom)
+        self._apply_windows_taskbar_and_rounding()
         self._update_rounded_mask()
 
     def _update_rounded_mask(self) -> None:
-        """Apply a clean anti-aliased rounded mask in frameless mode so window corners are smooth across platforms."""
-        if not getattr(self, "_frameless_applied", False) or self.isMaximized():
+        """Apply a clean anti-aliased rounded mask in frameless mode unless Win11 DWM handles native rounding."""
+        if not getattr(self, "_frameless_applied", False) or self.isMaximized() or getattr(self, "_win11_dwm_rounded", False):
             self.clearMask()
             return
         w, h = self.width(), self.height()
@@ -993,13 +1152,121 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         region = QtGui.QRegion(path.toFillPolygon().toPolygon())
         self.setMask(region)
 
+    def _hit_test_resize_edges(self, local_pos: QtCore.QPoint) -> QtCore.Qt.Edge:
+        """Return Qt.Edge flags if `local_pos` (in MainWindow coordinates) lies inside the 8px resize rim."""
+        if not getattr(self, "_frameless_applied", False) or self.isMaximized():
+            return QtCore.Qt.Edge(0)
+        m = 8
+        w, h = self.width(), self.height()
+        if w <= m * 2 or h <= m * 2:
+            return QtCore.Qt.Edge(0)
+        x, y = local_pos.x(), local_pos.y()
+        edges = QtCore.Qt.Edge(0)
+        if 0 <= x < m:
+            edges |= QtCore.Qt.Edge.LeftEdge
+        elif w - m <= x <= w:
+            edges |= QtCore.Qt.Edge.RightEdge
+        if 0 <= y < m:
+            edges |= QtCore.Qt.Edge.TopEdge
+        elif h - m <= y <= h:
+            edges |= QtCore.Qt.Edge.BottomEdge
+        return edges
+
+    @staticmethod
+    def _cursor_for_edges(edges: QtCore.Qt.Edge) -> Optional[QtCore.Qt.CursorShape]:
+        left = bool(edges & QtCore.Qt.Edge.LeftEdge)
+        right = bool(edges & QtCore.Qt.Edge.RightEdge)
+        top = bool(edges & QtCore.Qt.Edge.TopEdge)
+        bottom = bool(edges & QtCore.Qt.Edge.BottomEdge)
+        if (left and top) or (right and bottom):
+            return QtCore.Qt.CursorShape.SizeFDiagCursor
+        if (right and top) or (left and bottom):
+            return QtCore.Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return QtCore.Qt.CursorShape.SizeHorCursor
+        if top or bottom:
+            return QtCore.Qt.CursorShape.SizeVerCursor
+        return None
+
+    def _apply_software_resize(self, global_pos: QtCore.QPoint) -> None:
+        if not self._resize_edges or self._resize_start_global is None or self._resize_start_geom is None:
+            return
+        delta = global_pos - self._resize_start_global
+        geom = QtCore.QRect(self._resize_start_geom)
+        min_w = max(640, self.minimumWidth())
+        min_h = max(480, self.minimumHeight())
+        if self._resize_edges & QtCore.Qt.Edge.LeftEdge:
+            new_left = min(geom.right() - min_w + 1, geom.left() + delta.x())
+            geom.setLeft(new_left)
+        if self._resize_edges & QtCore.Qt.Edge.RightEdge:
+            new_right = max(geom.left() + min_w - 1, geom.right() + delta.x())
+            geom.setRight(new_right)
+        if self._resize_edges & QtCore.Qt.Edge.TopEdge:
+            new_top = min(geom.bottom() - min_h + 1, geom.top() + delta.y())
+            geom.setTop(new_top)
+        if self._resize_edges & QtCore.Qt.Edge.BottomEdge:
+            new_bottom = max(geom.top() + min_h - 1, geom.bottom() + delta.y())
+            geom.setBottom(new_bottom)
+        self.setGeometry(geom)
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._update_rounded_mask()
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
-        if watched is getattr(self, "_topbar_frame", None) and getattr(self, "_frameless_applied", False):
-            etype = event.type()
+        etype = event.type()
+        is_frameless = bool(getattr(self, "_frameless_applied", False))
+        if is_frameless and watched in (self, getattr(self, "_shell_frame", None)):
+            if etype == QtCore.QEvent.Type.HoverMove and not self._resize_edges:
+                hev = event  # type: ignore[assignment]
+                gpos = self.mapToGlobal(QtCore.QPoint(0, 0))
+                if hasattr(hev, "globalPosition"):
+                    local = self.mapFromGlobal(hev.globalPosition().toPoint())
+                else:
+                    local = hev.position().toPoint()
+                edges = self._hit_test_resize_edges(local)
+                cur = self._cursor_for_edges(edges)
+                if cur is not None:
+                    self.setCursor(cur)
+                else:
+                    self.unsetCursor()
+            elif etype == QtCore.QEvent.Type.MouseButtonPress:
+                mouse_ev = event  # type: ignore[assignment]
+                if isinstance(mouse_ev, QtGui.QMouseEvent) and mouse_ev.button() == QtCore.Qt.MouseButton.LeftButton:
+                    local = self.mapFromGlobal(mouse_ev.globalPosition().toPoint())
+                    edges = self._hit_test_resize_edges(local)
+                    if edges:
+                        win_handle = self.windowHandle()
+                        if win_handle is not None and hasattr(win_handle, "startSystemResize"):
+                            try:
+                                if win_handle.startSystemResize(edges):
+                                    return True
+                            except Exception:
+                                pass
+                        self._resize_edges = edges
+                        self._resize_start_global = mouse_ev.globalPosition().toPoint()
+                        self._resize_start_geom = QtCore.QRect(self.geometry())
+                        return True
+            elif etype == QtCore.QEvent.Type.MouseMove:
+                mouse_ev = event  # type: ignore[assignment]
+                if isinstance(mouse_ev, QtGui.QMouseEvent):
+                    if self._resize_edges and (mouse_ev.buttons() & QtCore.Qt.MouseButton.LeftButton):
+                        self._apply_software_resize(mouse_ev.globalPosition().toPoint())
+                        return True
+                    if not (mouse_ev.buttons() & QtCore.Qt.MouseButton.LeftButton):
+                        local = self.mapFromGlobal(mouse_ev.globalPosition().toPoint())
+                        cur = self._cursor_for_edges(self._hit_test_resize_edges(local))
+                        if cur is not None:
+                            self.setCursor(cur)
+                        else:
+                            self.unsetCursor()
+            elif etype == QtCore.QEvent.Type.MouseButtonRelease:
+                self._resize_edges = QtCore.Qt.Edge(0)
+                self._resize_start_global = None
+                self._resize_start_geom = None
+                self.unsetCursor()
+
+        if watched is getattr(self, "_topbar_frame", None) and is_frameless:
             if etype == QtCore.QEvent.Type.MouseButtonDblClick:
                 mouse_ev = event  # type: ignore[assignment]
                 if isinstance(mouse_ev, QtGui.QMouseEvent) and mouse_ev.button() == QtCore.Qt.MouseButton.LeftButton:
@@ -1008,6 +1275,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             elif etype == QtCore.QEvent.Type.MouseButtonPress:
                 mouse_ev = event  # type: ignore[assignment]
                 if isinstance(mouse_ev, QtGui.QMouseEvent) and mouse_ev.button() == QtCore.Qt.MouseButton.LeftButton:
+                    local_win = self.mapFromGlobal(mouse_ev.globalPosition().toPoint())
+                    edges = self._hit_test_resize_edges(local_win)
+                    if edges:
+                        self._resize_edges = edges
+                        self._resize_start_global = mouse_ev.globalPosition().toPoint()
+                        self._resize_start_geom = QtCore.QRect(self.geometry())
+                        return True
                     child = self._topbar_frame.childAt(mouse_ev.position().toPoint())
                     if not isinstance(child, (QtWidgets.QAbstractButton, QtWidgets.QComboBox)):
                         win_handle = self.windowHandle()
@@ -1022,20 +1296,70 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                             return True
             elif etype == QtCore.QEvent.Type.MouseMove:
                 mouse_ev = event  # type: ignore[assignment]
-                if (
-                    isinstance(mouse_ev, QtGui.QMouseEvent)
-                    and self._drag_offset is not None
-                    and (mouse_ev.buttons() & QtCore.Qt.MouseButton.LeftButton)
-                    and not self.isMaximized()
-                ):
-                    self.move(mouse_ev.globalPosition().toPoint() - self._drag_offset)
-                    return True
+                if isinstance(mouse_ev, QtGui.QMouseEvent):
+                    if self._resize_edges and (mouse_ev.buttons() & QtCore.Qt.MouseButton.LeftButton):
+                        self._apply_software_resize(mouse_ev.globalPosition().toPoint())
+                        return True
+                    if (
+                        self._drag_offset is not None
+                        and (mouse_ev.buttons() & QtCore.Qt.MouseButton.LeftButton)
+                        and not self.isMaximized()
+                    ):
+                        self.move(mouse_ev.globalPosition().toPoint() - self._drag_offset)
+                        return True
             elif etype == QtCore.QEvent.Type.MouseButtonRelease:
                 self._drag_offset = None
+                self._resize_edges = QtCore.Qt.Edge(0)
+                self._resize_start_global = None
+                self._resize_start_geom = None
         return super().eventFilter(watched, event)
 
     def _on_static_lock_toggled(self, locked: bool) -> None:
         self._static_lock = bool(locked)
+        self.update_music_telemetry(0.0, 0.0)
+
+    def update_music_telemetry(self, energy: float = 0.0, climax: float = 0.0) -> None:
+        """Drive header/card telemetry micro-animations scaled by user intensity & music dynamics."""
+        app = getattr(self, "appearance", Appearance())
+        strength = max(0.0, min(1.0, float(getattr(app, "telemetry_animation_strength", 70)) / 100.0))
+        reactive = bool(getattr(app, "music_reactive_animations", True))
+        locked = bool(getattr(self, "_static_lock", False))
+        if not locked and strength > 0.02:
+            step = 0.22 + (0.28 * energy + 0.35 * climax if reactive else 0.08) * strength
+            self._telemetry_phase = (self._telemetry_phase + step) % 628.0
+        phase = self._telemetry_phase
+        self._header_pulse.set_telemetry(
+            energy=energy,
+            climax=climax,
+            strength=strength,
+            reactive=reactive,
+            locked=locked,
+            phase=phase,
+        )
+        self.spectrum_widget.update_telemetry(
+            energy=energy,
+            climax=climax,
+            strength=strength,
+            reactive=reactive,
+            locked=locked,
+            phase=phase,
+        )
+        self.chroma_widget.update_telemetry_pulse(
+            energy=energy,
+            climax=climax,
+            strength=strength,
+            reactive=reactive,
+            locked=locked,
+            phase=phase,
+        )
+        self.mixer_widget.update_telemetry(
+            energy=energy,
+            climax=climax,
+            strength=strength,
+            reactive=reactive,
+            locked=locked,
+            phase=phase,
+        )
 
     def set_acid_skin(self, skin: str) -> None:
         skin_map = {
@@ -1107,21 +1431,18 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         is_active = bool(is_acid and variant in ("light", "dark"))
         lang = getattr(getattr(self, "appearance", Appearance()), "language", "zh")
         if is_active:
-            self._brand_eye.setText(
-                f"LISTENSCOPE // {'CLINICAL' if variant == 'light' else 'ACID_VOID'} TELEMETRY"
-            )
+            sub_txt = {
+                "zh": "实时频谱 · 120s 分轨终端",
+                "en": "REALTIME SPECTRUM · 120S STEM TERMINAL",
+                "ko": "실시간 스펙트럼 · 120s 분리 터미널",
+                "ja": "リアルタイムスペクトル · 120s 分離端末",
+            }.get(lang, "实时频谱 · 120s 分轨终端")
+            skin_lbl = "CLINICAL" if variant == "light" else "ACID_VOID"
+            self._brand_eye.setText(f"LISTENSCOPE // {skin_lbl} · {sub_txt}")
             self._brand_title.setText("SIGNAL_GRID")
             self._brand_title.setObjectName("acidHeroTitle")
-            self._acid_hero_echo_lbl.setVisible(True)
-            self._acid_hero_sub_lbl.setVisible(True)
-            self._acid_hero_sub_lbl.setText(
-                {
-                    "zh": "实时频谱 · 120s 分轨终端",
-                    "en": "REALTIME SPECTRUM · 120S STEM TERMINAL",
-                    "ko": "실시간 스펙트럼 · 120s 분리 터미널",
-                    "ja": "リアルタイムスペクトル · 120s 分離端末",
-                }.get(lang, "实时频谱 · 120s 分轨终端")
-            )
+            self._acid_hero_echo_lbl.setVisible(False)
+            self._acid_hero_sub_lbl.setVisible(False)
             self._src_pill.setText(tr_telemetry("AUDIO_IN", lang, zh="音源", ko="오디오 입력", ja="音声入力"))
             self._shortcut_pill.setText(tr_telemetry("CTRL+SPACE", lang, zh="播放控制", ko="재생 제어", ja="再生制御"))
             self._pill_dark.setText(tr_telemetry("VOID", lang, zh="黑夜", ko="다크", ja="ダーク"))
@@ -1214,6 +1535,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.mixer_widget.plot_appearance = appearance
         set_help_mode_enabled(appearance.help_mode)
         set_focus_animations_enabled(appearance.focus_animations)
+        set_focus_ring_style(appearance.focus_style)
         set_help_language(appearance.language)
         self._apply_frameless_mode(appearance.frameless)
         self._shell_frame.set_wallpaper_path(appearance.effective_background_image())
@@ -1230,9 +1552,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 analysis_layout=old.analysis_layout,
                 help_mode=old.help_mode,
                 focus_animations=old.focus_animations,
+                focus_style=old.focus_style,
+                telemetry_animation_strength=old.telemetry_animation_strength,
+                music_reactive_animations=old.music_reactive_animations,
+                close_to_tray=old.close_to_tray,
             )
             == old
         ):
+            self.update_music_telemetry(0.0, 0.0)
             if was_visible and saved_geom is not None and saved_geom.isValid() and not self.isMaximized():
                 if self.geometry() != saved_geom:
                     self.setGeometry(saved_geom)
@@ -1253,6 +1580,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         if variant in ("light", "dark"):
             p = get_acid_palette(variant)
+            self._header_pulse.set_theme_color(p.accent)
             set_help_theme(
                 bg=p.bg_panel,
                 fg=p.text_primary,
@@ -1285,6 +1613,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         else:
             self._sync_acid_chrome(False, None)
             bg, fg, accent = appearance.effective_colors(system_is_dark=self._system_is_dark)
+            self._header_pulse.set_theme_color(accent)
             mode = appearance.resolve_theme_mode(system_is_dark=self._system_is_dark)
             set_help_theme(
                 bg=bg,
@@ -1380,6 +1709,44 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._closing_handler = fn
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        want_tray = (
+            not self._force_quit
+            and bool(getattr(self.appearance, "close_to_tray", True))
+            and self._tray_icon is not None
+            and self._tray_icon.isVisible()
+        )
+        if want_tray:
+            try:
+                want_tray = bool(QtWidgets.QSystemTrayIcon.isSystemTrayAvailable())
+            except Exception:
+                want_tray = False
+        if want_tray:
+            app_q = QtWidgets.QApplication.instance()
+            if isinstance(app_q, QtWidgets.QApplication):
+                app_q.setQuitOnLastWindowClosed(False)
+            event.ignore()
+            self.hide()
+            if not self._tray_notified and self._tray_icon is not None:
+                self._tray_notified = True
+                try:
+                    self._tray_icon.showMessage(
+                        "ListenScope",
+                        "已最小化到系统托盘，双击图标可恢复主窗口（可在「外观与字体」中关闭此项）。",
+                        QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                        2500,
+                    )
+                except Exception:
+                    pass
+            return
+
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.hide()
+            except Exception:
+                pass
+        app_q = QtWidgets.QApplication.instance()
+        if isinstance(app_q, QtWidgets.QApplication):
+            app_q.setQuitOnLastWindowClosed(True)
         if self._style_hints_connected:
             app_inst = QtGui.QGuiApplication.instance()
             if app_inst is not None:
@@ -1675,17 +2042,30 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             _set_label_cached(self.capture_status_lbl, "未捕获")
             self._last_capture_status_txt = "未捕获"
 
+    def dismiss_banner(self) -> None:
+        self._last_capture_banner = None
+        if self._notice_bar.isVisible():
+            self._notice_bar.setVisible(False)
+        if self.notice_banner.isVisible():
+            self.notice_banner.setVisible(False)
+        _set_label_cached(self.notice_banner, "")
+
     def show_banner_message(self, text: str, *, tone: Optional[str] = None) -> None:
         if not text:
+            if self._notice_bar.isVisible():
+                self._notice_bar.setVisible(False)
             if self.notice_banner.isVisible():
                 self.notice_banner.setVisible(False)
             _set_label_cached(self.notice_banner, "")
         else:
             resolved_tone = tone if tone is not None else _infer_banner_tone(text)
+            set_widget_tone(self._notice_bar, resolved_tone)
             set_widget_tone(self.notice_banner, resolved_tone)
             _set_label_cached(self.notice_banner, text)
             if not self.notice_banner.isVisible():
                 self.notice_banner.setVisible(True)
+            if not self._notice_bar.isVisible():
+                self._notice_bar.setVisible(True)
 
     def update_capture_stats(self, stats: CaptureStats, ring_available_sec: float) -> None:
         if self.capture_btn.isChecked() != stats.is_running:
@@ -1801,8 +2181,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.apply_appearance(updated_app)
             self.appearance_applied.emit()
 
+        def on_bootstrap_runtimes_ready(ai_py: str, midi_py: str) -> None:
+            if ai_py:
+                self._ai_python_executable = ai_py
+            if midi_py:
+                self._midi_python_executable = midi_py
+
         dlg.appearance_requested.connect(edit_appearance)
         dlg.appearance_changed.connect(on_quick_appearance)
+        dlg.restart_requested.connect(self.restart_requested.emit)
+        dlg.bootstrap_runtimes_ready.connect(on_bootstrap_runtimes_ready)
         if focus_midi:
             QtCore.QTimer.singleShot(0, dlg.focus_midi)
         self._active_settings_dialog = dlg
