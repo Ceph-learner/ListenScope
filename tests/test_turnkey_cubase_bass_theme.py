@@ -797,11 +797,14 @@ def test_home_feedback_i18n_bass_boost_export_singleline_chords_pytorch_scan_and
 
         # 4. Language switching (zh -> en -> ko -> ja -> zh) & window geometry lock when visible
         w.show()
-        w.resize(1360, 860)
+        min_hint = w.minimumSizeHint()
+        init_w = 1360 if min_hint.width() <= 1300 else min_hint.width() + 140
+        init_h = 860 if min_hint.height() <= 855 else min_hint.height() + 30
+        w.resize(init_w, init_h)
         w.move(80, 60)
         app.processEvents()
         geom_before = w.geometry()
-        assert geom_before.width() == 1360 and geom_before.height() == 860
+        assert geom_before.width() == init_w and geom_before.height() == init_h
         w.apply_appearance(replace(w.appearance, language="en"))
         app.processEvents()
         assert w.geometry() == geom_before

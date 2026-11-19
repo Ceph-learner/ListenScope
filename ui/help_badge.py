@@ -625,23 +625,30 @@ class FocusRingAnimator(QtCore.QObject):
         self._overlay.set_state(rect, self._alpha)
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
-        et = event.type()
-        if obj is self._root and et in (
-            QtCore.QEvent.Type.Resize,
-            QtCore.QEvent.Type.Hide,
-            QtCore.QEvent.Type.StyleChange,
-            QtCore.QEvent.Type.LayoutRequest,
-        ):
-            self._active_widget = None
-            self._overlay.hide()
+        root = getattr(self, "_root", None)
+        overlay = getattr(self, "_overlay", None)
+        if root is None or overlay is None:
             return False
-        if not self._enabled:
+        try:
+            et = event.type()
+            if obj is root and et in (
+                QtCore.QEvent.Type.Resize,
+                QtCore.QEvent.Type.Hide,
+                QtCore.QEvent.Type.StyleChange,
+                QtCore.QEvent.Type.LayoutRequest,
+            ):
+                self._active_widget = None
+                overlay.hide()
+                return False
+            if not getattr(self, "_enabled", False):
+                return False
+            if isinstance(obj, _INTERACTIVE_TYPES) and not isinstance(obj, HelpBadge):
+                if et in (QtCore.QEvent.Type.Enter, QtCore.QEvent.Type.FocusIn):
+                    self._focus_widget(obj)
+                elif et in (QtCore.QEvent.Type.Leave, QtCore.QEvent.Type.FocusOut, QtCore.QEvent.Type.Hide):
+                    self._clear_focus(obj)
+        except RuntimeError:
             return False
-        if isinstance(obj, _INTERACTIVE_TYPES) and not isinstance(obj, HelpBadge):
-            if et in (QtCore.QEvent.Type.Enter, QtCore.QEvent.Type.FocusIn):
-                self._focus_widget(obj)
-            elif et in (QtCore.QEvent.Type.Leave, QtCore.QEvent.Type.FocusOut, QtCore.QEvent.Type.Hide):
-                self._clear_focus(obj)
         return False
 
 
