@@ -11,6 +11,22 @@ from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+try:
+    import shiboken6
+except Exception:  # pragma: no cover
+    shiboken6 = None  # type: ignore[assignment]
+
+
+def _is_qt_valid(obj: object) -> bool:
+    if obj is None:
+        return False
+    if shiboken6 is not None:
+        try:
+            return bool(shiboken6.isValid(obj))
+        except Exception:
+            return False
+    return True
+
 
 @dataclass
 class _HelpTheme:
@@ -255,14 +271,20 @@ class _HelpPopover(QtWidgets.QFrame):
         super().leaveEvent(event)
 
     def _check_and_hide(self) -> None:
+        if not _is_qt_valid(self):
+            return
         if self.underMouse():
             return
-        if self._anchor is not None:
-            try:
-                if self._anchor.underMouse():
-                    return
-            except RuntimeError:
+        anchor = self._anchor
+        if anchor is not None:
+            if not _is_qt_valid(anchor):
                 self._anchor = None
+            else:
+                try:
+                    if anchor.underMouse():
+                        return
+                except RuntimeError:
+                    self._anchor = None
         self.hide()
 
 
@@ -639,6 +661,7 @@ class FocusRingAnimator(QtCore.QObject):
     def __init__(self, root: QtWidgets.QWidget) -> None:
         super().__init__(root)
         self._root = root
+        self._torn_down: bool = False
         self._enabled = _FOCUS_ANIMATIONS_ENABLED
         self._overlay = _FocusOverlay(root)
         self._current_target: Optional[QtWidgets.QWidget] = None
@@ -656,15 +679,61 @@ class FocusRingAnimator(QtCore.QObject):
         self._fade_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
         self._fade_anim.valueChanged.connect(self._on_fade)
 
+        try:
+            root.destroyed.connect(self._on_root_destroyed)
+        except Exception:
+            pass
         self._install_recursive(root)
         _LIVE_ANIMATORS.add(self)
 
+    def _on_root_destroyed(self, *_args) -> None:
+        self._torn_down = True
+        self._current_target = None
+        _LIVE_ANIMATORS.discard(self)
+
+    def teardown(self) -> None:
+        if self._torn_down:
+            return
+        self._torn_down = True
+        self._current_target = None
+        _LIVE_ANIMATORS.discard(self)
+        for anim_attr in ("_anim", "_fade_anim"):
+            anim = getattr(self, anim_attr, None)
+            if _is_qt_valid(anim):
+                try:
+                    anim.stop()
+                except RuntimeError:
+                    pass
+        overlay = getattr(self, "_overlay", None)
+        if _is_qt_valid(overlay):
+            try:
+                overlay.hide()
+            except RuntimeError:
+                pass
+        root = getattr(self, "_root", None)
+        if _is_qt_valid(root):
+            try:
+                root.removeEventFilter(self)
+            except RuntimeError:
+                pass
+            try:
+                for child in root.findChildren(QtWidgets.QWidget):
+                    if _is_qt_valid(child):
+                        child.removeEventFilter(self)
+            except RuntimeError:
+                pass
+
     def _reset_focus_state(self) -> None:
-        self._anim.stop()
-        self._fade_anim.stop()
+        if self._torn_down or not _is_qt_valid(self):
+            return
+        if _is_qt_valid(self._anim):
+            self._anim.stop()
+        if _is_qt_valid(self._fade_anim):
+            self._fade_anim.stop()
         self._current_target = None
         self._alpha = 0.0
-        self._overlay.set_state(QtCore.QRectF(), 0.0)
+        if _is_qt_valid(self._overlay):
+            self._overlay.set_state(QtCore.QRectF(), 0.0)
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = bool(enabled)
@@ -672,19 +741,24 @@ class FocusRingAnimator(QtCore.QObject):
             self._reset_focus_state()
 
     def set_style(self, style: str) -> None:
-        self._overlay.set_style(style)
+        if not self._torn_down and _is_qt_valid(self._overlay):
+            self._overlay.set_style(style)
 
     def set_accent(self, accent: str, *, is_acid: bool) -> None:
-        self._overlay.set_accent(accent, is_acid=is_acid)
+        if not self._torn_down and _is_qt_valid(self._overlay):
+            self._overlay.set_accent(accent, is_acid=is_acid)
 
     def refresh_children(self) -> None:
-        self._install_recursive(self._root)
+        if not self._torn_down and _is_qt_valid(self._root):
+            self._install_recursive(self._root)
 
     def _install_recursive(self, widget: QtWidgets.QWidget) -> None:
+        if self._torn_down or not _is_qt_valid(widget):
+            return
         widget.removeEventFilter(self)
         widget.installEventFilter(self)
         for child in widget.findChildren(QtWidgets.QWidget):
-            if isinstance(child, _INTERACTIVE_TYPES) and not isinstance(child, HelpBadge):
+            if _is_qt_valid(child) and isinstance(child, _INTERACTIVE_TYPES) and not isinstance(child, HelpBadge):
                 child.removeEventFilter(self)
                 child.installEventFilter(self)
 
@@ -693,6 +767,8 @@ class FocusRingAnimator(QtCore.QObject):
         return QtCore.QRectF(float(top_left.x()), float(top_left.y()), float(w.width()), float(w.height()))
 
     def _focus_widget(self, w: QtWidgets.QWidget) -> None:
+        if self._torn_down or not _is_qt_valid(self) or not _is_qt_valid(self._root) or not _is_qt_valid(w):
+            return
         if not self._enabled or not self._root.isVisible() or not w.isVisible() or not w.isEnabled():
             return
         if w.objectName() in (
@@ -715,32 +791,37 @@ class FocusRingAnimator(QtCore.QObject):
         if target_rect.width() < 16 or target_rect.height() < 14:
             return
         self._current_target = w
-        if self._overlay.isVisible() and not self._overlay._rect.isEmpty():
+        if _is_qt_valid(self._overlay) and self._overlay.isVisible() and not self._overlay._rect.isEmpty():
             self._start_rect = QtCore.QRectF(self._overlay._rect)
         else:
             self._start_rect = target_rect.adjusted(1.5, 1.5, -1.5, -1.5)
         self._end_rect = target_rect
 
-        self._anim.stop()
-        self._anim.setStartValue(0.0)
-        self._anim.setEndValue(1.0)
-        self._anim.start()
+        if _is_qt_valid(self._anim):
+            self._anim.stop()
+            self._anim.setStartValue(0.0)
+            self._anim.setEndValue(1.0)
+            self._anim.start()
 
-        self._fade_anim.stop()
-        self._fade_anim.setStartValue(self._alpha)
-        self._fade_anim.setEndValue(1.0)
-        self._fade_anim.start()
+        if _is_qt_valid(self._fade_anim):
+            self._fade_anim.stop()
+            self._fade_anim.setStartValue(self._alpha)
+            self._fade_anim.setEndValue(1.0)
+            self._fade_anim.start()
 
     def _clear_focus(self, w: QtWidgets.QWidget) -> None:
-        if self._current_target is not w:
+        if self._torn_down or self._current_target is not w:
             return
         self._current_target = None
-        self._fade_anim.stop()
-        self._fade_anim.setStartValue(self._alpha)
-        self._fade_anim.setEndValue(0.0)
-        self._fade_anim.start()
+        if _is_qt_valid(self._fade_anim):
+            self._fade_anim.stop()
+            self._fade_anim.setStartValue(self._alpha)
+            self._fade_anim.setEndValue(0.0)
+            self._fade_anim.start()
 
     def _on_step(self, val: object) -> None:
+        if self._torn_down or not _is_qt_valid(self) or not _is_qt_valid(self._overlay):
+            return
         t = float(val)  # type: ignore[arg-type]
         s, e = self._start_rect, self._end_rect
         cur = QtCore.QRectF(
@@ -752,25 +833,33 @@ class FocusRingAnimator(QtCore.QObject):
         self._overlay.set_state(cur, self._alpha)
 
     def _on_fade(self, val: object) -> None:
+        if self._torn_down or not _is_qt_valid(self) or not _is_qt_valid(self._overlay):
+            return
         self._alpha = float(val)  # type: ignore[arg-type]
         rect = self._overlay._rect if not self._overlay._rect.isEmpty() else self._end_rect
         self._overlay.set_state(rect, self._alpha)
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if getattr(self, "_torn_down", False) or not _is_qt_valid(self):
+            return False
         root = getattr(self, "_root", None)
         overlay = getattr(self, "_overlay", None)
-        if root is None or overlay is None:
+        if not _is_qt_valid(root) or not _is_qt_valid(overlay) or not _is_qt_valid(obj):
             return False
         try:
             et = event.type()
-            if obj is root and et in (
-                QtCore.QEvent.Type.Resize,
-                QtCore.QEvent.Type.Hide,
-                QtCore.QEvent.Type.StyleChange,
-                QtCore.QEvent.Type.WindowDeactivate,
-            ):
-                self._reset_focus_state()
-                return False
+            if obj is root:
+                if et == QtCore.QEvent.Type.Destroy:
+                    self.teardown()
+                    return False
+                if et in (
+                    QtCore.QEvent.Type.Resize,
+                    QtCore.QEvent.Type.Hide,
+                    QtCore.QEvent.Type.StyleChange,
+                    QtCore.QEvent.Type.WindowDeactivate,
+                ):
+                    self._reset_focus_state()
+                    return False
             if not getattr(self, "_enabled", False):
                 return False
             if isinstance(obj, _INTERACTIVE_TYPES) and not isinstance(obj, HelpBadge):

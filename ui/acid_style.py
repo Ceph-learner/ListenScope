@@ -11,8 +11,24 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
+try:
+    import shiboken6
+except Exception:  # pragma: no cover
+    shiboken6 = None  # type: ignore[assignment]
+
 from core.appearance import Appearance
 from core.paths import get_bundle_root
+
+
+def _is_qt_valid(obj: object) -> bool:
+    if obj is None:
+        return False
+    if shiboken6 is not None:
+        try:
+            return bool(shiboken6.isValid(obj))
+        except Exception:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -400,10 +416,21 @@ class AcidGraphicOverlay(QtWidgets.QWidget):
         self.update()
 
     def eventFilter(self, obj: QtCore.QObject, ev: QtCore.QEvent) -> bool:
-        if obj is self.parent() and ev.type() in (QtCore.QEvent.Type.Resize, QtCore.QEvent.Type.Show):
-            self.setGeometry(self.parentWidget().rect())
-            if self.isVisible():
-                self.raise_()
+        if not _is_qt_valid(self):
+            return False
+        parent = self.parentWidget()
+        if parent is not None and _is_qt_valid(parent) and obj is parent:
+            et = ev.type()
+            if et == QtCore.QEvent.Type.Destroy:
+                try:
+                    parent.removeEventFilter(self)
+                except RuntimeError:
+                    pass
+                return False
+            if et in (QtCore.QEvent.Type.Resize, QtCore.QEvent.Type.Show):
+                self.setGeometry(parent.rect())
+                if self.isVisible():
+                    self.raise_()
         return False
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]

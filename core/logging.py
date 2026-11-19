@@ -23,6 +23,23 @@ _PREV_QT_MSG_HANDLER: Any = None
 _QT_HANDLER_INSTALLED = False
 
 
+def _qt_msg_handler(mode: Any, _ctx: Any, message: Any) -> None:
+    """Module-level Qt message forwarder so C++ Qt hooks never depend on a local closure."""
+    try:
+        from PySide6 import QtCore
+
+        msg_txt = str(message or "").strip()
+        if not msg_txt:
+            return
+        qt_logger = logging.getLogger("listenscope.qt")
+        if mode == QtCore.QtMsgType.QtCriticalMsg or mode == QtCore.QtMsgType.QtFatalMsg:
+            qt_logger.error("%s", msg_txt)
+        elif mode == QtCore.QtMsgType.QtWarningMsg:
+            qt_logger.warning("%s", msg_txt)
+    except Exception:
+        pass
+
+
 def resolve_log_dir(work_dir: Optional[Path | str] = None) -> Path:
     """Return bounded log directory (`work_dir/logs` or sibling `logs` avoiding `C:` when app root writable)."""
     base = Path(work_dir) if work_dir is not None else default_work_dir()
@@ -108,16 +125,6 @@ def setup_application_file_logging(log_dir: Optional[Path | str] = None) -> Path
             try:
                 from PySide6 import QtCore
 
-                def _qt_msg_handler(mode, _ctx, message) -> None:
-                    msg_txt = str(message or "").strip()
-                    if not msg_txt:
-                        return
-                    qt_logger = logging.getLogger("listenscope.qt")
-                    if mode == QtCore.QtMsgType.QtCriticalMsg or mode == QtCore.QtMsgType.QtFatalMsg:
-                        qt_logger.error("%s", msg_txt)
-                    elif mode == QtCore.QtMsgType.QtWarningMsg:
-                        qt_logger.warning("%s", msg_txt)
-
                 _PREV_QT_MSG_HANDLER = QtCore.qInstallMessageHandler(_qt_msg_handler)
                 _QT_HANDLER_INSTALLED = True
             except Exception:
@@ -128,8 +135,17 @@ def setup_application_file_logging(log_dir: Optional[Path | str] = None) -> Path
 
 def teardown_application_file_logging() -> None:
     """Flush and close the active rotating log handler cleanly during shutdown."""
-    global _ACTIVE_FILE_HANDLER
+    global _ACTIVE_FILE_HANDLER, _PREV_QT_MSG_HANDLER, _QT_HANDLER_INSTALLED
     with _FILE_HANDLER_LOCK:
+        if _QT_HANDLER_INSTALLED:
+            try:
+                from PySide6 import QtCore
+
+                QtCore.qInstallMessageHandler(_PREV_QT_MSG_HANDLER)
+            except Exception:
+                pass
+            _PREV_QT_MSG_HANDLER = None
+            _QT_HANDLER_INSTALLED = False
         if _ACTIVE_FILE_HANDLER is not None:
             try:
                 logging.getLogger().removeHandler(_ACTIVE_FILE_HANDLER)

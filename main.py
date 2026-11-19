@@ -2016,6 +2016,10 @@ class ListenScopeController:
         teardown_application_file_logging()
         if hasattr(self, "window") and self.window is not None:
             self.window.set_closing_handler(None)
+            try:
+                self.window.prepare_for_shutdown()
+            except Exception:
+                pass
             self.window.deleteLater()
 
 

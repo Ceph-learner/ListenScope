@@ -1,21 +1,20 @@
 # 最新交接
 
-## `v0.2.5` 开发交接：实机 UX 反馈全面打磨、一键安装持久进度与多源故障转移、托盘缩放、日志与微动画（分支 `feat/v0.2.5-ux-bootstrap-tray-marquee` · 基于 `main` `72e5700296b22d3b74af1daf9f9d905464be2b0e`）
+## `v0.2.5` 开发交接：实机 UX 反馈全面打磨、一键安装持久进度与多源故障转移、托盘缩放、日志与微动画（分支 `feat/v0.2.5-ux-bootstrap-tray-marquee` · PR #29 · 前序提交 `db60742` · 基于 `main` `72e5700296b22d3b74af1daf9f9d905464be2b0e`）
 
-- **目标与结果**：围绕实机使用反馈完成 `v0.2.5` 全部 19 项体验与可靠性升级（版本同步至 `0.2.5`），Linux offscreen 全量测试与非硬件冒烟均已通过；待推送创建 PR、等待 CI 通过并经授权后合并与发布 Windows Release。
+- **目标与结果**：围绕实机使用反馈完成 `v0.2.5` 全部 19 项体验与可靠性升级（版本同步至 `0.2.5`），创建 [PR #29](https://github.com/Ceph-learner/ListenScope/pull/29)；针对 Ubuntu 24.04 CI 首轮暴露的 `test_practice_preview_lifecycle_and_controller_mutual_exclusion` `deleteLater()`/`processEvents()` C++ 析构段错误完成全链路加固并本地重测通过，待推送更新至 PR #29 并复核 CI 绿灯后请用户确认是否合并及打 `v0.2.5` Tag。
 - **关键改动文件**：
   - 安装持久化、取消与多源切换：[core/bootstrap_manager.py](../core/bootstrap_manager.py)、[scripts/mirror_wheel_fetch.py](../scripts/mirror_wheel_fetch.py)、[scripts/setup_windows.ps1](../scripts/setup_windows.ps1)、[ui/settings_dialog.py](../ui/settings_dialog.py)、[main.py](../main.py)
   - 外观字段（Schema 2 保持兼容）、质感/聚焦/动画控制与四语词典：[core/appearance.py](../core/appearance.py)、[ui/appearance.py](../ui/appearance.py)、[ui/acid_style.py](../ui/acid_style.py)、[ui/help_badge.py](../ui/help_badge.py)、[core/i18n.py](../core/i18n.py)、[core/i18n_catalog.py](../core/i18n_catalog.py)
   - 托盘/任务栏图标、8 边缩放、可关闭通知、跑马灯、隐藏 `[A]` 与微动画联动：[ui/main_window.py](../ui/main_window.py)、[ui/spectrum_widget.py](../ui/spectrum_widget.py)、[ui/chroma_widget.py](../ui/chroma_widget.py)、[ui/mixer_widget.py](../ui/mixer_widget.py)、[ui/resource_widget.py](../ui/resource_widget.py)
   - 磁盘滚动日志与版本配置：[core/logging.py](../core/logging.py)、[pyproject.toml](../pyproject.toml)、[scripts/installer.iss](../scripts/installer.iss)
   - 自动化回归测试：[tests/test_ux_polish_bootstrap_tray_marquee.py](../tests/test_ux_polish_bootstrap_tray_marquee.py)、[tests/test_startup_help_bootstrap_fixes.py](../tests/test_startup_help_bootstrap_fixes.py)
-- **分支与工作区状态**：当前位于 `feat/v0.2.5-ux-bootstrap-tray-marquee`（基准提交 `72e5700296b22d3b74af1daf9f9d905464be2b0e`），完成交接更新后将统一提交并推送创建针对 `main` 的 PR；未触碰 `backup/*` 分支及 `*-backup` 标签，未提前打 Release Tag。
+- **分支与工作区状态**：当前位于 `feat/v0.2.5-ux-bootstrap-tray-marquee`（[PR #29](https://github.com/Ceph-learner/ListenScope/pull/29)），待推送本地 C++ 析构加固提交；未触碰 `backup/*` 分支及 `*-backup` 标签，未提前打 Release Tag。
 - **已验证命令与实测结果（Linux offscreen 环境）**：
-  - 首次全量 `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short`：`1 failed, 204 passed, 6 skipped`——捕获 `SettingsDialog (en)` 中 `_theme_summary` 默认 `zh` 状态保留 `'Acid Telemetry · Light · 简体中文 (ZH)'` 的 CJK 泄漏；已在 [core/i18n_catalog.py](../core/i18n_catalog.py) 为全预设/明暗模式/语言组合补全翻译规则并验证 `5 passed`。
-  - 最终全量 `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short`：**`205 passed, 6 skipped in 82.45s`**（零 warning；6 skipped 为纯 Windows 平台/硬件用例）。
-  - `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python main.py --simulate --headless-smoke`：通过（exit 0）。
-  - `/home/antigravity/.venv_test/bin/python scripts/check_env.py --no-write`：通过（exit 0）。
-  - `/home/antigravity/.venv_test/bin/python scripts/probe_media_session.py --self-test-mock --json`：通过（exit 0，`reset_count=1`）。
+  - 首次 `pytest`：`1 failed, 204 passed, 6 skipped`——捕获 `SettingsDialog (en)` `_theme_summary` 默认 `zh` 残留 `简体中文 (ZH)`；已在 [core/i18n_catalog.py](../core/i18n_catalog.py) 修复并复测全通过。
+  - 首次 GitHub Actions Ubuntu CI（Run `44581239077`）：`test_chord_practice.py:391` 在 `controller.shutdown(); app.processEvents()` 触发纯 C++ `Segmentation fault (exit 139)`。已从根因加固：将 [core/logging.py](../core/logging.py) Qt 消息回调移至模块级并在 `teardown_application_file_logging()` 还原前任钩子；为 [ui/help_badge.py](../ui/help_badge.py) `FocusRingAnimator`/`_HelpPopover` 及 [ui/acid_style.py](../ui/acid_style.py) `AcidGraphicOverlay` 增加 `shiboken6.isValid`、`Destroy`/`root.destroyed` 清理；移除 `MainWindow.installEventFilter(self)` 改用直接鼠标重写并新增 `prepare_for_shutdown()` 在 `controller.shutdown()` `deleteLater()` 前停止所有子定时器/动画、清空全部 8 个 `PlotWidget` 与解绑事件过滤器及托盘。
+  - 加固后最新全量 `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -X faulthandler -m pytest -q --tb=short`：**`205 passed, 6 skipped in 81.45s`**（零 warning；6 skipped 为纯 Windows 测试）。
+  - 冒烟校验（`db60742` 前已验证通过，exit 0）：`main.py --simulate --headless-smoke`、`scripts/check_env.py --no-write`、`scripts/probe_media_session.py --self-test-mock --json`（`reset_count=1`）。
 - **未在云端验证的项目（须 Windows 11 + RTX 5060 Ti 实机复测）**：
   - Win11 任务栏图标（`WM_SETICON`）、系统托盘图标、关闭窗口进托盘与托盘右键完全退出。
   - 无边框窗口（`>=940×620`）8 方向边缘拖拽调整大小与 DPI 居中。

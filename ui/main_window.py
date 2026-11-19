@@ -17,6 +17,22 @@ try:
 except Exception:  # pragma: no cover
     QtSvg = None  # type: ignore[assignment]
 
+try:
+    import shiboken6
+except Exception:  # pragma: no cover
+    shiboken6 = None  # type: ignore[assignment]
+
+
+def _is_qt_valid(obj: object) -> bool:
+    if obj is None:
+        return False
+    if shiboken6 is not None:
+        try:
+            return bool(shiboken6.isValid(obj))
+        except Exception:
+            return False
+    return True
+
 from ai.models import MODEL_REGISTRY, list_models
 from audio.playback import StemMixerEngine
 from core.appearance import Appearance
@@ -482,9 +498,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if not app_icon.isNull():
             self.setWindowIcon(app_icon)
             app_inst_gui = QtWidgets.QApplication.instance()
-            if isinstance(app_inst_gui, QtWidgets.QApplication):
+            if isinstance(app_inst_gui, QtWidgets.QApplication) and app_inst_gui.windowIcon().isNull():
                 app_inst_gui.setWindowIcon(app_icon)
 
+        self._tearing_down = False
         self._hardware_report = hardware_report
         self._resource_limits = resource_limits
         self._ai_config = ai_config
@@ -534,7 +551,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._shell_frame.setMouseTracking(True)
         self._shell_frame.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
         self._shell_frame.installEventFilter(self)
-        self.installEventFilter(self)
         self.setCentralWidget(self._shell_frame)
         main_layout = QtWidgets.QVBoxLayout(self._shell_frame)
         self._workspace_layout = main_layout
@@ -1213,13 +1229,64 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         super().resizeEvent(event)
         self._update_rounded_mask()
 
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if (
+            not getattr(self, "_tearing_down", False)
+            and getattr(self, "_frameless_applied", False)
+            and event.button() == QtCore.Qt.MouseButton.LeftButton
+        ):
+            local = self.mapFromGlobal(event.globalPosition().toPoint())
+            edges = self._hit_test_resize_edges(local)
+            if edges:
+                win_handle = self.windowHandle()
+                if win_handle is not None and hasattr(win_handle, "startSystemResize"):
+                    try:
+                        if win_handle.startSystemResize(edges):
+                            event.accept()
+                            return
+                    except Exception:
+                        pass
+                self._resize_edges = edges
+                self._resize_start_global = event.globalPosition().toPoint()
+                self._resize_start_geom = QtCore.QRect(self.geometry())
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if not getattr(self, "_tearing_down", False) and getattr(self, "_frameless_applied", False):
+            if self._resize_edges and (event.buttons() & QtCore.Qt.MouseButton.LeftButton):
+                self._apply_software_resize(event.globalPosition().toPoint())
+                event.accept()
+                return
+            if not (event.buttons() & QtCore.Qt.MouseButton.LeftButton):
+                local = self.mapFromGlobal(event.globalPosition().toPoint())
+                cur = self._cursor_for_edges(self._hit_test_resize_edges(local))
+                if cur is not None:
+                    self.setCursor(cur)
+                else:
+                    self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        self._resize_edges = QtCore.Qt.Edge(0)
+        self._resize_start_global = None
+        self._resize_start_geom = None
+        if not getattr(self, "_tearing_down", False):
+            self.unsetCursor()
+        super().mouseReleaseEvent(event)
+
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if getattr(self, "_tearing_down", False) or not _is_qt_valid(self) or not _is_qt_valid(watched):
+            return False
         etype = event.type()
+        if etype == QtCore.QEvent.Type.Destroy:
+            return False
         is_frameless = bool(getattr(self, "_frameless_applied", False))
-        if is_frameless and watched in (self, getattr(self, "_shell_frame", None)):
+        shell = getattr(self, "_shell_frame", None)
+        if is_frameless and shell is not None and _is_qt_valid(shell) and watched is shell:
             if etype == QtCore.QEvent.Type.HoverMove and not self._resize_edges:
                 hev = event  # type: ignore[assignment]
-                gpos = self.mapToGlobal(QtCore.QPoint(0, 0))
                 if hasattr(hev, "globalPosition"):
                     local = self.mapFromGlobal(hev.globalPosition().toPoint())
                 else:
@@ -1266,7 +1333,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self._resize_start_geom = None
                 self.unsetCursor()
 
-        if watched is getattr(self, "_topbar_frame", None) and is_frameless:
+        topbar = getattr(self, "_topbar_frame", None)
+        if topbar is not None and _is_qt_valid(topbar) and watched is topbar and is_frameless:
             if etype == QtCore.QEvent.Type.MouseButtonDblClick:
                 mouse_ev = event  # type: ignore[assignment]
                 if isinstance(mouse_ev, QtGui.QMouseEvent) and mouse_ev.button() == QtCore.Qt.MouseButton.LeftButton:
@@ -1708,6 +1776,97 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def set_closing_handler(self, fn) -> None:
         self._closing_handler = fn
 
+    def prepare_for_shutdown(self) -> None:
+        """Stop child timers/animations, detach event filters, clear plots, and hide tray before C++ destruction."""
+        if getattr(self, "_tearing_down", False):
+            return
+        self._tearing_down = True
+
+        for w_name in ("_shell_frame", "_topbar_frame"):
+            w = getattr(self, w_name, None)
+            if _is_qt_valid(w):
+                try:
+                    w.removeEventFilter(self)
+                except RuntimeError:
+                    pass
+
+        for anim in list(getattr(self, "__dict__", {}).values()):
+            if hasattr(anim, "teardown") and callable(getattr(anim, "teardown")):
+                try:
+                    anim.teardown()
+                except Exception:
+                    pass
+
+        for child in self.findChildren(QtWidgets.QDialog):
+            if _is_qt_valid(child):
+                child_anim = getattr(child, "_focus_ring_animator", None)
+                if child_anim is not None and hasattr(child_anim, "teardown"):
+                    try:
+                        child_anim.teardown()
+                    except Exception:
+                        pass
+                try:
+                    if hasattr(child, "stop_preview"):
+                        child.stop_preview()
+                    child.close()
+                except Exception:
+                    pass
+
+        for timer in self.findChildren(QtCore.QTimer):
+            if _is_qt_valid(timer):
+                try:
+                    timer.stop()
+                except RuntimeError:
+                    pass
+        for anim in self.findChildren(QtCore.QAbstractAnimation):
+            if _is_qt_valid(anim):
+                try:
+                    anim.stop()
+                except RuntimeError:
+                    pass
+
+        if self._tray_icon is not None:
+            if hasattr(self._tray_icon, "setContextMenu"):
+                try:
+                    self._tray_icon.setContextMenu(None)
+                except Exception:
+                    pass
+            try:
+                self._tray_icon.hide()
+            except Exception:
+                pass
+
+        if self._style_hints_connected:
+            app_inst = QtGui.QGuiApplication.instance()
+            if app_inst is not None:
+                try:
+                    app_inst.styleHints().colorSchemeChanged.disconnect(self._on_system_color_scheme_changed)
+                except Exception:
+                    pass
+            self._style_hints_connected = False
+
+        try:
+            self.history_overview_plot.getViewBox().sigXRangeChanged.disconnect()
+        except Exception:
+            pass
+
+        plot_widgets = (
+            self.history_overview_plot,
+            self.spectrum_widget.wave_plot,
+            self.spectrum_widget.fft_plot,
+            self.spectrum_widget.log_plot,
+            self.spectrum_widget.spec_plot,
+            self.chroma_widget.chroma_bar_plot,
+            self.chroma_widget.chroma_hist_plot,
+            self.mixer_widget.piano_roll_plot,
+        )
+        for pw in plot_widgets:
+            if _is_qt_valid(pw):
+                try:
+                    pw.clear()
+                except Exception:
+                    pass
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
         want_tray = (
             not self._force_quit
@@ -1739,37 +1898,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                     pass
             return
 
-        if self._tray_icon is not None:
-            try:
-                self._tray_icon.hide()
-            except Exception:
-                pass
         app_q = QtWidgets.QApplication.instance()
         if isinstance(app_q, QtWidgets.QApplication):
             app_q.setQuitOnLastWindowClosed(True)
-        if self._style_hints_connected:
-            app_inst = QtGui.QGuiApplication.instance()
-            if app_inst is not None:
-                try:
-                    app_inst.styleHints().colorSchemeChanged.disconnect(self._on_system_color_scheme_changed)
-                except Exception:
-                    pass
-            self._style_hints_connected = False
-        plot_widgets = (
-            self.history_overview_plot,
-            self.spectrum_widget.wave_plot,
-            self.spectrum_widget.fft_plot,
-            self.spectrum_widget.log_plot,
-            self.spectrum_widget.spec_plot,
-            self.chroma_widget.chroma_bar_plot,
-            self.chroma_widget.chroma_hist_plot,
-            self.mixer_widget.piano_roll_plot,
-        )
-        for pw in plot_widgets:
-            try:
-                pw.clear()
-            except Exception:
-                pass
+        self.prepare_for_shutdown()
         if self._closing_handler is not None:
             try:
                 self._closing_handler()
