@@ -25,18 +25,17 @@ GPU 分轨和 CPU MIDI 各用独立环境（Core 仍保持零 Torch/CUDA/TF，�
 
 ## 当前验证基线
 
-- **`v0.2.5` 开发分支预合并验证（分支 `feat/v0.2.5-ux-bootstrap-tray-marquee` · 基于 `main` `72e5700`）**：
-  - Linux offscreen / 非硬件校验：
-    - `QT_QPA_PLATFORM=offscreen pytest -q --tb=short`：**205 passed, 6 skipped**（1 个旧 4 语断言因 `SettingsDialog` 默认 `zh` 摘要残留 `简体中文 (ZH)` 暴露后已在 [i18n_catalog.py](../core/i18n_catalog.py) 修复并全量重跑通过；6 skipped 为纯 Windows 测试）。
-    - `QT_QPA_PLATFORM=offscreen python main.py --simulate --headless-smoke`：通过（exit 0）。
-    - `python scripts/check_env.py --no-write`：通过（exit 0）。
-    - `python scripts/probe_media_session.py --self-test-mock --json`：通过（exit 0，`reset_count=1`）。
+- **`v0.2.5` 发布验证基线（PR #29 `f3e6c2d`，基于 `main` `72e5700` · Tag `v0.2.5`）**：
+  - 双端 CI / 非硬件校验：
+    - 本地 Linux offscreen：`QT_QPA_PLATFORM=offscreen pytest -q --tb=short` **205 passed, 6 skipped**；`main.py --simulate --headless-smoke`、`scripts/check_env.py --no-write` 与 `scripts/probe_media_session.py --self-test-mock --json` 均通过（exit 0）。
+    - GitHub Actions Ubuntu 24.04（`tests.yml`，PR #29 `5918dd4` Run `44583969990` & `main` `f3e6c2d` Run `44584898370`）：**211 passed in 75.69s**。
+    - GitHub Actions Windows (`release-windows.yml`，Tag `v0.2.5` Run `44584919344`)：**211 passed in 119.53s**，PyInstaller 打包 `ListenScope.exe` 并经迁移目录 `ListenScope.exe --simulate --headless-smoke`（exit 0）验证，已发布 [GitHub Release `v0.2.5`](https://github.com/Ceph-learner/ListenScope/releases/tag/v0.2.5)（含 `ListenScope-Setup-Windows-x64.exe`、`ListenScope-Core-Windows-x64-Portable.zip`、`SHA256SUMS.txt`）。
   - 核心变更：
     - **一键 AI/MIDI 安装持久进度、取消与多源故障转移**（[bootstrap_manager.py](../core/bootstrap_manager.py)、[mirror_wheel_fetch.py](../scripts/mirror_wheel_fetch.py)、[setup_windows.ps1](../scripts/setup_windows.ps1)、[settings_dialog.py](../ui/settings_dialog.py)）：切换/关闭设置窗口不中断后台安装；展示分段电池百分比进度条、实时下载速率（MB/s）、当前源与可滚动日志；速度过慢自动切换 PyTorch `cu128` 轮子镜像与 PyPI 镜像；完成后自动持久化环境路径并提供「立即重启 ListenScope 生效」按钮；验证结束后清除 stale 状态提示，并与诊断页去重。
     - **字体间距、重叠修复与滚动长名称**（[acid_style.py](../ui/acid_style.py)、[main_window.py](../ui/main_window.py)、[chroma_widget.py](../ui/chroma_widget.py)）：调整 CJK UI 字体栈顺序（`Segoe UI / Microsoft YaHei UI / Malgun Gothic / Yu Gothic UI` 优先于等宽代码体），消除「和弦名与级数」字距不均；修复顶部 `RAM` 左侧字幕遮挡；新增适中速度跑马灯（`MarqueeLabel` / `MarqueeComboBox`）避免进程列表、2-Stem 模型名、和弦进行与媒体信息省略号截断。
     - **`STATIC_LOCK` 助记、遥测微动画强度与音乐联动**（[appearance.py](../core/appearance.py)、[acid_style.py](../ui/acid_style.py)、[mixer_widget.py](../ui/mixer_widget.py)、[help_badge.py](../ui/help_badge.py)）：补充 `[STATIC_LOCK]` `[?]` 说明；分轨与安装采用 `SegmentedBatteryProgressBar`，顶部与和弦/调性卡片配备 `TelemetryPulseStrip` / `DotMatrixWidget` 动画（支持 `0–100%` 强度调节、随实时 RMS/高潮动态增强或关闭、或 `[STATIC_LOCK]` 冻结）。
-    - **可调边框质感、聚焦样式、可关闭提示、`×` 最小化托盘、8 边缩放、隐藏图表 `[A]` 与滚动磁盘日志**（[logging.py](../core/logging.py)、[main_window.py](../ui/main_window.py)、[settings_dialog.py](../ui/settings_dialog.py)、[appearance.py](../ui/appearance.py)）：`ui_surface_style`（`tactile`/`beveled`/`flat`）、`focus_style`（`sleek`/`brackets`/`underline`）、全局通知与 OOM 横幅新增 `×` 关闭；多 DPI SVG+ICO 任务栏图标（Win32 `WM_SETICON` + DWM 圆角）、系统托盘与 `close_to_tray` 开关；无边框窗口 `>=940×620` 八方向拖拽缩放；全部 PyQtGraph 图表隐藏 `[A]` 按钮；UTF-8 滚动日志（3 MiB × 4 份）+ 异常挂钩 + 「打开日志目录」按钮；四语全覆盖（EN/KO 零中文泄漏）。
-  - Windows 11 真机待验证项（云端 Linux 无法实测）：Win11 任务栏/托盘图标与最小化托盘退出行为、无边框 8 边拖拽缩放在高 DPI 下的手感、Microsoft YaHei UI 中文排版、国内真实网络下一键配置镜像切换、`cu128` 实机 GPU 音频分轨与音乐联动动画流畅度、以及 PyInstaller / Inno Setup 打包产物。
+    - **可调边框质感、聚焦样式、可关闭提示、`×` 最小化托盘、8 边缩放、隐藏图表 `[A]` 与滚动磁盘日志**（[logging.py](../core/logging.py)、[main_window.py](../ui/main_window.py)、[settings_dialog.py](../ui/settings_dialog.py)、[appearance.py](../ui/appearance.py)）：`ui_surface_style`（`tactile`/`beveled`/`flat`）、`focus_style`（`sleek`/`brackets`/`underline`）、全局通知与 OOM 横幅新增 `×` 关闭；多 DPI SVG+ICO 任务栏图标（Win32 `WM_SETICON` + DWM 圆角）、系统托盘与 `close_to_tray` 开关；无边框窗口 `>=940×620` 八方向拖拽缩放；全部 PyQtGraph 图表隐藏 `[A]` 按钮；UTF-8 滚动日志（3 MiB × 4 份）+ 异常挂钩 + 「打开日志目录」按钮；四语全覆盖（EN/KO 零中文泄漏）；并加固 Qt/PySide6 C++ 析构与 `prepare_for_shutdown()` 生命周期。
+  - Windows 11 真机待验证项（云端与 CI offscreen 无法实测）：Win11 任务栏/托盘图标与最小化托盘退出行为、无边框 8 边拖拽缩放在高 DPI 下的手感、Microsoft YaHei UI 中文排版、国内真实网络下一键配置镜像切换与重启生效、RTX 5060 Ti `cu128` 实机 WASAPI 捕获 + GPU 音频分轨 + 音乐联动动画流畅度。
 
 - **`v0.2.4` 发布验证基线（PR #28 `d7f186f` + Windows 跨平台测试与版本收口 `4b9df05`，基于 `main` `c0461a0` · Tag `v0.2.4`）**：
   - 针对 `v0.2.2` 首轮实机反馈完成三类体验与初始化修复，合入 PR #28 后因 `v0.2.3` 首轮 Windows CI 在 [`test_run_external_python_capture_output_and_frozen_filtering`](../tests/test_startup_help_bootstrap_fixes.py) 触发 `WinError 193`（Windows 冻结路径调用 `ctypes.WinDLL` + `subprocess.Popen` 而原测试只 Mock 了 Linux `subprocess.run`），于 `4b9df05` 补全双平台 Mock 断言并顺延发布 `v0.2.4`：

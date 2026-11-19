@@ -1,37 +1,36 @@
 # 最新交接
 
-## `v0.2.5` 开发交接：实机 UX 反馈全面打磨、一键安装持久进度与多源故障转移、托盘缩放、日志与微动画（分支 `feat/v0.2.5-ux-bootstrap-tray-marquee` · PR #29 · 前序提交 `db60742` · 基于 `main` `72e5700296b22d3b74af1daf9f9d905464be2b0e`）
+## `v0.2.5` 发布交接：合并 PR #29、双端 CI 全绿、Windows 冻结包冒烟与 Release 发布（分支 `main` · 证据基线 `f3e6c2d45209e8f4c6e0f6ac8d0c01a84c11abf7` · Tag `v0.2.5`）
 
-- **目标与结果**：围绕实机使用反馈完成 `v0.2.5` 全部 19 项体验与可靠性升级（版本同步至 `0.2.5`），创建 [PR #29](https://github.com/Ceph-learner/ListenScope/pull/29)；针对 Ubuntu 24.04 CI 首轮暴露的 `test_practice_preview_lifecycle_and_controller_mutual_exclusion` `deleteLater()`/`processEvents()` C++ 析构段错误完成全链路加固并本地重测通过，待推送更新至 PR #29 并复核 CI 绿灯后请用户确认是否合并及打 `v0.2.5` Tag。
+- **目标与结果**：完成实机反馈全部 19 项用户体验、一键安装、托盘缩放、日志与遥测动画升级并合并 [PR #29](https://github.com/Ceph-learner/ListenScope/pull/29)（`f3e6c2d`）；Ubuntu CI、Windows offscreen CI、PyInstaller 打包、冻结 `ListenScope.exe --simulate --headless-smoke`、便携 ZIP 与 Inno Setup 安装包均一次构建成功并发布 [GitHub Release `v0.2.5`](https://github.com/Ceph-learner/ListenScope/releases/tag/v0.2.5)。
 - **关键改动文件**：
   - 安装持久化、取消与多源切换：[core/bootstrap_manager.py](../core/bootstrap_manager.py)、[scripts/mirror_wheel_fetch.py](../scripts/mirror_wheel_fetch.py)、[scripts/setup_windows.ps1](../scripts/setup_windows.ps1)、[ui/settings_dialog.py](../ui/settings_dialog.py)、[main.py](../main.py)
   - 外观字段（Schema 2 保持兼容）、质感/聚焦/动画控制与四语词典：[core/appearance.py](../core/appearance.py)、[ui/appearance.py](../ui/appearance.py)、[ui/acid_style.py](../ui/acid_style.py)、[ui/help_badge.py](../ui/help_badge.py)、[core/i18n.py](../core/i18n.py)、[core/i18n_catalog.py](../core/i18n_catalog.py)
   - 托盘/任务栏图标、8 边缩放、可关闭通知、跑马灯、隐藏 `[A]` 与微动画联动：[ui/main_window.py](../ui/main_window.py)、[ui/spectrum_widget.py](../ui/spectrum_widget.py)、[ui/chroma_widget.py](../ui/chroma_widget.py)、[ui/mixer_widget.py](../ui/mixer_widget.py)、[ui/resource_widget.py](../ui/resource_widget.py)
   - 磁盘滚动日志与版本配置：[core/logging.py](../core/logging.py)、[pyproject.toml](../pyproject.toml)、[scripts/installer.iss](../scripts/installer.iss)
   - 自动化回归测试：[tests/test_ux_polish_bootstrap_tray_marquee.py](../tests/test_ux_polish_bootstrap_tray_marquee.py)、[tests/test_startup_help_bootstrap_fixes.py](../tests/test_startup_help_bootstrap_fixes.py)
-- **分支与工作区状态**：当前位于 `feat/v0.2.5-ux-bootstrap-tray-marquee`（[PR #29](https://github.com/Ceph-learner/ListenScope/pull/29)），待推送本地 C++ 析构加固提交；未触碰 `backup/*` 分支及 `*-backup` 标签，未提前打 Release Tag。
-- **已验证命令与实测结果（Linux offscreen 环境）**：
-  - 首次 `pytest`：`1 failed, 204 passed, 6 skipped`——捕获 `SettingsDialog (en)` `_theme_summary` 默认 `zh` 残留 `简体中文 (ZH)`；已在 [core/i18n_catalog.py](../core/i18n_catalog.py) 修复并复测全通过。
-  - 首次 GitHub Actions Ubuntu CI（Run `44581239077`）：`test_chord_practice.py:391` 在 `controller.shutdown(); app.processEvents()` 触发纯 C++ `Segmentation fault (exit 139)`。已从根因加固：将 [core/logging.py](../core/logging.py) Qt 消息回调移至模块级并在 `teardown_application_file_logging()` 还原前任钩子；为 [ui/help_badge.py](../ui/help_badge.py) `FocusRingAnimator`/`_HelpPopover` 及 [ui/acid_style.py](../ui/acid_style.py) `AcidGraphicOverlay` 增加 `shiboken6.isValid`、`Destroy`/`root.destroyed` 清理；移除 `MainWindow.installEventFilter(self)` 改用直接鼠标重写并新增 `prepare_for_shutdown()` 在 `controller.shutdown()` `deleteLater()` 前停止所有子定时器/动画、清空全部 8 个 `PlotWidget` 与解绑事件过滤器及托盘。
-  - 加固后最新全量 `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -X faulthandler -m pytest -q --tb=short`：**`205 passed, 6 skipped in 81.45s`**（零 warning；6 skipped 为纯 Windows 测试）。
-  - 冒烟校验（`db60742` 前已验证通过，exit 0）：`main.py --simulate --headless-smoke`、`scripts/check_env.py --no-write`、`scripts/probe_media_session.py --self-test-mock --json`（`reset_count=1`）。
-- **未在云端验证的项目（须 Windows 11 + RTX 5060 Ti 实机复测）**：
+- **分支与远端状态**：当前位于 `main`（合并基线 `f3e6c2d`；特性分支 `feat/v0.2.5-ux-bootstrap-tray-marquee` 已在合并时删除；`v0.2.5` Tag 与 Release 已同步至 GitHub）；未触碰 `backup/*` 分支及 `*-backup` 标签。
+- **已验证命令与实测结果**：
+  - 本地 Linux offscreen：`QT_QPA_PLATFORM=offscreen pytest -q --tb=short` → **`205 passed, 6 skipped in 81.45s`**（零 warning）；`main.py --simulate --headless-smoke`、`scripts/check_env.py --no-write`、`scripts/probe_media_session.py --self-test-mock --json` 均通过（exit 0）。
+  - GitHub Actions Ubuntu 24.04（`tests.yml` Run `44583969990` / `main` `f3e6c2d` Run `44584898370`）：**`211 passed in 75.69s`**（在解决 `SettingsDialog` EN/KO `简体中文 (ZH)` 残留及 Run `44581239077` `deleteLater()`/`processEvents()` C++ 析构段错误后全绿）。
+  - GitHub Actions Windows（`release-windows.yml` Tag `v0.2.5` Run `44584919344`）：Windows offscreen pytest **`211 passed in 119.53s`**；PyInstaller Core 打包 + 迁移目录 `ListenScope.exe --simulate --headless-smoke` **ExitCode=0**；产出 `ListenScope-Setup-Windows-x64.exe`（`113,491,155` bytes）、`ListenScope-Core-Windows-x64-Portable.zip`（`154,236,032` bytes）与 `SHA256SUMS.txt`（`210` bytes）。
+- **未在云端验证的项目（须 Windows 11 + RTX 5060 Ti 实机安装 `v0.2.5` 产物验收）**：
   - Win11 任务栏图标（`WM_SETICON`）、系统托盘图标、关闭窗口进托盘与托盘右键完全退出。
   - 无边框窗口（`>=940×620`）8 方向边缘拖拽调整大小与 DPI 居中。
   - Microsoft YaHei UI 下「和弦名与级数」字距、顶部无重叠、2-Stem/进程跑马灯观感与可关闭横幅交互。
-  - 实网环境下点击设置「一键自动配置 AI + MIDI」测试切换设置页不断线、电池进度与速率、慢源自动切换、安装完一键重启生效与日志落盘。
-  - 目标机 WASAPI 音频捕获、GPU 分轨与音乐能量/高潮驱动遥测动画流畅度、PyInstaller/Inno Setup 安装包产物。
+  - 国内实网下点击设置「一键自动配置 AI + MIDI」测试切换设置页不断线、电池进度与速率、慢源自动切换、安装完一键重启生效与 `%LOCALAPPDATA%\ListenScope\logs\listenscope.log` 落盘。
+  - 目标机 WASAPI 音频捕获、RTX 5060 Ti `cu128` GPU 分轨与音乐能量/高潮驱动遥测动画流畅度。
 - **Windows 目标机可复制复测命令**：
   ```powershell
-  # 1. 在源码目录跑通本地非硬件/Windows测试并验证一键脚本语法与源测速模块
+  # 若直接下载 v0.2.5 Setup / Portable 实机安装后验证：
+  # 1. 启动 ListenScope，核对任务栏/托盘图标、8 边缩放、设置页一键配置与一键重启、外观质感/微动画强度设置
+  # 2. 若需在源码目录复跑全量本地测试与镜像测速自检：
   python -m pytest -q --tb=short
   python scripts\mirror_wheel_fetch.py --self-test-pypi
-
-  # 2. 启动软件实机验收 GUI / 托盘 / 8 边缩放 / 一键安装持久化 / 磁盘日志
   python main.py
-  # 日志目录位于 %LOCALAPPDATA%\ListenScope\logs\listenscope.log（或在「设置 -> 系统诊断 / 主题与外观」点击「打开日志目录」）
+  # 日志目录：%LOCALAPPDATA%\ListenScope\logs\listenscope.log（或在「设置 -> 系统诊断 / 主题与外观」点击「打开日志目录」）
   ```
-- **下一步**：推送 `feat/v0.2.5-ux-bootstrap-tray-marquee` 并创建合并到 `main` 的 PR；等待 GitHub Actions `tests.yml` 全绿，再请用户确认后合并 PR 并打 `v0.2.5` Tag 触发 Windows Release 构建。
+- **下一步**：请你在 Windows 11 + RTX 5060 Ti 实机安装 `ListenScope-Setup-Windows-x64.exe`（或解压 `ListenScope-Core-Windows-x64-Portable.zip`）实测上述真机交互、网络切换源、任务栏/托盘图标与 WASAPI/GPU 分轨体验并反馈。
 
 ## 历史交接：`v0.2.4` 发布（PR #28 `d7f186f` + Windows 跨平台测试与版本收口 `4b9df05` · Tag `v0.2.4`）
 
