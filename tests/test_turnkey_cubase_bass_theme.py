@@ -798,8 +798,8 @@ def test_home_feedback_i18n_bass_boost_export_singleline_chords_pytorch_scan_and
         # 4. Language switching (zh -> en -> ko -> ja -> zh) & window geometry lock when visible
         w.show()
         min_hint = w.minimumSizeHint()
-        init_w = 1360 if min_hint.width() <= 1300 else min_hint.width() + 140
-        init_h = 860 if min_hint.height() <= 855 else min_hint.height() + 30
+        init_w = 1360 if min_hint.width() <= 1300 else min_hint.width() + 450
+        init_h = 860 if min_hint.height() <= 855 else min_hint.height() + 40
         w.resize(init_w, init_h)
         w.move(80, 60)
         app.processEvents()
