@@ -86,13 +86,14 @@ from core.system_probe import (
     probe_external_ai_environment,
     probe_external_midi_environment,
     probe_system,
+    scan_local_pytorch_installations,
 )
 from streaming.live_separator import ExperimentalLiveSeparator
 from ui.main_window import ListenScopeMainWindow
 
 
 def _discover_ai_python_executable() -> Optional[str]:
-    """Locate isolated `.venv-ai` or bundled `runtime/ai` Python executable across source & frozen layouts."""
+    """Locate isolated `.venv-ai`, bundled `runtime/ai`, or local PyTorch Python executable."""
     env_override = os.environ.get("LISTENSCOPE_AI_PYTHON", "").strip()
     if env_override and Path(env_override).exists():
         return env_override
@@ -119,7 +120,13 @@ def _discover_ai_python_executable() -> Optional[str]:
             except Exception:
                 pass
             return str(cand)
+    scanned = scan_local_pytorch_installations(tuple(roots), timeout_per_env_sec=2.5)
+    for item in scanned:
+        py_exe = str(item.get("python_executable", "")).strip()
+        if py_exe and Path(py_exe).exists():
+            return py_exe
     return None
+
 
 
 def _discover_midi_python_executable() -> Optional[str]:

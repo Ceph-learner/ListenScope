@@ -545,6 +545,8 @@ class StemMixerEngine:
         self._lock = threading.RLock()
         self._tracks: dict[str, StemTrackState] = {}
         self._bass_monitor_boost_enabled = True
+        self._bass_monitor_boost_db: float = float(BASS_MONITOR_BOOST_DB)
+        self._apply_bass_boost_on_export: bool = False
         self._wave_handles: dict[str, _StemHandle] = {}
         self._position_frame: int = 0
         self._max_frames: int = 0
@@ -810,6 +812,35 @@ class StemMixerEngine:
         with self._lock:
             self._bass_monitor_boost_enabled = bool(enabled)
 
+    @property
+    def bass_monitor_boost_db(self) -> float:
+        with self._lock:
+            return self._bass_monitor_boost_db
+
+    def set_bass_monitor_boost_db(self, db: float) -> float:
+        clamped = max(0.0, min(24.0, float(db)))
+        with self._lock:
+            self._bass_monitor_boost_db = clamped
+            return self._bass_monitor_boost_db
+
+    @property
+    def apply_bass_boost_on_export(self) -> bool:
+        with self._lock:
+            return self._apply_bass_boost_on_export
+
+    def set_apply_bass_boost_on_export(self, enabled: bool) -> None:
+        with self._lock:
+            self._apply_bass_boost_on_export = bool(enabled)
+
+    @staticmethod
+    def _apply_soft_knee_bass_boost_inplace(buf: np.ndarray, boost_db: float) -> None:
+        if buf.size == 0 or boost_db <= 1e-4:
+            return
+        buf *= float(10.0 ** (boost_db / 20.0))
+        hot = np.abs(buf) > 0.8
+        if hot.any():
+            buf[hot] = np.sign(buf[hot]) * (0.8 + 0.2 * np.tanh((np.abs(buf[hot]) - 0.8) / 0.2))
+
     def _effective_gain(self, track: StemTrackState, any_solo: bool) -> float:
         if any_solo:
             return track.volume if (track.solo and not track.muted) else 0.0
@@ -885,6 +916,7 @@ class StemMixerEngine:
         rendered_frames = 0
         music_offset = 0
         speed_snapshot = 1.0
+        boost_db_snapshot = float(BASS_MONITOR_BOOST_DB)
         with self._lock:
             if self._max_frames <= 0 or (advance and not self._is_playing):
                 return mix
@@ -913,8 +945,9 @@ class StemMixerEngine:
                     return mix
 
             speed_snapshot = self._speed
+            boost_db_snapshot = self._bass_monitor_boost_db
             boost_bass = False
-            if self._bass_monitor_boost_enabled:
+            if self._bass_monitor_boost_enabled and boost_db_snapshot > 1e-4:
                 any_solo = any(t.solo for t in self._tracks.values())
                 audible = [
                     name for name, track in self._tracks.items()
@@ -988,13 +1021,11 @@ class StemMixerEngine:
                 did_render = written > 0
 
         if boost_bass and rendered_frames:
-            # Boost only the rendered bass, leaving the metronome and export untouched.
-            bass = mix[music_offset : music_offset + rendered_frames]
-            bass *= 10 ** (BASS_MONITOR_BOOST_DB / 20)
-            hot = np.abs(bass) > 0.8
-            if hot.any():
-                # Smoothly contain near-full-scale peaks without hard-clipping.
-                bass[hot] = np.sign(bass[hot]) * (0.8 + 0.2 * np.tanh((np.abs(bass[hot]) - 0.8) / 0.2))
+            # Boost only the rendered bass, leaving the metronome untouched.
+            self._apply_soft_knee_bass_boost_inplace(
+                mix[music_offset : music_offset + rendered_frames],
+                boost_db_snapshot,
+            )
         np.clip(mix, -1.0, 1.0, out=mix)
         if did_render and rendered_frames > 0 and self.metronome is not None:
             self.metronome.overlay_into(
@@ -1014,6 +1045,7 @@ class StemMixerEngine:
         bpm: float = 120.0,
         beats_per_bar: int = 4,
         metronome_volume: float = 0.7,
+        apply_bass_boost: Optional[bool] = None,
     ) -> Path:
         """Export current mute/solo/volume mix cleanly in chunks without blocking concurrent playback."""
         eff_speed = max(0.5, min(1.5, float(speed)))
@@ -1032,6 +1064,17 @@ class StemMixerEngine:
                 gain = self._effective_gain(track, any_solo)
                 if gain > 1e-6:
                     export_specs.append((StemTrackState(**track.__dict__), gain))
+            use_boost = self._apply_bass_boost_on_export if apply_bass_boost is None else bool(apply_bass_boost)
+            export_boost_db = (
+                self._bass_monitor_boost_db
+                if (
+                    use_boost
+                    and self._bass_monitor_boost_enabled
+                    and len(export_specs) == 1
+                    and export_specs[0][0].name.lower() == "bass"
+                )
+                else 0.0
+            )
 
         local_handles: list[tuple[_StemHandle, StemTrackState, float]] = []
         tmp_path = path.with_name(path.name + ".tmp")
@@ -1040,6 +1083,8 @@ class StemMixerEngine:
             buf = np.zeros((count, self.channels), dtype=np.float32)
             for handle, track, gain in local_handles:
                 buf += self._read_track_chunk_from_handle(handle, track, start_abs, count) * gain
+            if export_boost_db > 1e-4:
+                self._apply_soft_knee_bass_boost_inplace(buf, export_boost_db)
             np.clip(buf, -1.0, 1.0, out=buf)
             return buf
 

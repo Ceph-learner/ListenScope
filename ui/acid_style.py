@@ -198,13 +198,8 @@ _LUT_CACHE: dict[tuple[str, str], np.ndarray] = {}
 
 
 def is_acid_eligible(appearance: Appearance) -> bool:
-    """Return True when the active theme is the uncustomized Acid Telemetry preset."""
-    return (
-        appearance.preset == "acid_telemetry"
-        and not appearance.background
-        and not appearance.text
-        and not appearance.accent
-    )
+    """Return True when the active theme is the Acid Telemetry preset (custom colors/fonts are locked in Acid mode)."""
+    return appearance.preset == "acid_telemetry"
 
 
 def resolve_acid_variant(
@@ -254,14 +249,14 @@ def acid_colormap_lut(kind: str, variant: str = "dark") -> np.ndarray:
 
 
 class ChamferBadge(QtWidgets.QWidget):
-    """45-degree top-right chamfered nameplate badge (zero QGraphicsEffect)."""
+    """45-degree chamfered telemetry emblem with precision crosshair & pulse trace (zero QGraphicsEffect)."""
 
     def __init__(
         self,
         text: str = "LS",
         parent: QtWidgets.QWidget | None = None,
         *,
-        size: QtCore.QSize = QtCore.QSize(34, 30),
+        size: QtCore.QSize = QtCore.QSize(36, 30),
         chamfer: int = 7,
     ) -> None:
         super().__init__(parent)
@@ -283,31 +278,39 @@ class ChamferBadge(QtWidgets.QWidget):
         super().paintEvent(event)
         w = float(self.width())
         h = float(self.height())
-        c = min(float(self._chamfer), w * 0.4, h * 0.4)
+        c = min(float(self._chamfer), w * 0.35, h * 0.35)
         if w <= 4 or h <= 4:
             return
 
+        # Dual-chamfered industrial plate (top-right + bottom-left cut)
         path = QtGui.QPainterPath()
         path.moveTo(0.5, 0.5)
         path.lineTo(w - c, 0.5)
         path.lineTo(w - 0.5, c)
         path.lineTo(w - 0.5, h - 0.5)
-        path.lineTo(0.5, h - 0.5)
+        path.lineTo(c * 0.65, h - 0.5)
+        path.lineTo(0.5, h - c * 0.65)
         path.closeSubpath()
 
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         painter.fillPath(path, self._fill)
-        painter.setPen(QtGui.QPen(self._border, 1.0))
+        painter.setPen(QtGui.QPen(self._border, 1.2))
         painter.drawPath(path)
+
+        # Top-left micro registration pip + bottom-right spectrum bar accent
+        sub_fg = QtGui.QColor(self._fg)
+        sub_fg.setAlpha(185)
+        painter.fillRect(QtCore.QRectF(3.0, 3.0, 2.5, 2.5), sub_fg)
+        painter.fillRect(QtCore.QRectF(w - 6.0, h - 6.5, 2.5, 3.5), sub_fg)
 
         font = QtGui.QFont("Consolas")
         font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
         font.setBold(True)
-        font.setPixelSize(max(10, min(13, round(h * 0.40))))
+        font.setPixelSize(max(10, min(13, round(h * 0.42))))
         painter.setFont(font)
         painter.setPen(self._fg)
-        painter.drawText(QtCore.QRectF(0, 0, w - 1, h), QtCore.Qt.AlignmentFlag.AlignCenter, self._text)
+        painter.drawText(QtCore.QRectF(0, -1, w - 1, h), QtCore.Qt.AlignmentFlag.AlignCenter, self._text)
         painter.end()
 
 
@@ -585,7 +588,7 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
             f_mono.setBold(True)
             f_mono.setPixelSize(10)
             p.setFont(f_mono)
-            raw = "LISTENSCOPE_V0.2.1 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
+            raw = "LISTENSCOPE_V0.2.2 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
             elided = QtGui.QFontMetrics(f_mono).elidedText(raw, QtCore.Qt.TextElideMode.ElideRight, avail_w)
             p.drawText(QtCore.QRect(text_left, 0, avail_w, h), QtCore.Qt.AlignmentFlag.AlignVCenter, elided)
 
@@ -1239,20 +1242,63 @@ QSplitter::handle:hover {{
 
 
 def acid_stylesheet(appearance: Appearance, variant: str = "dark") -> str:
-    """Build the Acid Telemetry v2 Graphic Realism QSS stylesheet."""
+    """Build the Acid Telemetry v2 Graphic Realism QSS stylesheet (font family & palette locked; font size adjustable)."""
     p = get_acid_palette(variant)
     is_light = p.variant == "light"
     base_px = max(11, int(appearance.font_size or 12))
     mono_px = max(10, base_px - 1)
     eye_px = max(9, base_px - 2)
-    sans_family = f'"{appearance.font_family}", {_FONT_SANS}' if appearance.font_family else _FONT_SANS
-    display_family = f'"{appearance.font_family}", {_FONT_DISPLAY}' if appearance.font_family else _FONT_DISPLAY
+    sans_family = _FONT_SANS
+    display_family = _FONT_DISPLAY
     mono_family = _FONT_MONO
     controls_qss = _acid_controls_qss(p, variant=p.variant, base_px=base_px, mono_family=mono_family)
     primary_tone_fg = "#065F46" if is_light else p.accent
     return f"""
 QMainWindow, QDialog {{
     background-color: {p.bg_base};
+}}
+QWidget#mainShellFrame[frameless="true"] {{
+    background-color: {p.bg_base};
+    border: 1px solid {p.border_strong};
+    border-radius: 10px;
+}}
+QPushButton#windowCtrlBtn {{
+    background-color: {p.bg_code};
+    color: {p.text_secondary};
+    border: 1px solid {p.border_strong};
+    border-radius: 0px;
+    padding: 0px;
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 22px;
+    max-height: 22px;
+    font-family: {mono_family};
+    font-size: {max(10, base_px - 1)}px;
+    font-weight: 800;
+}}
+QPushButton#windowCtrlBtn:hover {{
+    background-color: {p.accent};
+    color: {p.text_inverse};
+    border-color: {p.accent};
+}}
+QPushButton#windowCloseBtn {{
+    background-color: {p.bg_code};
+    color: {p.text_secondary};
+    border: 1px solid {p.border_strong};
+    border-radius: 0px;
+    padding: 0px;
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 22px;
+    max-height: 22px;
+    font-family: {mono_family};
+    font-size: {max(10, base_px - 1)}px;
+    font-weight: 800;
+}}
+QPushButton#windowCloseBtn:hover {{
+    background-color: {p.danger};
+    color: #FFFFFF;
+    border-color: {p.danger};
 }}
 QMainWindow, QDialog, QWidget {{
     color: {p.text_primary};
@@ -1707,11 +1753,8 @@ def apply_acid_plot_theme(
     title_col = p.dock_ink if is_history else p.text_primary
     plot.setBackground(bg)
     base_px = max(10, int(appearance.font_size or 12) - 1)
-    if appearance.font_family:
-        tick_font = QtGui.QFont(appearance.font_family)
-    else:
-        tick_font = QtGui.QFont("Consolas")
-        tick_font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
+    tick_font = QtGui.QFont("Consolas")
+    tick_font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
     tick_font.setPixelSize(base_px)
     title = plot.getPlotItem().titleLabel
     title.setText(title.text, color=title_col, family=tick_font.family(), size=f"{max(11, int(appearance.font_size or 12))}px")
@@ -1720,3 +1763,4 @@ def apply_acid_plot_theme(
         axis.setTickFont(tick_font)
         axis.setPen(p.plot_tick_pen)
         axis.setTextPen(axis_col)
+

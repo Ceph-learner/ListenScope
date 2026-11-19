@@ -1,85 +1,94 @@
 # ListenScope
 
-**完全免费、离线、本地运行** 的 Windows 音乐分析、A/B 循环与扒谱辅助桌面软件。无需下载 QQ 音乐加密歌曲文件、无需解密缓存、无需绕过 DRM，即可一边在 QQ 音乐（或任意桌面应用）正常听歌，一边实时分析频谱/Chroma/和弦（含音阶构成音实时拼写、12 步进行轨迹与一键换歌重置）/调性/BPM/主音高可视化音准条（`-50 ~ +50 cents`），支持 **纯 CPU Capo / 乐器移调实时联动**（自动同步实时分析、12 步和弦带、分轨深度报告、Live 和弦 HUD 与 `.md/.csv` 扒谱表并保留原始实音对照）、纯 CPU **Tap 定速、检测 BPM 一键同步、1 小节预备拍与 `0%–150%` 音量可调练习节拍器**（自动持久化 BPM/拍号/音量/预备拍/移调偏好），在 **120 秒交互式波形时间轴**（含 `A-1s/A+1s/B-1s/B+1s` 区间微调与反转归一化、黄线实时播放头、最多 12 个自动防滚出 **A/B 练习书签**、单次/循环开关及 `0.5x–1.25x` 纯 CPU 不变调倍速）上拖拽选区回放或**分块导出应用当前倍速与节拍器 Click 的 A/B / 分轨混音练习 WAV**，并对历史片段进行本地 AI 分轨（2-Stem / 4-Stem）、无损流式和弦（可选 `maj7/m7/7/sus4`）/Bass/鼓组/主旋律深度分析、选中和弦片段局部循环练习、Live 当前（含构成音）/下一和弦 HUD、MIDI 转录、钢琴卷帘点击画面跳转、`Ctrl+Space` 全局播放/暂停以及一键导出**脱敏排障诊断包 (`.zip`)**。
+**免费、离线、本地运行**的 Windows 桌面听歌分析、A/B 循环与扒谱练习工具。
+
+不需要下载加密音乐缓存，也不需要折腾音频驱动桥接。在 QQ 音乐、网易云音乐、浏览器或任意播放器正常听歌时，ListenScope 直接按进程捕获音频流，提供实时频谱、和弦进行、调性、BPM、120 秒回溯选区、本地 AI 分轨和 Cubase 兼容 MIDI 导出。
 
 ---
 
-## 硬性目标硬件规范与资源安全原则
+## 主要功能
 
-- **目标系统**: Windows（按进程捕获需要 Build `20348` 或更高）
-- **目标 GPU**: `NVIDIA GeForce RTX 5060 Ti` (Blackwell, `sm_120`)
-- **GPU 显存**: **8GB VRAM**（严格按 8GB 预算，绝非 16GB VRAM）
-- **系统内存**: **16GB RAM**
-
-核心安全准则：
-1. **CPU 实时基础与练习工具**：实时波形、FFT/对数频谱（带横轴十倍频防重叠刻度）、12-bin Chroma、12 大/小三和弦（实时显示构成音拼写、有界 12 步进行、**手动「换歌重置」与基于 Windows SMTC 的受保护「自动切歌重置」**，以及本地 24 调「练习和弦」合成试听与导出；离线深度分析可选 `maj7/m7/7/sus4` 扩展和弦）、调性、BPM、主音高与 `-50 ~ +50c` 轻量动画准音刻度条 (`TuningCentsBar`)、**纯 CPU Capo / 乐器移调联动**（UI 与 `.md/.csv` 扒谱表同步移调显示）、纯 CPU Tap 定速与练习节拍器（支持 `0%–150%` 音量调节、1 小节预备拍、独立跟练及自动对齐 `0.5x–1.25x` 回放速度）、鼓组 Kick/Snare/Hi-Hat 16 步律动与试听、**FFT-YIN 贝斯最低音（含 `B0`/`E1` 防 8 度跃变、MIDI 编号与半程转调预警）**、主旋律音域、**全路径 Steinberg Cubase 兼容 SMF Type-0 (`480 TPB`) MIDI 导出**、`.md/.csv` 扒谱报告原子导出以及纯 CPU WSOLA 不变调变速回放与分块练习 WAV 导出全部纯 CPU 运行，不依赖 PyTorch GPU 且不打断实时捕获；界面支持 **黑夜 / 白天 / 跟随系统**、可切换第 5 档 **「酸性遥测 (`Acid Telemetry v2 // ACID & VOID` 暗夜高对比与 `CLINICAL_LIGHT` 临床浅色)」** 双模工业预设（含 Clinical Paper 对比扩展坞、45° 警示斜纹、5 点信号矩阵、`[STATIC_LOCK]` 交互条码带、顶栏双模快切、隔离式无 3D 凸起扁平控件与随包 SVG 图标）、本机字体扫描实时预览、恢复默认与紧凑 `[?]` 悬浮/点击说明徽标。
-2. **120 秒固定 PCM 环形缓冲、A/B 选区与有界书签**：统一 `48kHz / stereo / float32`（固定预分配 ~46.08 MB），支持流式载入本地音频前 `<=120s` 片段（先成功解码首块后再清空旧历史，避免损坏文件抹除既有缓冲）、底部 120s 波形总览拖拽 A/B 选区、`A-1s/A+1s/B-1s/B+1s` 区间微调、实时黄线播放游标、最多 12 个按环形缓冲绝对帧追踪并随滑窗滚出自动清理的 A/B 练习书签、单次/循环切换及独立原子导出（支持带当前倍速与节拍器 Click 的练习 WAV）；禁止无限音频队列、禁止一次性整首解码进 RAM。
-3. **三环境隔离 + 严格串行单模型 + 6 秒实测安全默认**：
-   - `.venv-core`（Python 3.12 x64）：轻量桌面 GUI 与 WASAPI/DSP + 可选 Windows SMTC (`winrt-Windows.Media.Control`) 只读曲目监听，禁止混入 PyTorch/CUDA。
-   - `.venv-ai`（Python 3.12 x64 + `torch/torchaudio 2.11.0+cu128` + `torchvision 0.26.0+cu128` + `constraints-ai-cu128.txt` + `onnxruntime-gpu 1.26.0` + `audio-separator 0.48.0` + `demucs 4.1.0` + `audioread 3.1.0`）：每次最多 1 个任务、1 个模型；离线默认 **6.0s 流式分块** (`long_audio_chunk_seconds=6.0`)、HTDemucs 默认 **6s 模型分段** (`demucs_default_segment_sec=6`，保留 MDX 内部 `segment_size=256` 与已保存自定义设置)；低于 **3072 MiB** 拒绝启动新任务、低于 **2048 MiB** 自动急停并清理整颗进程树与暂存；`setup_windows.ps1` 支持 `-CudaWheelDir <目录>` 优先使用已下载的官方 `+cu128` 本地 wheel（详见 [docs/PACKAGING.md](docs/PACKAGING.md) 下载停滞切换与联网边界说明）。
-   - `.venv-midi`（Python 3.11 x64 + `basic-pitch>=0.4.0,<0.5` + `tensorflow<2.15.1` + `setuptools<81` + `psutil` + `mido`；Windows `LongPathsEnabled=0` 下建议使用短路径如 `E:\LS-midi` 或内置 `{app}\m`）：独立 CPU MIDI 解释器，支持自动探测同级运行时、一键环境引导与设置保存；除分轨后在各单轨点击「转 MIDI」外，也可在 **3. 分轨混音与 MIDI 扒谱** 直接点击 **「打开单轨 WAV 转 MIDI...」** 对本地任意目录已有的单轨 WAV（如 `bass.wav`）无损载入并导出可被 `mido` 解析的 `.mid`；打包版通过 `run_external_python` 自动隔离包内 Python 3.12 DLL/模块搜索路径。
-4. **同级便携存储、明确 GPU 准入与一键排障**：配置（`settings.json`）、离线工作区与 WAV/MIDI 导出在软件目录可写时**优先落盘于同级目录（不写 `C:\`）**；启动、应用设置与「验证 AI 环境」同步检测驱动、NVML、`torch.cuda.is_available()`、`sm_120` 核函数、ONNX Runtime `CUDAExecutionProvider`、`demucs`/`audio-separator`/`audioread` 与 FFmpeg 可用性（`basic-pitch` 已移出 GPU 环境，不影响 `gpu_ai_ready = READY`）；`PersistedSettings` 自动记忆阈值、运行时路径、主题字体、SMTC 开关与练习参数；支持 Inno Setup 6 (`scripts/installer.iss`) 免管理员非 C 盘安装模板与一键导出脱敏诊断包 `.zip`。
-5. **随时可用的红色「紧急停止 AI」按钮**：强制结束 worker 进程树、清理 IPC 与任务暂存输出、重采样 RAM/VRAM，主界面与实时捕获永不中断。
+| 模块 | 功能概览 |
+| :--- | :--- |
+| **实时捕获与频谱** | Windows 进程环回捕获（Build ≥ 20348，无需虚拟声卡）或系统环回；实时波形、FFT / 对数频谱、基频 `F0` 与 `-50 ~ +50 cents` 音准刻度条 |
+| **和弦、调性与移调** | 12-bin Chroma 热图、大/小三和弦与构成音实时识别、自然大调 / 自然小调罗马级数、12 步和弦轨迹、纯 CPU **Capo / 乐器移调联动**、24 调和弦练习弹窗（支持试听与 `.mid` 导出） |
+| **120 秒回溯与 A/B 练习** | 固定 120s 环形缓冲（`48 kHz / Stereo / float32`）、拖拽 A/B 选区、`0.5x–1.25x` 不变调变速回放、12 个练习书签、Tap 定速节拍器（含预备拍）及带节拍器的练习 WAV 导出 |
+| **本地 AI 分轨** | 独立 `.venv-ai` 进程按需运行 2-Stem（Vocals / Instrumental）或 4-Stem（Vocals / Drums / Bass / Other）分离，默认 6 秒流式分块，随时可紧急停止并释放显存 |
+| **分轨混音与扒谱** | 四轨独立静音/独听、**贝斯独听 `0–24 dB` 可调增益**（默认 `+12 dB`，超过 `+12 dB` 自动护耳提示，可选写入导出 WAV）、FFT-YIN 贝斯最低音（低至 `B0`/`E1`）与半程转调检测、16 步鼓组律动、`.md/.csv` 扒谱表 |
+| **MIDI 转录与 Cubase 适配** | 支持分轨后一键转 MIDI 或直接打开本地单轨 WAV 转 MIDI；所有和弦、鼓点与单轨 MIDI 均统一规范为 **Steinberg Cubase 兼容 SMF Type-0 (`480 TPB`)** |
+| **界面与个性化** | 默认启用 **酸性遥测（Acid Telemetry · 临床浅色）** 工业视觉，支持暗夜 / 临床浅色双模快切；同时提供经典、Lenso、Codex、Claude 主题（非酸性主题支持自定义字体、配色与背景壁纸）、**中 / 英 / 韩 / 日** 四语切换及无边框圆角窗口 |
 
 ---
 
-## 模块架构
+## 环境架构
+
+为保证主界面轻量流畅（无需显卡即可使用全部实时分析与 A/B 练习功能），项目采用三环境隔离设计：
 
 ```text
 ListenScope/
-├── core/               # 硬件与 MIDI 探针, 同级目录优先路径与跨版本外部 Python 启动/FFmpeg 解析 (paths.py), 黑夜/白天/跟随系统与「酸性遥测」双模配色外观模型 (appearance.py), Windows SMTC 曲目监听 (media_session.py), ResourceLimits, ResourceManager, PersistedSettings, 脱敏诊断打包 (diagnostics.py)
-├── audio/              # WASAPI Process Loopback (Build >= 20348)/System Loopback, decode_wave_bytes/PCM 规范化, FixedRingBuffer(120s), WSOLA 不变调变速, Tap 定速/节拍器/鼓点与练习和弦本地试听, 有界 A/B 书签, HistoryABPlayer/StemMixerEngine
-├── analysis/           # CPU DSP(NaN/Inf 清洗): 频谱/Chroma/和弦/Capo移调/调性/BPM/24调练习模板, 无损流式分轨深度解析与 FFT-YIN 贝斯/转调分析 (stem_analyzer.py), Cubase 兼容 SMF Type-0 规范化 (midi_common.py), Basic Pitch / 轻量回退 MIDI 转录 (midi_transcription.py)
-├── ai/                 # 模型注册表(htdemucs_4stem 默认 6s 分段), 流式 WAV 分块守护(默认 6.0s 分块), 隔离 AIWorkerProcess, AIJobManager(进程树清理与 RAM 拒停告警)
-├── separation/         # 2-Stem MDX-ONNX 后端 & 4-Stem HTDemucs 后端 (全链路 2ch float32 与任务内 tmp 隔离)
-├── streaming/          # Phase 8 实验性近实时 2-Stem 分轨 (默认关闭, 独立 .venv-ai 隔离、RTF 基准与 ASCII 安全 JSON IPC)
-├── ui/                 # PySide6 + PyQtGraph GUI (黑夜/白天/跟随系统主题与字体实时预览 appearance.py, 独立隔离「酸性遥测 v2」双模引擎与扁平控件 acid_style.py + assets/acid_*.svg, 紧凑 [?] 徽标 help_badge.py, 练习和弦 chord_practice.py, 防重叠频谱/Chroma/120s 波形/分轨混音/设置)
-├── packaging/          # PyInstaller Core 规范 (排除 CUDA/PyTorch/TF 臃肿依赖, 附带 requirements-ai.txt / constraints-ai-cu128.txt / requirements-midi.txt、acid_*.svg 资产、winrt 绑定与 Worker/Probe 模块)
-├── scripts/            # check_env.py, probe_media_session.py (只读 SMTC 切歌信号探针), setup_windows.ps1 (-CudaWheelDir/-SkipCore/-AiVenvPath), build_windows.ps1 (-BundleRuntimes/-BuildInstaller) 与 Inno Setup 6 安装模板 installer.iss
-├── docs/               # CURRENT_STATE/HANDOFF (AI 接手入口), REQUIREMENTS/ARCHITECTURE/DECISIONS/DEVELOPMENT, PACKAGING.md 与 WINDOWS_TEST_REPORT.md (Windows 11 + RTX 5060 Ti 真机实测记录)
-├── capture_test.py     # Phase 1 CLI 捕获 + ResourceManager PoC
-└── main.py             # 桌面主程序入口 (同级存储、运行时自动探测/一键引导、单轨 WAV 转 MIDI、SMTC 监测与偏好持久化)
+├── core/         # 配置与同级便携路径、多语言 (zh/en/ko/ja)、外观模型、本机 PyTorch 扫描、资源守卫与诊断打包
+├── audio/        # WASAPI 进程/系统环回捕获、120s 固定环形缓冲、WSOLA 变速、节拍器、和弦/鼓点试听与四轨混音引擎
+├── analysis/     # 纯 CPU 频谱/Chroma/和弦/调性/BPM、FFT-YIN 贝斯与转调分析、Cubase SMF Type-0 MIDI 导出
+├── ai/           # 离线分轨模型注册表、流式分块守护与独立 AI 子进程管理
+├── separation/   # 2-Stem MDX-ONNX 与 4-Stem HTDemucs 后端
+├── streaming/    # 实验性近实时 2-Stem 监听（默认关闭）
+├── ui/           # PySide6 + PyQtGraph 桌面界面、酸性遥测样式引擎、紧凑 [?] 说明徽标与设置面板
+├── packaging/    # PyInstaller 打包规范与 requirements-ai / requirements-midi 依赖约束
+├── scripts/      # Windows 环境初始化 (setup_windows.ps1)、硬件自检与 Inno Setup 安装脚本
+└── docs/         # 架构说明、开发接手记录 (CURRENT_STATE.md / HANDOFF.md)、打包指南与 Windows 实测报告
 ```
+
+- **Core 环境（`.venv-core`，Python 3.12）**：仅包含 GUI、WASAPI 捕获与纯 CPU DSP，不依赖 PyTorch 或 TensorFlow。
+- **GPU AI 环境（`.venv-ai`，Python 3.12 + CUDA 12.8）**：仅在点击离线分轨或近实时分轨时由子进程按需启动；软件内置 **本机 PyTorch 自动扫描器**，若未安装会提供官方下载指引。针对 `8 GB VRAM / 16 GB RAM`（如 RTX 5060 Ti 8GB）默认采用 6 秒安全分块。
+- **CPU MIDI 环境（`.venv-midi`，Python 3.11 + Basic Pitch）**：独立 CPU 单轨转 MIDI 环境，未配置时自动回退至内置轻量算法。
 
 ---
 
-## 环境 Honest Status 说明（重要）
+## 快速上手
 
-> [!NOTE]
-> 以下区分 **云端 Linux 自动化验证**、**Windows CI/实机已通过项** 与 **待真机补验项**（详情见 [docs/WINDOWS_TEST_REPORT.md](docs/WINDOWS_TEST_REPORT.md)）：
-> - **Windows 11 + RTX 5060 Ti (8GB VRAM, 16GB RAM) 已实测通过（含第四、五轮及 PR #22 前置基线）**：Core / GPU AI / CPU MIDI 三环境 `pip check` 与 Windows `pytest` 通过（第四轮 `112/112`，PR #22 基线 `184` 项通过）；**30 分钟 `QQMusic.exe` `process_loopback` 连续捕获**（主进程 `289–362 MiB`、队列 `0/64`、累计溢出/欠载 `0/0`）与**手动点击「换歌重置」**立即清空 12 步历史；打包版默认 `6.0s` 分块下真实 30s GPU 二轨 (`9.469s`，2,670 个 CUDA 节点事件) 与四轨 (`4.344s`) 分离及显存/子树完全回落；打包版调用独立 Python 3.11 CPU 环境导出 `bass` 的 **Spotify Basic Pitch CPU (`basic-pitch`)** `.mid`（`120` 音符，与 CLI 逐字节同源 SHA-256），且重启 `exe` 后保留设置。
-> - **云端 Linux 沙箱与 GitHub Actions 构建（`v0.2.1` 基线）**：Linux 离屏下运行 `QT_QPA_PLATFORM=offscreen pytest -q --tb=short` 全量 **`189 passed, 6 skipped`**（6 项 Windows 专属测试跳过），覆盖 **「酸性遥测 (`Acid Telemetry v2`)」双模工业预设**（`#0B0D0F`/`#CEFF18`/`#2211FF` 暗夜与 `#EEF2F6`/`#00A878` 临床浅色、Clinical Paper 对比扩展坞、`[STATIC_LOCK]` 静态锁与全包 `acid_*.svg` 核验）、练习和弦 Row 0 对齐与互斥试听、FFT-YIN 贝斯（`B0`/`E1` 防 8 度跃变与转调提示）、三类导出 Cubase SMF Type-0 (`480 TPB`) 规范化、黑夜/白天/跟随系统主题与字体扫描实时预览/恢复默认、`TuningCentsBar`/`[?]` 徽标及同级存储/运行时自动探测，同步目检真实 PySide6 离屏截图（`1380×900` 与 `1280×800` 窄窗、临床浅色、设置/外观/和弦练习弹窗及经典暗黑回退对照）；`.github/workflows/release-windows.yml` 在 `windows-latest` 上自动执行 Windows x64 offscreen `pytest`、PyInstaller Core 打包、便携重定位 `--simulate --headless-smoke` 校验与 `ISCC.exe` 安装包构建（仅含 Core GUI/WASAPI/DSP，不含 PyTorch/CUDA/TensorFlow）。
-> - **最新状态与待真机补验见 [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) 与 [docs/HANDOFF.md](docs/HANDOFF.md)**：Windows 11 实机安装 `ListenScope-Setup-Windows-x64.exe`（默认非 C 盘与同级便携目录落盘）、实际声卡 WASAPI 捕获与试听、三类 `.mid` 拖入 Steinberg Cubase 验证、系统主题实时切换与高 DPI 下 SVG 控件渲染、真实曲库 GPU 2-Stem/4-Stem 与 SMTC 自动切歌仍待目标机实测。
+### 1. 直接使用安装包 / 便携版
 
----
+从 Release 下载 `ListenScope-Setup-Windows-x64.exe` 或 `ListenScope-Core-Windows-x64-Portable.zip`。
+程序默认将配置文件（`settings.json`）、离线工作区和导出的 WAV/MIDI **保存在软件同级目录**，不会往 `C:\` 盘写入垃圾文件。
 
-## 快速运行
+### 2. 从源码运行（Windows）
 
-### 1. 运行自动化测试套件
-
-```bash
-pytest -v
-```
-
-### 2. 非 Windows 合成测试信号启动桌面 UI / SMTC 模拟探针
-
-```bash
-python main.py --simulate
-python scripts/probe_media_session.py --self-test-mock --json
-```
-
-### 3. Windows 真机安装与运行
-
-详见 [docs/PACKAGING.md](docs/PACKAGING.md)，建议使用 PowerShell 7 (`pwsh`) 在短路径目录（如 `E:\LS`）初始化 `.venv-core` / `.venv-ai` / `.venv-midi`（若在线下载 2.75 GB `cu128` Torch wheel 停滞，可附加 `-CudaWheelDir E:\cuda_wheels`）：
+推荐使用 PowerShell 7 (`pwsh`) 在短路径目录（如 `E:\LS`）初始化环境：
 
 ```powershell
+# 一键创建 Core / GPU AI / CPU MIDI 三个虚拟环境（若有本地 CUDA Wheel 目录可加 -CudaWheelDir）
 pwsh -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
-.\.venv-core\Scripts\python.exe scripts\check_env.py --write-report SYSTEM_REPORT.md
-.\.venv-core\Scripts\python.exe scripts\probe_media_session.py --process QQMusic.exe --duration 30
-.\.venv-core\Scripts\python.exe capture_test.py --name QQMusic.exe --fallback-system
-.\.venv-core\Scripts\python.exe main.py --ai-python .\.venv-ai\Scripts\python.exe --midi-python .\.venv-midi\Scripts\python.exe
+
+# 启动 ListenScope（会自动探测同级或本机已安装的 PyTorch / MIDI 环境）
+.\.venv-core\Scripts\python.exe main.py
 ```
 
-## 致谢
+### 3. 开发与测试（Windows / Linux）
 
-这个项目能做起来，离不开很多人已经做好的模型、音频工具和研究。我只是站在巨人的肩膀上，把这些成果串成一个能在本机听歌、扒谱和练习的工具。感谢上游作者、模型训练者和维护者。各项目的具体贡献和原始出处见 [致谢与来源](ACKNOWLEDGMENTS.md)。
+仅安装基础依赖即可运行桌面 UI（非 Windows 下使用 `--simulate` 合成信号）与自动化测试：
+
+```bash
+pip install -r requirements-core.txt pytest
+python main.py --simulate
+QT_QPA_PLATFORM=offscreen pytest -q --tb=short
+```
+
+---
+
+## 文档导航
+
+工程细节、打包流程与开发接手记录已归档至 `docs/` 目录：
+
+- [项目当前状态与开发记录 (docs/CURRENT_STATE.md)](docs/CURRENT_STATE.md)
+- [维护接手指南 (docs/HANDOFF.md)](docs/HANDOFF.md)
+- [架构设计 (docs/ARCHITECTURE.md)](docs/ARCHITECTURE.md) & [设计决策 (docs/DECISIONS.md)](docs/DECISIONS.md)
+- [Windows 打包与环境配置 (docs/PACKAGING.md)](docs/PACKAGING.md)
+- [Windows 11 + RTX 5060 Ti 实测报告 (docs/WINDOWS_TEST_REPORT.md)](docs/WINDOWS_TEST_REPORT.md)
+
+---
+
+## 致谢与反馈
+
+本项目基于众多优秀的开源音频算法与模型构建，详见 [致谢与来源 (ACKNOWLEDGMENTS.md)](ACKNOWLEDGMENTS.md)。
+
+如果 ListenScope 对你的听歌、练琴或扒谱有帮助，欢迎在 GitHub 点一颗 ⭐ **Star**，或在 [Issues](https://github.com/Ceph-learner/ListenScope/issues) 中提交问题与建议。

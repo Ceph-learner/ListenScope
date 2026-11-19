@@ -59,9 +59,16 @@ def _font_family(raw):
     return cleaned[:80]
 
 
+def _bg_image(raw):
+    if not isinstance(raw, str):
+        return ""
+    cleaned = raw.replace('"', "").replace("'", "").strip()
+    return cleaned[:512]
+
+
 @dataclass(frozen=True)
 class Appearance:
-    preset: str = "classic"
+    preset: str = "acid_telemetry"
     font_size: int = 12
     background: str = ""
     text: str = ""
@@ -72,8 +79,13 @@ class Appearance:
     dispersion: int = 20
     layout: str = "split"
     analysis_layout: str = DEFAULT_ANALYSIS_LAYOUT
-    theme_mode: str = "dark"
+    theme_mode: str = "light"
     font_family: str = ""
+    background_image: str = ""
+    language: str = "zh"
+    frameless: bool = True
+    help_mode: bool = True
+    focus_animations: bool = True
 
     @classmethod
     def from_mapping(cls, raw):
@@ -82,20 +94,33 @@ class Appearance:
         raw_preset = raw.get("preset")
         if isinstance(raw_preset, str):
             raw_preset = _PRESET_ALIASES.get(raw_preset, raw_preset)
+        preset = _choice(raw_preset, PRESETS, "acid_telemetry")
+        is_acid = preset == "acid_telemetry"
+        raw_frameless = raw.get("frameless")
+        frameless = raw_frameless if isinstance(raw_frameless, bool) else True
+        raw_help_mode = raw.get("help_mode")
+        help_mode = raw_help_mode if isinstance(raw_help_mode, bool) else True
+        raw_focus_anim = raw.get("focus_animations")
+        focus_animations = raw_focus_anim if isinstance(raw_focus_anim, bool) else True
         return cls(
-            preset=_choice(raw_preset, PRESETS, "classic"),
+            preset=preset,
             font_size=_number(raw.get("font_size"), 11, 20, 12),
-            background=_color(raw.get("background")),
-            text=_color(raw.get("text")),
-            accent=_color(raw.get("accent")),
+            background="" if is_acid else _color(raw.get("background")),
+            text="" if is_acid else _color(raw.get("text")),
+            accent="" if is_acid else _color(raw.get("accent")),
             scope=_choice(raw.get("scope"), SCOPES, "floating"),
             strength=_number(raw.get("strength"), 0, 100, 45),
             softness=_number(raw.get("softness"), 0, 100, 60),
             dispersion=_number(raw.get("dispersion"), 0, 100, 20),
             layout=_choice(raw.get("layout"), LAYOUTS, "split"),
             analysis_layout=_choice(raw.get("analysis_layout"), ANALYSIS_LAYOUTS, DEFAULT_ANALYSIS_LAYOUT),
-            theme_mode=_choice(raw.get("theme_mode"), THEME_MODES, "dark"),
-            font_family=_font_family(raw.get("font_family")),
+            theme_mode=_choice(raw.get("theme_mode"), THEME_MODES, "light"),
+            font_family="" if is_acid else _font_family(raw.get("font_family")),
+            background_image="" if is_acid else _bg_image(raw.get("background_image")),
+            language=_choice(raw.get("language"), {"zh", "en", "ko", "ja"}, "zh"),
+            frameless=frameless,
+            help_mode=help_mode,
+            focus_animations=focus_animations,
         )
 
     def resolve_theme_mode(self, *, system_is_dark: bool | None = None) -> str:
@@ -109,8 +134,20 @@ class Appearance:
         mode = self.resolve_theme_mode(system_is_dark=system_is_dark)
         table = LIGHT_PRESETS if mode == "light" else PRESETS
         _, background, foreground, accent = table[self.preset]
+        if self.preset == "acid_telemetry":
+            return background, foreground, accent
         return self.background or background, self.text or foreground, self.accent or accent
+
+    def is_acid_locked(self) -> bool:
+        return self.preset == "acid_telemetry"
+
+    def effective_font_family(self) -> str:
+        return "" if self.preset == "acid_telemetry" else self.font_family
+
+    def effective_background_image(self) -> str:
+        return "" if self.preset == "acid_telemetry" else self.background_image
 
     @property
     def colors(self):
         return self.effective_colors()
+

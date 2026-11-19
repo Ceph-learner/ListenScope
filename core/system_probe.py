@@ -768,3 +768,211 @@ def apply_external_ai_probe_to_report(
         gpu_ai_block_reason=gpu_block_reason,
     )
 
+
+PYTORCH_OFFICIAL_URL = "https://pytorch.org/get-started/locally/"
+PYTORCH_CU128_INDEX_URL = "https://download.pytorch.org/whl/cu128"
+PYTORCH_INSTALL_COMMAND = (
+    "pip install torch==2.11.0 torchaudio==2.11.0 torchvision==0.26.0 "
+    "--index-url https://download.pytorch.org/whl/cu128"
+)
+PYTORCH_DOWNLOAD_GUIDE = (
+    "未在本机扫描到已安装 PyTorch 的 Python 环境。\n"
+    f"• PyTorch 官方下载指引: {PYTORCH_OFFICIAL_URL}\n"
+    f"• RTX 5060 Ti (sm_120) CUDA 12.8 镜像源: {PYTORCH_CU128_INDEX_URL}\n"
+    f"• 推荐安装命令: `{PYTORCH_INSTALL_COMMAND}`\n"
+    "也可直接点击上方「一键自动配置 AI + MIDI」由软件自动在同级目录下载并配置。"
+)
+
+
+def _has_torch_package_on_disk(python_exe: Path) -> bool:
+    """Fast filesystem check for `torch/__init__.py` relative to a Python interpreter before spawning a process."""
+    try:
+        parent = python_exe.parent
+        # Windows venv / Conda: <env>/Scripts/python.exe or <env>/python.exe -> <env>/Lib/site-packages/torch
+        roots = [parent, parent.parent]
+        for root in roots:
+            if (root / "Lib" / "site-packages" / "torch" / "__init__.py").exists():
+                return True
+            lib_dir = root / "lib"
+            if lib_dir.is_dir():
+                for py_sub in lib_dir.glob("python3*"):
+                    for sp_name in ("site-packages", "dist-packages"):
+                        if (py_sub / sp_name / "torch" / "__init__.py").exists():
+                            return True
+    except OSError:
+        return False
+    return False
+
+
+def _candidate_local_python_executables(extra_roots: tuple[Path, ...] = ()) -> list[Path]:
+    """Collect candidate Python interpreters across sibling venvs, Conda envs, Windows Python installs, and PATH."""
+    bundle_root = get_bundle_root()
+    exe_dir = Path(sys.executable).resolve().parent
+    search_roots: list[Path] = [
+        *extra_roots,
+        bundle_root,
+        exe_dir,
+        exe_dir.parent,
+        exe_dir.parent.parent,
+    ]
+    raw_candidates: list[Path] = []
+
+    env_ai = os.environ.get("LISTENSCOPE_AI_PYTHON", "").strip()
+    if env_ai:
+        raw_candidates.append(Path(env_ai))
+
+    for base in search_roots:
+        for rel in (
+            (".venv-ai", "Scripts", "python.exe"),
+            (".venv-ai", "bin", "python"),
+            ("runtime", "ai", "python.exe"),
+            ("runtime", "ai", "Scripts", "python.exe"),
+            ("runtime", "ai", "bin", "python"),
+            ("runtimes", "ai", "python.exe"),
+            ("runtimes", "ai", "Scripts", "python.exe"),
+            ("runtimes", "ai", "bin", "python"),
+            (".venv", "Scripts", "python.exe"),
+            (".venv", "bin", "python"),
+            ("venv", "Scripts", "python.exe"),
+            ("venv", "bin", "python"),
+        ):
+            raw_candidates.append(base.joinpath(*rel))
+
+    home = Path.home()
+    for conda_base in (
+        home / "miniconda3",
+        home / "anaconda3",
+        home / "Miniconda3",
+        home / "Anaconda3",
+        home / "AppData" / "Local" / "miniconda3",
+        home / "AppData" / "Local" / "anaconda3",
+        home / "AppData" / "Local" / "Programs" / "Python",
+        Path("C:/ProgramData/miniconda3"),
+        Path("C:/ProgramData/anaconda3"),
+        Path("D:/miniconda3"),
+        Path("D:/anaconda3"),
+        Path("E:/miniconda3"),
+        Path("E:/anaconda3"),
+    ):
+        try:
+            if not conda_base.exists():
+                continue
+            raw_candidates.append(conda_base / "python.exe")
+            raw_candidates.append(conda_base / "bin" / "python")
+            envs_dir = conda_base / "envs"
+            if envs_dir.is_dir():
+                for env_sub in sorted(envs_dir.iterdir()):
+                    raw_candidates.append(env_sub / "python.exe")
+                    raw_candidates.append(env_sub / "Scripts" / "python.exe")
+                    raw_candidates.append(env_sub / "bin" / "python")
+            for py_sub in sorted(conda_base.glob("Python3*")):
+                raw_candidates.append(py_sub / "python.exe")
+                raw_candidates.append(py_sub / "Scripts" / "python.exe")
+        except OSError:
+            continue
+
+    if sys.platform == "win32":
+        for drive in ("C:", "D:", "E:"):
+            for folder in ("ListenScope", "AI", "PyTorch", "venvs"):
+                base = Path(f"{drive}/{folder}")
+                raw_candidates.append(base / ".venv-ai" / "Scripts" / "python.exe")
+                raw_candidates.append(base / "Scripts" / "python.exe")
+        py_launcher = shutil.which("py")
+        if py_launcher:
+            out = _run_cmd_line([py_launcher, "-0p"], timeout=2.5)
+            if out:
+                for line in out.splitlines():
+                    parts = line.strip().split()
+                    if parts:
+                        cand_str = parts[-1].strip()
+                        if cand_str.lower().endswith("python.exe"):
+                            raw_candidates.append(Path(cand_str))
+
+    for which_name in ("python", "python3", "python3.12", "python3.11"):
+        found = shutil.which(which_name)
+        if found:
+            raw_candidates.append(Path(found))
+
+    raw_candidates.append(Path(sys.executable))
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for cand in raw_candidates:
+        try:
+            if not cand.exists() or not cand.is_file():
+                continue
+            key = os.path.normcase(str(cand.resolve()))
+        except OSError:
+            continue
+        if key not in seen:
+            seen.add(key)
+            deduped.append(cand)
+    return deduped
+
+
+def scan_local_pytorch_installations(
+    extra_roots: tuple[Path, ...] = (),
+    *,
+    timeout_per_env_sec: float = 4.5,
+    require_disk_torch: bool = True,
+) -> list[dict[str, Any]]:
+    """Scan local Python environments for installed PyTorch (`torch`) and report CUDA / sm_120 readiness."""
+    candidates = _candidate_local_python_executables(extra_roots)
+    results: list[dict[str, Any]] = []
+    probe_snippet = (
+        "import json, sys\n"
+        "try:\n"
+        "    import torch\n"
+        "    cuda_ok = bool(torch.cuda.is_available())\n"
+        "    arch_fn = getattr(torch.cuda, 'get_arch_list', None)\n"
+        "    archs = list(arch_fn()) if callable(arch_fn) else []\n"
+        "    sm120 = any(a in ('sm_120', 'compute_120', 'sm_120a') for a in archs)\n"
+        "    dev = torch.cuda.get_device_name(0) if cuda_ok and torch.cuda.device_count() > 0 else None\n"
+        "    print(json.dumps({\n"
+        "        'installed': True,\n"
+        "        'python_executable': sys.executable,\n"
+        "        'torch_version': str(getattr(torch, '__version__', 'unknown')),\n"
+        "        'cuda_available': cuda_ok,\n"
+        "        'cuda_build': getattr(getattr(torch, 'version', None), 'cuda', None),\n"
+        "        'supports_sm_120': sm120,\n"
+        "        'device_name': dev,\n"
+        "    }))\n"
+        "except Exception as e:\n"
+        "    print(json.dumps({'installed': False, 'error': str(e)}))\n"
+    )
+    for cand in candidates:
+        if require_disk_torch and not _has_torch_package_on_disk(cand):
+            continue
+        try:
+            proc = run_external_python(
+                [str(cand), "-c", probe_snippet],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_per_env_sec,
+                check=False,
+                **subprocess_no_window_kwargs(),
+            )
+            if proc.returncode != 0 or not proc.stdout.strip():
+                continue
+            raw_line = proc.stdout.strip().splitlines()[-1]
+            info = json.loads(raw_line)
+            if isinstance(info, dict) and info.get("installed"):
+                info["python_executable"] = str(cand)
+                results.append(info)
+        except Exception:
+            continue
+
+    # Sort best first: CUDA available + sm_120 -> CUDA available -> CPU torch
+    results.sort(
+        key=lambda item: (
+            bool(item.get("cuda_available")),
+            bool(item.get("supports_sm_120")),
+            str(item.get("torch_version", "")),
+        ),
+        reverse=True,
+    )
+    return results
+
+

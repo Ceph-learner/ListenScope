@@ -341,6 +341,12 @@ class AIJobManager:
             env = prepend_ffmpeg_path_env(os.environ.copy())
             existing_pp = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
+            if self.ai_config.offload_gui_to_igpu:
+                env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+                env.setdefault("CUDA_VISIBLE_DEVICES", "0")
+            if self.ai_config.igpu_directml_2stem and request.stem_mode == "2stem":
+                env["LISTENSCOPE_DML_2STEM"] = "1"
+                env["LISTENSCOPE_DML_DEVICE_ID"] = str(int(self.ai_config.igpu_directml_device_id))
 
             msg_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
             self._subproc_stderr_tail.clear()

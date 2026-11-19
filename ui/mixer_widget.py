@@ -62,38 +62,45 @@ class _StemTrackRow(QtWidgets.QFrame):
         row.setContentsMargins(10, 6, 10, 6)
         row.setSpacing(8)
 
-        # Left column: stem label & duration
-        info = QtWidgets.QVBoxLayout()
+        # Left column: fixed-width stem label & duration so M/S/sliders align vertically across all stems
+        info_box = QtWidgets.QWidget(self)
+        info_box.setObjectName("stemInfoCol")
+        info_box.setFixedWidth(96)
+        info = QtWidgets.QVBoxLayout(info_box)
+        info.setContentsMargins(0, 0, 4, 0)
+        info.setSpacing(2)
         title = QtWidgets.QLabel(stem_name.upper())
         title.setObjectName("stemTrackTitle")
+        title.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
         dur_lbl = QtWidgets.QLabel(f"{duration_sec:.1f}s")
         dur_lbl.setObjectName("stemMetaDuration")
+        dur_lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
         info.addWidget(title)
         info.addWidget(dur_lbl)
-        row.addLayout(info)
+        row.addWidget(info_box, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
 
         # Mute / Solo / Volume
         self.mute_btn = QtWidgets.QPushButton("M")
         self.mute_btn.setObjectName("stemMuteBtn")
         self.mute_btn.setCheckable(True)
-        self.mute_btn.setFixedWidth(32)
+        self.mute_btn.setFixedSize(32, 28)
         self.mute_btn.toggled.connect(lambda checked: self.mute_changed.emit(self.stem_name, checked))
 
         self.solo_btn = QtWidgets.QPushButton("S")
         self.solo_btn.setObjectName("stemSoloBtn")
         self.solo_btn.setCheckable(True)
-        self.solo_btn.setFixedWidth(32)
+        self.solo_btn.setFixedSize(32, 28)
         self.solo_btn.toggled.connect(lambda checked: self.solo_changed.emit(self.stem_name, checked))
 
         self.vol_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.vol_slider.setRange(0, 150)
         self.vol_slider.setValue(100)
-        self.vol_slider.setFixedWidth(110)
+        self.vol_slider.setFixedWidth(112)
         self.vol_slider.valueChanged.connect(lambda val: self.volume_changed.emit(self.stem_name, val / 100.0))
 
-        row.addWidget(self.mute_btn)
-        row.addWidget(self.solo_btn)
-        row.addWidget(self.vol_slider)
+        row.addWidget(self.mute_btn, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.solo_btn, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.vol_slider, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
 
         # Waveform preview plot
         self.wave_plot = pg.PlotWidget()
@@ -108,15 +115,17 @@ class _StemTrackRow(QtWidgets.QFrame):
         self._min_curve = self.wave_plot.plot(pen=pg.mkPen("#0F766E", width=1.1))
         row.addWidget(self.wave_plot, 1)
 
-        # Bridge actions
+        # Bridge actions (uniform width for clean column alignment)
         analyze_btn = QtWidgets.QPushButton("载入实时视图")
+        analyze_btn.setMinimumWidth(116)
         analyze_btn.setToolTip("将此分轨前 <=30s 载入实时频谱/和弦视图（会清空当前实时缓冲）")
         analyze_btn.clicked.connect(lambda: self.send_to_analysis_requested.emit(self.stem_name, self.stem_path))
         midi_btn = QtWidgets.QPushButton("转 MIDI")
         midi_btn.setObjectName("acidPrimaryBtn")
+        midi_btn.setMinimumWidth(84)
         midi_btn.clicked.connect(lambda: self.transcribe_midi_requested.emit(self.stem_name, self.stem_path))
-        row.addWidget(analyze_btn)
-        row.addWidget(midi_btn)
+        row.addWidget(analyze_btn, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(midi_btn, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
 
     def apply_theme(
         self,
@@ -279,7 +288,9 @@ class StemMixerWidget(QtWidgets.QWidget):
         root.addLayout(ctrl_bar)
 
         monitor_bar = QtWidgets.QHBoxLayout()
-        monitor_bar.addWidget(QtWidgets.QLabel("监听"))
+        monitor_bar.setSpacing(6)
+        self._monitor_lbl = QtWidgets.QLabel("监听")
+        monitor_bar.addWidget(self._monitor_lbl)
 
         presets = [
             ("全部", "all"),
@@ -292,14 +303,61 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._preset_buttons = {}
         for label, key in presets:
             b = QtWidgets.QPushButton(label)
+            b.setMinimumHeight(24)
+            b.setSizePolicy(QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Fixed)
             b.clicked.connect(lambda _=False, k=key: self._apply_preset(k))
             monitor_bar.addWidget(b)
             self._preset_buttons[key] = b
+
         self.bass_monitor_boost_chk = QtWidgets.QCheckBox(f"贝斯独听 +{BASS_MONITOR_BOOST_DB} dB")
         self.bass_monitor_boost_chk.setChecked(True)
-        self.bass_monitor_boost_chk.setToolTip("仅在播放且贝斯是唯一出声的轨道时生效。可关闭以回到原电平，导出不受影响。")
-        self.bass_monitor_boost_chk.toggled.connect(self.mixer_engine.set_bass_monitor_boost)
+        self.bass_monitor_boost_chk.setToolTip(
+            "仅在播放且贝斯是唯一出声的轨道时生效。默认补偿 +12 dB 并启用 0.8 FS 软膝盖 tanh 防破音保护。"
+        )
+        self.bass_monitor_boost_chk.toggled.connect(self._on_bass_boost_toggled)
         monitor_bar.addWidget(self.bass_monitor_boost_chk)
+
+        self.bass_boost_db_spin = QtWidgets.QDoubleSpinBox()
+        self.bass_boost_db_spin.setRange(0.0, 24.0)
+        self.bass_boost_db_spin.setSingleStep(1.0)
+        self.bass_boost_db_spin.setDecimals(1)
+        self.bass_boost_db_spin.setPrefix("+")
+        self.bass_boost_db_spin.setSuffix(" dB")
+        self.bass_boost_db_spin.setValue(float(BASS_MONITOR_BOOST_DB))
+        self.bass_boost_db_spin.setToolTip(
+            "自定义贝斯独听增益分贝数 (0.0 ~ +24.0 dB，默认 +12.0 dB)。\n"
+            "⚠️ 超过 +12 dB 时请注意耳机/音箱音量，避免过大声压损伤听力！"
+        )
+        self.bass_boost_db_spin.valueChanged.connect(self._on_bass_boost_db_changed)
+        monitor_bar.addWidget(self.bass_boost_db_spin)
+
+        self.bass_boost_warn_lbl = QtWidgets.QLabel("⚠️ 高增益护耳警告")
+        self.bass_boost_warn_lbl.setObjectName("statusBadge")
+        set_widget_tone(self.bass_boost_warn_lbl, "warn")
+        self.bass_boost_warn_lbl.setToolTip(
+            "⚠️ 当前贝斯独听增益超过 +12 dB！虽然已内置 0.8 FS 软限幅防削波，但高电平仍可能损坏听力或冲击耳机，请先调低系统音量。"
+        )
+        self.bass_boost_warn_lbl.setVisible(False)
+        monitor_bar.addWidget(self.bass_boost_warn_lbl)
+
+        self.bass_boost_export_chk = QtWidgets.QCheckBox("导出含独听增益")
+        self.bass_boost_export_chk.setChecked(False)
+        self.bass_boost_export_chk.setToolTip(
+            "勾选后，当仅导出贝斯轨（贝斯独听状态）时，导出的混合 WAV 也会应用上述贝斯独听分贝增益与软限幅保护；\n"
+            "不勾选则导出原始未增益电平。"
+        )
+        self.bass_boost_export_chk.toggled.connect(self.mixer_engine.set_apply_bass_boost_on_export)
+        monitor_bar.addWidget(self.bass_boost_export_chk)
+
+        monitor_bar.addWidget(
+            HelpBadge(
+                "快速监听预设与贝斯独听增益",
+                "• <b>快速监听预设</b>：一键切换「全部 / 纯伴奏 / 仅人声 / 仅贝斯 / 仅鼓组 / 仅其他」静音与独奏组合。<br/>"
+                "• <b>贝斯独听增益</b>：分轨后的独立贝斯低频能量往往偏轻；当贝斯是唯一发声轨道时，默认自动补偿 <b>+12 dB</b>。<br/>"
+                "• <b>自定义分贝与护耳警告</b>：可在右侧输入框自由调整 0 ~ +24 dB；超过 +12 dB 会触发高增益护耳提醒，并由 0.8 FS 软膝盖 tanh 限幅防止爆音。<br/>"
+                "• <b>导出含独听增益</b>：默认导出保持原始电平；勾选「导出含独听增益」后，独听贝斯导出 WAV 时将同步写入该增益。",
+            )
+        )
         self._sync_preset_availability(())
         monitor_bar.addStretch(1)
         root.addLayout(monitor_bar)
@@ -308,6 +366,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         practice_bar = QtWidgets.QHBoxLayout()
         practice_bar.addWidget(QtWidgets.QLabel("不变调倍速:"))
         self.speed_combo = QtWidgets.QComboBox()
+        self.speed_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         for label, val in [("0.5x (半速扒谱)", 0.5), ("0.65x", 0.65), ("0.75x", 0.75), ("0.85x", 0.85), ("1.0x (原速)", 1.0), ("1.25x", 1.25)]:
             self.speed_combo.addItem(label, val)
         self.speed_combo.setCurrentIndex(4)
@@ -331,13 +390,19 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         self.live_chord_hud_lbl = QtWidgets.QLabel("实时和弦追踪: -")
         self.live_chord_hud_lbl.setObjectName("bannerNotice")
+        self.live_chord_hud_lbl.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         set_widget_tone(self.live_chord_hud_lbl, "info")
 
         practice_bar.addWidget(self.speed_combo)
         practice_bar.addWidget(
             HelpBadge(
-                "不变调倍速 (WSOLA)",
-                "使用纯 CPU 时域波形相似重叠 (WSOLA) 算法放慢或加快分轨速度，同时保持歌曲音高完全不变，便于听清快句或贝斯走音。",
+                "不变调倍速 (WSOLA) 与和弦段局部循环",
+                "• <b>不变调倍速 (0.5x–1.25x)</b>：使用纯 CPU 时域波形相似重叠 (WSOLA) 算法放慢或加快分轨速度，保持音高完全不变，便于听清快句或贝斯走音。<br/>"
+                "• <b>循环选中和弦段</b>：在下方「和弦与节奏」表格点选任意一行后，点击「循环选中和弦段」即可仅针对该和弦区间反复循环跟练。<br/>"
+                "• <b>随播节拍器</b>：在分轨回放及导出混合 WAV 时同步叠加节拍器点击声。",
             )
         )
         practice_bar.addWidget(self.loop_chord_btn)
@@ -485,6 +550,13 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.rhythm_status.setWordWrap(True)
         rhythm_header = QtWidgets.QHBoxLayout()
         rhythm_header.addWidget(self.rhythm_status, 1)
+        rhythm_header.addWidget(
+            HelpBadge(
+                "16 步鼓点律动网格与鼓点 MIDI 导出",
+                "• <b>16 步网格</b>：将鼓轨按一拍四分（16 步 = 1 小节十六分音符）量化展示底鼓 (Kick)、军鼓 (Snare) 与踩镲 (Hi-Hat) 的核心律动型。<br/>"
+                "• <b>试听与导出</b>：点击「试听鼓点」可播放最多 8 秒合成鼓音对位核对；点击「导出鼓点 MIDI」可导出保留原始真实击打微时值的 General MIDI 鼓轨（Channel 10，可直接拖入 Cubase 挂载鼓音源）。",
+            )
+        )
         self.preview_drums_btn = QtWidgets.QPushButton("试听鼓点")
         self.preview_drums_btn.setToolTip("从第一个检测到的鼓点开始，试听最多 8 秒合成鼓音。")
         self.preview_drums_btn.setEnabled(False)
@@ -836,9 +908,24 @@ class StemMixerWidget(QtWidgets.QWidget):
         set_widget_tone(self.midi_info_lbl, "error")
         self.midi_info_lbl.setText(f"[ERR] {message}")
 
+    def _on_bass_boost_toggled(self, checked: bool) -> None:
+        self.mixer_engine.set_bass_monitor_boost(bool(checked))
+        db = float(self.bass_boost_db_spin.value())
+        self.bass_boost_warn_lbl.setVisible(bool(checked) and db > 12.0 + 1e-4)
+
+    def _on_bass_boost_db_changed(self, value: float) -> None:
+        clamped = self.mixer_engine.set_bass_monitor_boost_db(float(value))
+        db_disp = int(round(clamped)) if abs(clamped - round(clamped)) < 1e-3 else round(clamped, 1)
+        self.bass_monitor_boost_chk.setText(f"贝斯独听 +{db_disp} dB")
+        is_high = bool(self.bass_monitor_boost_chk.isChecked()) and clamped > 12.0 + 1e-4
+        self.bass_boost_warn_lbl.setVisible(is_high)
+
     def _sync_preset_availability(self, track_names) -> None:
         names = {name.lower() for name in track_names}
-        self.bass_monitor_boost_chk.setEnabled("bass" in names)
+        has_bass = "bass" in names
+        self.bass_monitor_boost_chk.setEnabled(has_bass)
+        self.bass_boost_db_spin.setEnabled(has_bass)
+        self.bass_boost_export_chk.setEnabled(has_bass)
         for key, button in self._preset_buttons.items():
             if key.endswith("_only"):
                 available = key.removesuffix("_only") in names

@@ -175,6 +175,11 @@ class AIConfig:
     live_overlap_seconds: float = 0.25
     live_max_buffer_seconds: float = 6.0
 
+    # Optional Hybrid iGPU + dGPU heterogeneous offload (Plan A & Plan B)
+    igpu_directml_2stem: bool = False          # Plan A: Route 2-Stem MDX-ONNX / live split to DirectML iGPU
+    igpu_directml_device_id: int = 1           # Typical Windows iGPU DXGI adapter index (dGPU=0, iGPU=1)
+    offload_gui_to_igpu: bool = False          # Plan B: Isolate GUI rendering on iGPU & pin AI worker to CUDA_VISIBLE_DEVICES=0
+
     def __post_init__(self) -> None:
         for name in (
             "default_max_history_ai_seconds",
@@ -203,3 +208,5 @@ class AIConfig:
             raise ValueError("max_oom_retries must be bounded in [0, 2]")
         if self.live_max_buffer_seconds <= self.live_chunk_seconds:
             raise ValueError("live_max_buffer_seconds must exceed live_chunk_seconds")
+        if int(self.igpu_directml_device_id) < 0 or int(self.igpu_directml_device_id) > 7:
+            raise ValueError("igpu_directml_device_id must be in [0, 7]")

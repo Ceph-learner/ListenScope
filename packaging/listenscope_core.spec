@@ -73,6 +73,7 @@ a = Analysis(
         (str(project_root / "analysis"), "analysis"),
         (str(project_root / "scripts"), "scripts"),
         (str(project_root / "ui" / "assets" / "listenscope.ico"), "ui/assets"),
+        (str(project_root / "ui" / "assets" / "listenscope.svg"), "ui/assets"),
         (str(project_root / "ui" / "assets" / "acid_check_dark.svg"), "ui/assets"),
         (str(project_root / "ui" / "assets" / "acid_check_light.svg"), "ui/assets"),
         (str(project_root / "ui" / "assets" / "acid_chevron_down_light.svg"), "ui/assets"),
