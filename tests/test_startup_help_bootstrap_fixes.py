@@ -284,14 +284,15 @@ def test_run_external_python_capture_output_and_frozen_filtering(
     cands = _candidate_local_python_executables((tmp_path,))
     assert all(p.resolve() != fake_bundle_exe.resolve() for p in cands)
 
+    # 1) Non-frozen path: capture_output=True is forwarded cleanly to subprocess.run
     recorded_calls: list[tuple[list[str], dict]] = []
 
     def _fake_run(cmd, **kwargs):
         recorded_calls.append((list(cmd), dict(kwargs)))
         return subprocess.CompletedProcess(cmd, 0, stdout='{"installed": true}\n', stderr="")
 
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
     monkeypatch.setattr("core.paths.subprocess.run", _fake_run)
-    monkeypatch.setenv("PYTHONHOME", "/bad/pyinstaller/home")
     res = run_external_python(
         [str(ext_python), "-c", "print(1)"],
         capture_output=True,
@@ -304,6 +305,59 @@ def test_run_external_python_capture_output_and_frozen_filtering(
     cmd_out, kw_out = recorded_calls[0]
     assert cmd_out[0] == str(ext_python)
     assert kw_out["capture_output"] is True
+
+    # 2) Frozen Windows path: capture_output is popped before Popen and PYTHONHOME is stripped
+    import ctypes
+
+    popen_calls: list[tuple[list[str], dict]] = []
+
+    class _FakeKernel32:
+        class _SetDllDir:
+            argtypes = None
+
+            def __call__(self, _arg: object) -> int:
+                return 1
+
+        def __init__(self) -> None:
+            self.SetDllDirectoryW = self._SetDllDir()
+
+    class _FakePopen:
+        def __init__(self, cmd, **kwargs) -> None:
+            popen_calls.append((list(cmd), dict(kwargs)))
+            self.returncode = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> bool:
+            return False
+
+        def communicate(self, timeout: float | None = None):
+            del timeout
+            return ('{"installed": true}\n', "")
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_a, **_kw: _FakeKernel32(), raising=False)
+    monkeypatch.setattr("core.paths.subprocess.Popen", _FakePopen)
+    monkeypatch.setenv("PYTHONHOME", "/bad/pyinstaller/home")
+
+    res_frozen = run_external_python(
+        [str(ext_python), "-c", "print(1)"],
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+        check=False,
+    )
+    assert res_frozen.returncode == 0
+    assert len(popen_calls) == 1
+    fcmd, fkw = popen_calls[0]
+    assert fcmd[0] == str(ext_python)
+    assert "capture_output" not in fkw
+    assert "PYTHONHOME" not in fkw["env"]
 
 
 def test_bootstrap_ansi_cp936_cleaning_and_settings_winget_controls(
