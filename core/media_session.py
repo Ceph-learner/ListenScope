@@ -626,6 +626,8 @@ def query_smtc_via_powershell(*, timeout_sec: float = 5.0) -> tuple[list[MediaSe
     """On-demand CLI diagnostic fallback using Windows PowerShell 5.1 WinRT projection."""
     if sys.platform != "win32":
         return [], "non_windows"
+    from .paths import subprocess_no_window_kwargs
+
     try:
         proc = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", _PS_SMTC_SCRIPT],
@@ -635,6 +637,7 @@ def query_smtc_via_powershell(*, timeout_sec: float = 5.0) -> tuple[list[MediaSe
             errors="replace",
             timeout=timeout_sec,
             check=False,
+            **subprocess_no_window_kwargs(),
         )
     except Exception as exc:
         return [], str(exc)

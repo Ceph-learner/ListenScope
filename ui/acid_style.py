@@ -535,7 +535,6 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         self.lock_btn.setCheckable(True)
         self.lock_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.lock_btn.setFixedHeight(18)
-        self.lock_btn.setToolTip("冻结 / 恢复实时分析图表画面（85/15 防视觉疲劳静态锁定）")
         self.lock_btn.toggled.connect(self._on_lock_btn_toggled)
         row.addWidget(self.lock_btn)
 
@@ -588,7 +587,7 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
             f_mono.setBold(True)
             f_mono.setPixelSize(10)
             p.setFont(f_mono)
-            raw = "LISTENSCOPE_V0.2.2 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
+            raw = "LISTENSCOPE_V0.2.3 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
             elided = QtGui.QFontMetrics(f_mono).elidedText(raw, QtCore.Qt.TextElideMode.ElideRight, avail_w)
             p.drawText(QtCore.QRect(text_left, 0, avail_w, h), QtCore.Qt.AlignmentFlag.AlignVCenter, elided)
 

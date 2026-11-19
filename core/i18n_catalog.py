@@ -407,6 +407,12 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
     "仅自动配置 CPU MIDI": {"en": "Setup CPU MIDI Only", "ko": "CPU MIDI만 구성", "ja": "CPU MIDI のみ構築"},
     "PyTorch 官方下载页 (pytorch.org)": {"en": "PyTorch Download (pytorch.org)", "ko": "PyTorch 공식 다운로드 (pytorch.org)", "ja": "PyTorch 公式ダウンロード (pytorch.org)"},
     "CUDA 12.8 Wheel 官方镜像": {"en": "CUDA 12.8 Wheel Index", "ko": "CUDA 12.8 Wheel 공식 미러", "ja": "CUDA 12.8 Wheel 公式ミラー"},
+    "Python 3.12 官方下载": {"en": "Download Python 3.12", "ko": "Python 3.12 공식 다운로드", "ja": "Python 3.12 公式ダウンロード"},
+    "缺 Python 3.12/3.11 时自动用 winget 安装": {
+        "en": "Auto-install missing Python 3.12/3.11 via winget",
+        "ko": "Python 3.12/3.11 없을 때 winget으로 자동 설치",
+        "ja": "Python 3.12/3.11 不足時に winget で自動導入",
+    },
     "浏览...": {"en": "Browse...", "ko": "찾아보기...", "ja": "参照..."},
     "验证 AI 环境": {"en": "Verify AI Env", "ko": "AI 환경 검증", "ja": "AI 環境を検証"},
     "验证 MIDI 环境": {"en": "Verify MIDI Env", "ko": "MIDI 환경 검증", "ja": "MIDI 環境を検証"},
@@ -750,6 +756,14 @@ DYNAMIC_REGEX_RULES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
             "en": "No local Python environment with PyTorch was detected on this machine.",
             "ko": "이 PC에서 PyTorch가 설치된 Python 환경을 찾지 못했습니다.",
             "ja": "このPC上で PyTorch が導入された Python 環境は検出されませんでした。",
+        },
+    ),
+    (
+        re.compile(r"• Python 3\.12 \(64位\) 官方下载:"),
+        {
+            "en": "• Python 3.12 (64-bit) Official Download:",
+            "ko": "• Python 3.12 (64비트) 공식 다운로드:",
+            "ja": "• Python 3.12 (64bit) 公式ダウンロード:",
         },
     ),
     (

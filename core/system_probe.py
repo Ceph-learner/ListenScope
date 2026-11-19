@@ -769,6 +769,7 @@ def apply_external_ai_probe_to_report(
     )
 
 
+PYTHON_WINDOWS_DOWNLOAD_URL = "https://www.python.org/downloads/windows/"
 PYTORCH_OFFICIAL_URL = "https://pytorch.org/get-started/locally/"
 PYTORCH_CU128_INDEX_URL = "https://download.pytorch.org/whl/cu128"
 PYTORCH_INSTALL_COMMAND = (
@@ -777,6 +778,7 @@ PYTORCH_INSTALL_COMMAND = (
 )
 PYTORCH_DOWNLOAD_GUIDE = (
     "未在本机扫描到已安装 PyTorch 的 Python 环境。\n"
+    f"• Python 3.12 (64位) 官方下载: {PYTHON_WINDOWS_DOWNLOAD_URL}\n"
     f"• PyTorch 官方下载指引: {PYTORCH_OFFICIAL_URL}\n"
     f"• RTX 5060 Ti (sm_120) CUDA 12.8 镜像源: {PYTORCH_CU128_INDEX_URL}\n"
     f"• 推荐安装命令: `{PYTORCH_INSTALL_COMMAND}`\n"
@@ -847,6 +849,9 @@ def _candidate_local_python_executables(extra_roots: tuple[Path, ...] = ()) -> l
         home / "AppData" / "Local" / "miniconda3",
         home / "AppData" / "Local" / "anaconda3",
         home / "AppData" / "Local" / "Programs" / "Python",
+        home / "AppData" / "Local" / "Python",
+        home / "AppData" / "Local" / "uv" / "python",
+        Path("C:/Program Files"),
         Path("C:/ProgramData/miniconda3"),
         Path("C:/ProgramData/anaconda3"),
         Path("D:/miniconda3"),
@@ -865,14 +870,23 @@ def _candidate_local_python_executables(extra_roots: tuple[Path, ...] = ()) -> l
                     raw_candidates.append(env_sub / "python.exe")
                     raw_candidates.append(env_sub / "Scripts" / "python.exe")
                     raw_candidates.append(env_sub / "bin" / "python")
-            for py_sub in sorted(conda_base.glob("Python3*")):
-                raw_candidates.append(py_sub / "python.exe")
-                raw_candidates.append(py_sub / "Scripts" / "python.exe")
+            for pattern in ("Python3*", "pythoncore-*", "cpython-*"):
+                for py_sub in sorted(conda_base.glob(pattern)):
+                    raw_candidates.append(py_sub / "python.exe")
+                    raw_candidates.append(py_sub / "Scripts" / "python.exe")
         except OSError:
             continue
 
     if sys.platform == "win32":
         for drive in ("C:", "D:", "E:"):
+            drive_root = Path(f"{drive}/")
+            try:
+                for py_sub in sorted(drive_root.glob("Python3*")):
+                    raw_candidates.append(py_sub / "python.exe")
+                for venv_sub in sorted(drive_root.glob(".venv*")):
+                    raw_candidates.append(venv_sub / "Scripts" / "python.exe")
+            except OSError:
+                pass
             for folder in ("ListenScope", "AI", "PyTorch", "venvs"):
                 base = Path(f"{drive}/{folder}")
                 raw_candidates.append(base / ".venv-ai" / "Scripts" / "python.exe")
@@ -893,7 +907,13 @@ def _candidate_local_python_executables(extra_roots: tuple[Path, ...] = ()) -> l
         if found:
             raw_candidates.append(Path(found))
 
-    raw_candidates.append(Path(sys.executable))
+    frozen = bool(getattr(sys, "frozen", False))
+    try:
+        frozen_exe_key = os.path.normcase(str(Path(sys.executable).resolve())) if frozen else ""
+    except OSError:
+        frozen_exe_key = os.path.normcase(str(sys.executable)) if frozen else ""
+    if not frozen:
+        raw_candidates.append(Path(sys.executable))
 
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -903,6 +923,8 @@ def _candidate_local_python_executables(extra_roots: tuple[Path, ...] = ()) -> l
                 continue
             key = os.path.normcase(str(cand.resolve()))
         except OSError:
+            continue
+        if frozen_exe_key and key == frozen_exe_key:
             continue
         if key not in seen:
             seen.add(key)

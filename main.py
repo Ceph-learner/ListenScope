@@ -92,13 +92,13 @@ from streaming.live_separator import ExperimentalLiveSeparator
 from ui.main_window import ListenScopeMainWindow
 
 
-def _discover_ai_python_executable() -> Optional[str]:
+def _discover_ai_python_executable(*, allow_broad_scan: bool = True) -> Optional[str]:
     """Locate isolated `.venv-ai`, bundled `runtime/ai`, or local PyTorch Python executable."""
     env_override = os.environ.get("LISTENSCOPE_AI_PYTHON", "").strip()
     if env_override and Path(env_override).exists():
         return env_override
     exe_dir = Path(sys.executable).resolve().parent
-    roots = [ROOT, exe_dir, exe_dir.parent, exe_dir.parent.parent]
+    roots = [ROOT, exe_dir, exe_dir.parent, exe_dir.parent.parent, Path.home() / ".listenscope"]
     candidates: list[Path] = []
     for base in roots:
         candidates.append(base / ".venv-ai" / "Scripts" / "python.exe")
@@ -120,11 +120,12 @@ def _discover_ai_python_executable() -> Optional[str]:
             except Exception:
                 pass
             return str(cand)
-    scanned = scan_local_pytorch_installations(tuple(roots), timeout_per_env_sec=2.5)
-    for item in scanned:
-        py_exe = str(item.get("python_executable", "")).strip()
-        if py_exe and Path(py_exe).exists():
-            return py_exe
+    if allow_broad_scan:
+        scanned = scan_local_pytorch_installations(tuple(roots), timeout_per_env_sec=2.5)
+        for item in scanned:
+            py_exe = str(item.get("python_executable", "")).strip()
+            if py_exe and Path(py_exe).exists():
+                return py_exe
     return None
 
 
@@ -135,7 +136,7 @@ def _discover_midi_python_executable() -> Optional[str]:
     if env_override and Path(env_override).exists():
         return env_override
     exe_dir = Path(sys.executable).resolve().parent
-    roots = [ROOT, exe_dir, exe_dir.parent, exe_dir.parent.parent]
+    roots = [ROOT, exe_dir, exe_dir.parent, exe_dir.parent.parent, Path.home() / ".listenscope"]
     candidates: list[Path] = []
     for base in roots:
         candidates.append(base / ".venv-midi" / "Scripts" / "python.exe")
@@ -213,12 +214,13 @@ class ListenScopeController:
             self._settings_path = default_settings_path()
 
         saved_settings = load_settings(self._settings_path)
+        ai_python_executable_explicit = ai_python_executable is not None
         if ai_python_executable is None:
             cand_py = saved_settings.ai_python_executable
             if cand_py and Path(cand_py).exists():
                 ai_python_executable = cand_py
             else:
-                ai_python_executable = _discover_ai_python_executable()
+                ai_python_executable = _discover_ai_python_executable(allow_broad_scan=False)
         if midi_python_executable is None:
             cand_midi = saved_settings.midi_python_executable
             if cand_midi and Path(cand_midi).exists():
@@ -300,6 +302,7 @@ class ListenScopeController:
             maxsize=4
         )
         self._ui_hw_probe_q: queue.Queue[tuple[int, dict[str, Any]]] = queue.Queue(maxsize=4)
+        self._ui_ai_discover_q: queue.Queue[str] = queue.Queue(maxsize=2)
         self._ui_track_decision_q: queue.Queue[TrackTrackerDecision] = queue.Queue(maxsize=32)
         self._probe_seq = 0
         self._stem_generation = 0
@@ -363,6 +366,17 @@ class ListenScopeController:
 
         if ai_python_executable:
             self._schedule_external_ai_probe(ai_python_executable)
+        elif not self.use_mock_ai_for_demo and not ai_python_executable_explicit:
+            def _startup_scan_worker() -> None:
+                found_py = _discover_ai_python_executable(allow_broad_scan=True)
+                if found_py and not getattr(self, "_shutdown_done", False):
+                    self._put_latest(self._ui_ai_discover_q, found_py)
+
+            threading.Thread(
+                target=_startup_scan_worker,
+                name="ListenScope-StartupPyTorchScan",
+                daemon=True,
+            ).start()
 
     @staticmethod
     def _is_external_python(ai_python: Optional[str]) -> bool:
@@ -1737,6 +1751,22 @@ class ListenScopeController:
         self._tick_counter += 1
 
         # Drain thread-safe UI notification queues
+        while True:
+            try:
+                found_py = self._ui_ai_discover_q.get_nowait()
+                if (
+                    found_py
+                    and not getattr(self, "_shutdown_done", False)
+                    and not self.ai_job_manager.ai_python_executable
+                    and Path(found_py).exists()
+                ):
+                    self.ai_job_manager.ai_python_executable = found_py
+                    self.live_separator.ai_python_executable = found_py
+                    if hasattr(self.window, "_ai_python_executable"):
+                        self.window._ai_python_executable = found_py
+                    self._schedule_external_ai_probe(found_py)
+            except queue.Empty:
+                break
         while True:
             try:
                 seq, probe_data = self._ui_hw_probe_q.get_nowait()

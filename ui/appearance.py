@@ -586,11 +586,6 @@ class AppearanceDialog(QtWidgets.QDialog):
             self._presets.addButton(button)
             button.clicked.connect(lambda _checked, key=key: self._apply_preset(key))
             button.setProperty("preset", key)
-            if key == "acid_telemetry":
-                button.setToolTip(
-                    "酸性遥测高对比工业视觉风格（默认浅色白天）：45° 切角标识、双语遥测标题栏与精密平面网格；"
-                    "锁定官方工业配色、字体与光学参数（仅开放字号、明暗模式与语言调整）。"
-                )
             presets.addWidget(button)
         root.addLayout(presets)
 
@@ -636,7 +631,6 @@ class AppearanceDialog(QtWidgets.QDialog):
             self._language_combo.addItem(lang_label, lang_code)
         self._language_combo.currentIndexChanged.connect(self._on_control_changed)
         self._frameless_chk = QtWidgets.QCheckBox("无边框圆角窗口 (推荐)")
-        self._frameless_chk.setToolTip("启用丝滑四角圆角无边框工业壳体，支持顶栏拖拽、双击最大化与边缘缩放")
         self._frameless_chk.toggled.connect(self._on_control_changed)
         lang_row.addWidget(self._language_combo, 1)
         lang_row.addWidget(self._frameless_chk)
@@ -794,7 +788,6 @@ class AppearanceDialog(QtWidgets.QDialog):
 
         footer = QtWidgets.QHBoxLayout()
         self._reset_btn = QtWidgets.QPushButton("恢复默认")
-        self._reset_btn.setToolTip("一键恢复为默认酸性遥测浅色白天主题、默认字号与布局")
         self._reset_btn.clicked.connect(self.reset_to_defaults)
         footer.addWidget(self._reset_btn)
         footer.addStretch(1)
@@ -933,7 +926,6 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._layout_hint.setText(LAYOUTS[appearance.layout][1])
         for slider in self._sliders.values():
             slider.setEnabled((not is_acid) and appearance.scope != "off")
-            slider.setToolTip(f"{slider.value()}%")
         if is_acid_eligible(appearance):
             variant = resolve_acid_variant(appearance, system_is_dark=self._system_is_dark) or "light"
             sample_qss = acid_stylesheet(appearance, variant)

@@ -75,10 +75,6 @@ class ResourceMonitorBar(QtWidgets.QWidget):
         self._set_text_if_changed("vram", self.vram_label, vram_txt)
         self._set_text_if_changed("status", self.status_badge, snap.status.value)
         set_widget_tone(self.status_badge, _status_to_tone(snap.status))
-        tip_txt = "\n".join(snap.status_reasons) if snap.status_reasons else "资源状态正常"
-        if self._cached_texts.get("tip") != tip_txt:
-            self._cached_texts["tip"] = tip_txt
-            self.status_badge.setToolTip(tip_txt)
 
 
 class ResourceStatusPanel(QtWidgets.QWidget):
@@ -175,7 +171,6 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         diag_note = QtWidgets.QLabel("日志与性能摘要严格有界；如在 Windows 遇到 CUDA/WASAPI 故障可一键导出脱敏诊断包：")
         diag_note.setObjectName("mutedCaption")
         self.export_diag_btn = QtWidgets.QPushButton("导出诊断包 (.zip)")
-        self.export_diag_btn.setToolTip("打包 SYSTEM_REPORT、最近 500 条有界日志、性能记录与脱敏 settings.json")
         self.export_diag_btn.clicked.connect(self._on_export_diag_clicked)
         diag_bar.addWidget(diag_note, 1)
         diag_bar.addWidget(self.export_diag_btn)

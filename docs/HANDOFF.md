@@ -1,26 +1,36 @@
 # 最新交接
 
-## `v0.2.2` 回家实测打磨、四语本地化、悬浮帮助模式、双 GPU 卸载与 Windows Release 发布（PR #27 `b89cf2e` · 证据基线 `8ef17c3bb10b1989204b753e9db1cbf234a24637` · Tag `v0.2.2`）
+## PR #28：修复悬浮说明误触发、启动/设置图标闪烁卡顿及一键配置 Python 3.15/编码报错（分支 `fix/help-hover-startup-flash-and-bootstrap` · 证据基线 `fce0d8013949fe2dbfc726dc688d24348c3ffd25` · 基于 `main` `c0461a0`）
 
-- **目标与结果**：完成 PR #27（`feat/home-test-feedback-polish`）CI 修复、合并至 `main`，并打 `v0.2.2` 标签完成 GitHub Actions `windows-latest` 全量回归、PyInstaller 打包、重定位冒烟校验、Inno Setup 6 安装包构建及 [GitHub Release `v0.2.2`](https://github.com/Ceph-learner/ListenScope/releases/tag/v0.2.2) 发布。
-  1. **核心功能合入（PR #27 · `b89cf2e`）**：默认启动 `Acid Telemetry` 临床浅色主题 + 无边框 10px 圆角自动居中窗口；四语（`zh`/`en`/`ko`/`ja`）全量本地化（[`core/i18n.py`](../core/i18n.py)、[`core/i18n_catalog.py`](../core/i18n_catalog.py)）；Tab 3 混音器 `M / S` 严格垂直对齐与单行 `Name[Degree]` 和弦进行；全主题联动 [`AppearanceDialog`](../ui/appearance.py)（Acid 锁定字体/颜色/壁纸，非 Acid 开放背景图上传）；自绘 `22×22` 悬浮 [`HelpBadge`](../ui/help_badge.py) + 全局「说明模式」与零 `QGraphicsEffect`「交互聚焦动画」开关；设置页新增可选双 GPU 异构卸载（方案 A：核显 DirectML 跑 2-Stem MDX ONNX；方案 B：AI 子进程锁 `CUDA_VISIBLE_DEVICES=0` + Windows 图形设置直达）、`0–24 dB` 贝斯独听增益（`>12 dB` 护耳警告 + 可选烘焙导出 WAV）与本机 PyTorch 扫描器（[`scan_local_pytorch_installations`](../core/system_probe.py)）。
-  2. **跨平台 CI 与布局修复（`dcee99e` → `c9ee931` → `8ef17c3`）**：
-     - **Ubuntu CI Run `44463578076` 失败修复**：`acidTopbar`、`historyPaperDock` 与标签页原最小尺寸超过 `1360×860` 导致语言切换窗口撑宽；收紧 [`ui/main_window.py`](../ui/main_window.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/resource_widget.py`](../ui/resource_widget.py) 布局与最小高度（去除顶栏重复 `WORKBENCH //` 与双 `//` 前缀、平衡波形缩放按钮行宽、修复 `ResourceMonitorBar` 首帧裁剪），常规字体下四语最小尺寸均控制在 `1127–1288 × 843–848`，`1360×860` 四语切换零漂移。
-     - **Windows CI Run `44524339881` & `44525243939` 失败修复**：在 [`FocusRingAnimator.eventFilter`](../ui/help_badge.py) 补齐销毁期 `getattr` 与 `RuntimeError` 防护消除 Windows Qt 清理期 `AttributeError: '_root'`；在 [`test_turnkey_cubase_bass_theme.py`](../tests/test_turnkey_cubase_bass_theme.py) 为 Windows Server 2025 离屏等宽点阵回退字体（`ko` 最小宽度达 `1817px`）增加自适配裕量，同时保留常规字体 `1360×860` 与四语几何零漂移断言。
-     - **发布流水线同步**：[`.github/workflows/release-windows.yml`](../.github/workflows/release-windows.yml) 补充核验随包 `listenscope.svg` 并更新 `v0.2.2` Release 说明。
+- **目标与结果**：基于 `v0.2.2` 首轮实机反馈完成三项体验与初始化修复，已通过云端 Linux 全量离屏回归与 GitHub PR CI，提交为 [PR #28](https://github.com/Ceph-learner/ListenScope/pull/28)（保留待用户确认后再合并或打新 Release 标签）。
+  1. **严格仅在 `[?]` 问号徽标处悬浮弹出说明**：新增应用级事件过滤器 `_TooltipOnlyOnHelpBadgeFilter`（[`install_tooltip_guard`](../ui/help_badge.py)）统一拦截所有非 `HelpBadge` 控件的 `QEvent.Type.ToolTip`（调用 `QToolTip.hideText()` 并吞掉事件），并清理 `ui/main_window.py`、`ui/mixer_widget.py`、`ui/resource_widget.py`、`ui/appearance.py`、`ui/chord_practice.py`、`ui/acid_style.py`、`ui/settings_dialog.py` 及 `ui/chroma_widget.py` 非契约控件的 `.setToolTip(...)`（保留 `chord_progression_lbl` 内部契约文本并在运行时阻断弹窗）；回归断言 `ui/` 源码仅 `help_badge.py` 与 `chroma_widget.py` 允许出现 `.setToolTip(`。
+  2. **根治启动与打开「设置」时的卡顿及图标小窗闪烁**：
+     - 修复 [`HelpBadge._sync_help_mode`](../ui/help_badge.py) 在尚未加入父布局（`parentWidget() is None`）前即调用 `setVisible(True)` 导致的 20+ 次 `22×22` 含应用图标顶层小窗闪现，改为仅在 `parentWidget()` 就绪及 `ParentChange` 后显示；
+     - 收敛 [`FocusRingAnimator`](../ui/help_badge.py)（跳过 `LayoutRequest`/未显示窗体/`ActiveWindowFocusReason`）并移除 [`SettingsDialog`](../ui/settings_dialog.py) 构造期重复 SVG 图标生成、重复全树翻译（`_translate=False`）及 pre-show `setFocus()`；
+     - 将 [`ListenScopeController`](../main.py) 启动时的宽范围 PyTorch 发现改由 `allow_broad_scan=False` + 后台守护线程 `ListenScope-StartupPyTorchScan` 异步执行，在 `_on_ui_tick()` 回填；为 [`query_smtc_via_powershell`](../core/media_session.py) 补充 `subprocess_no_window_kwargs()`，并在 [`subprocess_no_window_kwargs`](../core/paths.py) 补充 `os.name == "nt"` 安全边界。
+  3. **修复 Windows 一键配置「Python 3.15.2 拒检 + ANSI 乱码 + CP936 乱码」与只读目录/冻结版探测**：
+     - [`scripts/setup_windows.ps1`](../scripts/setup_windows.ps1)：强制 `$ErrorView = "NormalView"`、`$PSStyle.OutputRendering = "PlainText"`、UTF-8 控制台编码、多源 `Resolve-LauncherPython`（覆盖 `py -0p`、Registry `PythonCore`、`Programs\Python`、`pythoncore-*`、`Python\bin`、`uv`、Conda、盘符根目录与 PATH）及可选 `-AutoInstallPython`（缺少 Python `3.12`/`3.11` 时通过 `winget` 安装 `Python.Python.3.12` / `Python.Python.3.11`）；
+     - [`SettingsDialog`](../ui/settings_dialog.py)：子进程强制 `-NoProfile -NonInteractive` 与纯文本 UTF-8 环境，`stdout` 采用 `_decode_bootstrap_bytes`（UTF-8 优先回退 CP936/GBK）+ `_clean_bootstrap_line`（剥离 ANSI/VT100 与 `| ~~~` 波浪线），新增「Python 3.12 官方下载」按钮与默认勾选的「缺 Python 3.12/3.11 时自动用 winget 安装」开关（并在 [`core/i18n_catalog.py`](../core/i18n_catalog.py) 补齐四语与 `PYTORCH_DOWNLOAD_GUIDE` 翻译规则，保证 EN/KO 零中文泄漏），同时支持只读安装目录回退 `~/.listenscope` 的自动发现；
+     - 修复冻结版 Windows [`run_external_python`](../core/paths.py) 的 `capture_output`/`PYTHONHOME`/隔离传参，并在 [`scan_local_pytorch_installations`](../core/system_probe.py) 排除冻结版 `sys.executable`。
 - **关键改动路径**：
-  - 核心/配置/探测：[`core/appearance.py`](../core/appearance.py)、[`core/config.py`](../core/config.py)、[`core/i18n.py`](../core/i18n.py)、[`core/i18n_catalog.py`](../core/i18n_catalog.py)、[`core/system_probe.py`](../core/system_probe.py)、[`ai/job_manager.py`](../ai/job_manager.py)、[`separation/mdx_backend.py`](../separation/mdx_backend.py)、[`audio/playback.py`](../audio/playback.py)、[`main.py`](../main.py)。
-  - UI 与资产：[`ui/main_window.py`](../ui/main_window.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/resource_widget.py`](../ui/resource_widget.py)、[`ui/help_badge.py`](../ui/help_badge.py)、[`ui/appearance.py`](../ui/appearance.py)、[`ui/settings_dialog.py`](../ui/settings_dialog.py)、[`ui/acid_style.py`](../ui/acid_style.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)、[`ui/chord_practice.py`](../ui/chord_practice.py)、`ui/assets/listenscope.{svg,ico}`。
-  - 打包/发布/回归：[`pyproject.toml`](../pyproject.toml)、[`scripts/installer.iss`](../scripts/installer.iss)、[`packaging/listenscope_core.spec`](../packaging/listenscope_core.spec)、[`.github/workflows/release-windows.yml`](../.github/workflows/release-windows.yml)、[`tests/test_turnkey_cubase_bass_theme.py`](../tests/test_turnkey_cubase_bass_theme.py)、[`tests/test_appearance.py`](../tests/test_appearance.py)。
-- **已观测验证记录（代码证据基线 `8ef17c3bb10b1989204b753e9db1cbf234a24637` · `main`）**：
-  - **云端 Linux 本地（Debian 12 · Python 3.11.2 · PySide6 6.9.3 · `QT_QPA_PLATFORM=offscreen`）**：`QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short` 共 **`192 passed, 6 skipped in 61.25s`**（6 项为 Windows 专属 WinRT/PowerShell 测试）；已离屏截图目检 `1360×860` 主窗口中/英界面及 `ResourceMonitorBar` 无裁剪。
-  - **GitHub Ubuntu 24.04 CI（`tests.yml` Run `44525780384` · `main` @ `8ef17c3`）**：**`198 passed in 80.15s`**（PR #27 合并前 Run `44523854928` 同样全绿）。
-  - **GitHub `windows-latest` CI（`release-windows.yml` Run `44525789042` · Tag `v0.2.2` @ `8ef17c3` · Python 3.12.10 x64 · `QT_QPA_PLATFORM=offscreen`）**：**`198 passed in 104.57s`**；PyInstaller 打包 `ListenScope.exe` 与 8 项随包 UI 资产（含 `listenscope.ico`/`listenscope.svg`/6 项 `acid_*.svg`）核验通过；重定位 `ListenScope.exe --simulate --headless-smoke` 返回 **`ExitCode=0`**；已正式发布 [GitHub Release `v0.2.2`](https://github.com/Ceph-learner/ListenScope/releases/tag/v0.2.2)（`ListenScope-Setup-Windows-x64.exe` `113,332,027 B`、`ListenScope-Core-Windows-x64-Portable.zip` `154,068,937 B`、`SHA256SUMS.txt`）。
-- **远端状态**：本地分支 `main`，PR #27 已 squash 合并（`feat/home-test-feedback-polish` 已删），Tag `v0.2.2` 指向 `8ef17c3bb10b1989204b753e9db1cbf234a24637`，本交接文档提交后推送至 `origin/main`（不移动已发布 `v0.2.2` 标签）。
-- **未在真机验证 / 下一步 Windows 11 目标机验收（RTX 5060 Ti 8GB VRAM · 16GB RAM）**：
-  1. 下载并核对 `SHA256SUMS.txt` 后运行 `ListenScope-Setup-Windows-x64.exe`（或解压便携版）：确认非 `C:\` 默认安装、`settings.json`/`exports/` 同级存储、无边框圆角窗口拖拽/最大化/最小化与 `100%/125%/150%` DPI 渲染正常。
-  2. 切换 `zh / en / ko / ja` 四语、开关「说明模式」与「交互聚焦动画」、悬停 `[?]` 浮卡，以及在 Acid 与非 Acid 主题（含自定义壁纸上传）间切换。
-  3. 实测 QQ 音乐 WASAPI 按进程捕获、SMTC 切歌重置、RTX 5060 Ti 真实歌曲 2-Stem/4-Stem 分轨、设置页「扫描本机 PyTorch」与双 GPU 卸载（方案 A DirectML 2-Stem / 方案 B 图形设置跳转）、贝斯独听自定义 dB 与烘焙导出 WAV、以及三类 `.mid` 拖入 Steinberg Cubase 验证；结果追加至 [WINDOWS_TEST_REPORT.md](WINDOWS_TEST_REPORT.md)。
+  - 核心与脚本：[`core/paths.py`](../core/paths.py)、[`core/system_probe.py`](../core/system_probe.py)、[`core/media_session.py`](../core/media_session.py)、[`core/i18n_catalog.py`](../core/i18n_catalog.py)、[`main.py`](../main.py)、[`scripts/setup_windows.ps1`](../scripts/setup_windows.ps1)。
+  - UI 与回归测试：[`ui/help_badge.py`](../ui/help_badge.py)、[`ui/settings_dialog.py`](../ui/settings_dialog.py)、[`ui/main_window.py`](../ui/main_window.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/resource_widget.py`](../ui/resource_widget.py)、[`ui/appearance.py`](../ui/appearance.py)、[`ui/chord_practice.py`](../ui/chord_practice.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/acid_style.py`](../ui/acid_style.py)、[`tests/test_startup_help_bootstrap_fixes.py`](../tests/test_startup_help_bootstrap_fixes.py)。
+- **已观测验证记录（代码证据基线 `fce0d8013949fe2dbfc726dc688d24348c3ffd25` · 本地分支 `fix/help-hover-startup-flash-and-bootstrap`）**：
+  - **云端 Linux 本地（Debian 12 · Python 3.11.2 · PySide6 6.9.3 · `QT_QPA_PLATFORM=offscreen`）**：`QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short` 共 **`200 passed, 6 skipped in 79.10s`**（6 项为 Windows 专属 PowerShell/WinRT 跳过）；先期中间运行遇到测试笔误/CPython POSIX `creationflags` 保护与 `PYTORCH_DOWNLOAD_GUIDE` EN 翻译漏网并已全部在 `fce0d80` 修复。
+  - **云端无硬件冒烟**：`QT_QPA_PLATFORM=offscreen python main.py --simulate --headless-smoke`（退出码 `0`）、`python scripts/check_env.py --no-write`、`python scripts/probe_media_session.py --self-test-mock --json` 均通过。
+  - **GitHub Ubuntu 24.04 PR CI（`tests.yml` Run `44539768467` · PR #28 @ `fce0d80`）**：**`206 passed in 77.98s`**。
+- **远端状态**：远端分支 `origin/fix/help-hover-startup-flash-and-bootstrap` 已同步且关联 [PR #28](https://github.com/Ceph-learner/ListenScope/pull/28)（`OPEN`），随后将推送本交接文档更新；`main` 仍停留在 `c0461a0`，Tag `v0.2.2`（`8ef17c3`）未改动。
+- **未完成 / Windows 11 目标机复测清单（RTX 5060 Ti 8GB VRAM · 16GB RAM）**：
+  1. 确认开启应用与点击「CONFIG // 设置」时无小图标闪烁与明显卡顿；
+  2. 将鼠标分别悬停普通按钮、下拉框、A/B 波形图与 `[?]` 徽标：仅 `[?]` 弹出浮卡且普通控件无任何提示；
+  3. 验证 `setup_windows.ps1 -AutoInstallPython` 自动补装 Python `3.12`/`3.11`（或指定 `-PythonExe` 安装 `cu128` Torch 三件套 + `requirements-ai.txt`），确认 GUI 日志无 ANSI/GBK 乱码且 AI 分轨与 Basic Pitch MIDI 跑通；
+  4. 用户确认后合并 PR #28（如需重新打包发布，同步评估是否递增版本号并打 `v0.2.3` 标签触发 `release-windows.yml`）。
+
+---
+
+## 历史基线：`v0.2.2` 回家实测打磨、四语本地化、悬浮帮助模式、双 GPU 卸载与 Windows Release 发布（PR #27 `b89cf2e` · 证据基线 `8ef17c3bb10b1989204b753e9db1cbf234a24637` · Tag `v0.2.2`）
+
+- **状态**：已合入 `main`（`c0461a0` 交接）并发布 [GitHub Release `v0.2.2`](https://github.com/Ceph-learner/ListenScope/releases/tag/v0.2.2)；真实 Windows 11 音频/GPU/核显 DirectML/DAW/高 DPI 验收待随 PR #28 合并后一并按上述清单一并补测并记入 [WINDOWS_TEST_REPORT.md](WINDOWS_TEST_REPORT.md)。
 
 ---
 

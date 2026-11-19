@@ -192,6 +192,9 @@ class _HelpPopover(QtWidgets.QFrame):
         )
 
     def show_for(self, badge: "HelpBadge", title: str, explanation: str) -> None:
+        if not _HELP_MODE_ENABLED or badge.isHidden() or badge.parentWidget() is None:
+            self.hide()
+            return
         self._hide_timer.stop()
         self._anchor = badge
         self.apply_theme(_CURRENT_THEME)
@@ -297,7 +300,24 @@ class HelpBadge(QtWidgets.QAbstractButton):
         self._sync_help_mode()
 
     def _sync_help_mode(self) -> None:
-        self.setVisible(_HELP_MODE_ENABLED)
+        self.setVisible(bool(_HELP_MODE_ENABLED and self.parentWidget() is not None))
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        et = event.type()
+        if et == QtCore.QEvent.Type.ParentAboutToChange:
+            self._hover_show_timer.stop()
+            self._hover_anim.stop()
+        elif et == QtCore.QEvent.Type.ParentChange:
+            self._sync_help_mode()
+        super().changeEvent(event)
+
+    def event(self, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if event.type() == QtCore.QEvent.Type.ToolTip:
+            event.accept()
+            if _HELP_MODE_ENABLED and not self.isHidden() and self.parentWidget() is not None:
+                self._show_help_popup()
+            return True
+        return super().event(event)
 
     def apply_language(self, lang: str) -> None:
         t, e = _translate_help_pair(self._orig_title, self._orig_explanation, lang)
@@ -336,7 +356,7 @@ class HelpBadge(QtWidgets.QAbstractButton):
 
     def enterEvent(self, event: QtGui.QEnterEvent) -> None:  # type: ignore[override]
         self._animate_to(1.0)
-        if _HELP_MODE_ENABLED:
+        if _HELP_MODE_ENABLED and not self.isHidden() and self.parentWidget() is not None:
             if _SHARED_POPOVER is not None:
                 try:
                     _SHARED_POPOVER.cancel_hide()
@@ -358,11 +378,25 @@ class HelpBadge(QtWidgets.QAbstractButton):
 
     def focusInEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
         self._animate_to(1.0)
+        if _HELP_MODE_ENABLED and not self.isHidden() and self.parentWidget() is not None:
+            if event.reason() in (
+                QtCore.Qt.FocusReason.TabFocusReason,
+                QtCore.Qt.FocusReason.BacktabFocusReason,
+                QtCore.Qt.FocusReason.ShortcutFocusReason,
+            ):
+                self._show_help_popup()
         super().focusInEvent(event)
 
     def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
+        self._hover_show_timer.stop()
         if not self.underMouse():
             self._animate_to(0.0)
+            if _SHARED_POPOVER is not None:
+                try:
+                    if _SHARED_POPOVER._anchor is self:
+                        _SHARED_POPOVER.schedule_hide()
+                except RuntimeError:
+                    pass
         super().focusOutEvent(event)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
@@ -376,7 +410,7 @@ class HelpBadge(QtWidgets.QAbstractButton):
         super().mouseReleaseEvent(event)
 
     def _show_help_popup(self) -> None:
-        if not _HELP_MODE_ENABLED:
+        if not _HELP_MODE_ENABLED or self.isHidden() or self.parentWidget() is None:
             return
         pop = _get_popover()
         pop.show_for(self, self._title, self._explanation)
@@ -462,16 +496,24 @@ class _FocusOverlay(QtWidgets.QWidget):
         self.hide()
 
     def set_state(self, rect: QtCore.QRectF, alpha: float) -> None:
+        parent = self.parentWidget()
+        if parent is None or not parent.isVisible():
+            self._alpha = 0.0
+            if self.isVisible():
+                self.hide()
+            return
         self._rect = rect
         self._alpha = max(0.0, min(1.0, alpha))
         if self._alpha <= 0.01 or self._rect.isEmpty():
-            self.hide()
+            if self.isVisible():
+                self.hide()
             return
-        if self.parentWidget() is not None:
-            self.setGeometry(self.parentWidget().rect())
+        target_geom = parent.rect()
+        if self.geometry() != target_geom:
+            self.setGeometry(target_geom)
         if not self.isVisible():
             self.show()
-        self.raise_()
+            self.raise_()
         self.update()
 
     def set_accent(self, accent: str, *, is_acid: bool) -> None:
@@ -524,6 +566,36 @@ _INTERACTIVE_TYPES = (
 )
 
 
+class _TooltipOnlyOnHelpBadgeFilter(QtCore.QObject):
+    """Global event filter blocking native Qt tooltips outside `[?]` HelpBadge controls."""
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        try:
+            if event.type() == QtCore.QEvent.Type.ToolTip:
+                if isinstance(obj, HelpBadge):
+                    return False
+                QtWidgets.QToolTip.hideText()
+                event.accept()
+                return True
+        except RuntimeError:
+            return False
+        return False
+
+
+def install_tooltip_guard(root: QtWidgets.QWidget) -> _TooltipOnlyOnHelpBadgeFilter:
+    """Ensure only `[?]` HelpBadge triggers explanatory popovers; suppress all native tooltips."""
+    app = QtWidgets.QApplication.instance()
+    target: QtCore.QObject = app if app is not None else root
+    existing = getattr(target, "_ls_tooltip_guard", None)
+    if isinstance(existing, _TooltipOnlyOnHelpBadgeFilter):
+        return existing
+    guard = _TooltipOnlyOnHelpBadgeFilter(target)
+    target.removeEventFilter(guard)
+    target.installEventFilter(guard)
+    setattr(target, "_ls_tooltip_guard", guard)
+    return guard
+
+
 class FocusRingAnimator(QtCore.QObject):
     """Lightweight hover/focus micro-animation controller for interactive controls in a window."""
 
@@ -550,13 +622,17 @@ class FocusRingAnimator(QtCore.QObject):
         self._install_recursive(root)
         _LIVE_ANIMATORS.add(self)
 
+    def _reset_focus_state(self) -> None:
+        self._anim.stop()
+        self._fade_anim.stop()
+        self._current_target = None
+        self._alpha = 0.0
+        self._overlay.set_state(QtCore.QRectF(), 0.0)
+
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = bool(enabled)
         if not self._enabled:
-            self._anim.stop()
-            self._fade_anim.stop()
-            self._current_target = None
-            self._overlay.hide()
+            self._reset_focus_state()
 
     def set_accent(self, accent: str, *, is_acid: bool) -> None:
         self._overlay.set_accent(accent, is_acid=is_acid)
@@ -565,9 +641,11 @@ class FocusRingAnimator(QtCore.QObject):
         self._install_recursive(self._root)
 
     def _install_recursive(self, widget: QtWidgets.QWidget) -> None:
+        widget.removeEventFilter(self)
         widget.installEventFilter(self)
         for child in widget.findChildren(QtWidgets.QWidget):
             if isinstance(child, _INTERACTIVE_TYPES) and not isinstance(child, HelpBadge):
+                child.removeEventFilter(self)
                 child.installEventFilter(self)
 
     def _widget_rect_in_root(self, w: QtWidgets.QWidget) -> QtCore.QRectF:
@@ -575,9 +653,9 @@ class FocusRingAnimator(QtCore.QObject):
         return QtCore.QRectF(float(top_left.x()), float(top_left.y()), float(w.width()), float(w.height()))
 
     def _focus_widget(self, w: QtWidgets.QWidget) -> None:
-        if not self._enabled or not w.isVisible() or not w.isEnabled():
+        if not self._enabled or not self._root.isVisible() or not w.isVisible() or not w.isEnabled():
             return
-        if w.objectName() in ("winCloseBtn", "winMinBtn", "winMaxBtn"):
+        if w.objectName() in ("winCloseBtn", "winMinBtn", "winMaxBtn", "windowCtrlBtn", "windowCloseBtn"):
             return
         target_rect = self._widget_rect_in_root(w)
         if target_rect.width() < 16 or target_rect.height() < 14:
@@ -635,16 +713,22 @@ class FocusRingAnimator(QtCore.QObject):
                 QtCore.QEvent.Type.Resize,
                 QtCore.QEvent.Type.Hide,
                 QtCore.QEvent.Type.StyleChange,
-                QtCore.QEvent.Type.LayoutRequest,
+                QtCore.QEvent.Type.WindowDeactivate,
             ):
-                self._active_widget = None
-                overlay.hide()
+                self._reset_focus_state()
                 return False
             if not getattr(self, "_enabled", False):
                 return False
             if isinstance(obj, _INTERACTIVE_TYPES) and not isinstance(obj, HelpBadge):
-                if et in (QtCore.QEvent.Type.Enter, QtCore.QEvent.Type.FocusIn):
-                    self._focus_widget(obj)
+                if et == QtCore.QEvent.Type.Enter:
+                    if root.isVisible():
+                        self._focus_widget(obj)
+                elif et == QtCore.QEvent.Type.FocusIn:
+                    if root.isVisible() and not (
+                        isinstance(event, QtGui.QFocusEvent)
+                        and event.reason() == QtCore.Qt.FocusReason.ActiveWindowFocusReason
+                    ):
+                        self._focus_widget(obj)
                 elif et in (QtCore.QEvent.Type.Leave, QtCore.QEvent.Type.FocusOut, QtCore.QEvent.Type.Hide):
                     self._clear_focus(obj)
         except RuntimeError:
@@ -654,10 +738,10 @@ class FocusRingAnimator(QtCore.QObject):
 
 def install_focus_animations(root: QtWidgets.QWidget) -> FocusRingAnimator:
     """Attach (or reuse) a FocusRingAnimator on `root` window/dialog."""
+    install_tooltip_guard(root)
     existing = getattr(root, "_focus_ring_animator", None)
     if isinstance(existing, FocusRingAnimator):
-        existing._active_widget = None
-        existing._overlay.hide()
+        existing._reset_focus_state()
         existing.refresh_children()
         return existing
     animator = FocusRingAnimator(root)

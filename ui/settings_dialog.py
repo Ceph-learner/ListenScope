@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,7 @@ from core.system_probe import (
     PYTORCH_DOWNLOAD_GUIDE,
     PYTORCH_INSTALL_COMMAND,
     PYTORCH_OFFICIAL_URL,
+    PYTHON_WINDOWS_DOWNLOAD_URL,
     apply_external_ai_probe_to_report,
     probe_external_ai_environment,
     probe_external_midi_environment,
@@ -48,6 +50,30 @@ from ui.acid_style import (
 
 GITHUB_REPO_URL = "https://github.com/Ceph-learner/ListenScope"
 GITHUB_ISSUES_URL = "https://github.com/Ceph-learner/ListenScope/issues"
+
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\[(?:\d{1,3};)*\d{1,3}m"
+)
+_PS_TILDE_LINE_RE = re.compile(r"^\|?\s*~+\s*$")
+
+
+def _decode_bootstrap_bytes(raw: bytes) -> str:
+    """Decode PowerShell/console subprocess output (UTF-8 first, CP936/GBK fallback)."""
+    for enc in ("utf-8", "cp936", "gbk"):
+        try:
+            return raw.decode(enc)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _clean_bootstrap_line(text: str) -> str:
+    """Strip VT100/ANSI escapes and PowerShell diagnostic tilde underlines."""
+    cleaned = _ANSI_ESCAPE_RE.sub("", str(text)).replace("\x1b", "").replace("\r", "")
+    cleaned = re.sub(r"^\s*\|\s*", "", cleaned).strip()
+    if not cleaned or _PS_TILDE_LINE_RE.match(cleaned):
+        return ""
+    return cleaned
 
 SETTINGS_CATEGORIES = {
     "appearance": ("外观与布局", "切换工作区、黑夜/白天/跟随系统主题、语言、数据路径与开源项目反馈"),
@@ -212,9 +238,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self._nav_group = QtWidgets.QButtonGroup(self)
         self._nav_group.setExclusive(True)
         self._category_buttons = {}
-        icon_color = self._icon_color(appearance, resolved_variant)
         for key, (label, description) in SETTINGS_CATEGORIES.items():
-            button = QtWidgets.QPushButton(QtGui.QIcon(_category_icon(key, color=icon_color)), label)
+            button = QtWidgets.QPushButton(label)
             button.setObjectName("settingsNavButton")
             button.setAccessibleDescription(description)
             button.setCheckable(True)
@@ -416,7 +441,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         appearance_layout.addStretch(1)
         self._add_page("appearance", appearance_page, scroll=True)
-        self.update_appearance_summary(appearance)
+        self.update_appearance_summary(appearance, _translate=False)
 
         # Page 2: System Status
         status_tab = QtWidgets.QWidget()
@@ -504,17 +529,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self.chunk_sec_spin.setRange(2.0, 45.0)
         self.chunk_sec_spin.setSuffix(" s")
         self.chunk_sec_spin.setValue(ai_config.long_audio_chunk_seconds)
-        self.chunk_sec_spin.setToolTip(
-            "离线音频流式分块长度（RTX 5060 Ti 8GB + 16GB RAM 实测默认 6.0s；保留用户已保存自定义设置）。"
-        )
 
         self.demucs_seg_spin = QtWidgets.QSpinBox()
         self.demucs_seg_spin.setRange(4, max(int(s) for s in ai_config.demucs_segment_ladder))
         self.demucs_seg_spin.setSuffix(" s")
         self.demucs_seg_spin.setValue(ai_config.demucs_default_segment_sec)
-        self.demucs_seg_spin.setToolTip(
-            "HTDemucs 4-Stem 内部模型分段时长（实测默认 6s）；与离线流式分块分开设置，且不影响 MDX 内部 segment_size=256。"
-        )
 
         self.roformer_chk = QtWidgets.QCheckBox("允许实验性 BS-RoFormer 模型 (仅在 RTX 5060 Ti 8GB 实测峰值通过后手动启用)")
         self.roformer_chk.setChecked(ai_config.allow_experimental_roformer)
@@ -712,18 +731,25 @@ class SettingsDialog(QtWidgets.QDialog):
         boot_btns2 = QtWidgets.QHBoxLayout()
         self.open_pytorch_url_btn = QtWidgets.QPushButton("PyTorch 官方下载页 (pytorch.org)")
         self.open_pytorch_url_btn.setAutoDefault(False)
-        self.open_pytorch_url_btn.setToolTip(f"打开 {PYTORCH_OFFICIAL_URL}")
         self.open_pytorch_url_btn.clicked.connect(lambda: _open_web_url(PYTORCH_OFFICIAL_URL))
 
         self.open_cu128_url_btn = QtWidgets.QPushButton("CUDA 12.8 Wheel 官方镜像")
         self.open_cu128_url_btn.setAutoDefault(False)
-        self.open_cu128_url_btn.setToolTip(f"打开 {PYTORCH_CU128_INDEX_URL}")
         self.open_cu128_url_btn.clicked.connect(lambda: _open_web_url(PYTORCH_CU128_INDEX_URL))
+
+        self.open_python_url_btn = QtWidgets.QPushButton("Python 3.12 官方下载")
+        self.open_python_url_btn.setAutoDefault(False)
+        self.open_python_url_btn.clicked.connect(lambda: _open_web_url(PYTHON_WINDOWS_DOWNLOAD_URL))
 
         boot_btns2.addWidget(self.open_pytorch_url_btn)
         boot_btns2.addWidget(self.open_cu128_url_btn)
+        boot_btns2.addWidget(self.open_python_url_btn)
         boot_btns2.addStretch(1)
         bootstrap_layout.addLayout(boot_btns2)
+
+        self.auto_install_py_chk = QtWidgets.QCheckBox("缺 Python 3.12/3.11 时自动用 winget 安装")
+        self.auto_install_py_chk.setChecked(True)
+        bootstrap_layout.addWidget(self.auto_install_py_chk)
 
         self.bootstrap_status_lbl = QtWidgets.QLabel(
             "准备就绪：点击「扫描本机 PyTorch 环境」自动查找电脑已安装的 PyTorch；若未安装会给出官方下载地址与安装指令。"
@@ -820,9 +846,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self._orig_limits = resource_limits
         self._orig_ai_cfg = ai_config
         install_focus_animations(self)
-        self.apply_skin(appearance, acid_variant=self._acid_variant or "")
+        self.apply_skin(appearance, acid_variant=self._acid_variant or "", _translate=False)
         self.open_category("appearance")
-        self._category_buttons["appearance"].setFocus()
 
     @staticmethod
     def _icon_color(appearance: Appearance, acid_variant: Optional[str]) -> str:
@@ -833,7 +858,13 @@ class SettingsDialog(QtWidgets.QDialog):
         _, _, accent = appearance.effective_colors(system_is_dark=detect_system_is_dark())
         return accent
 
-    def apply_skin(self, appearance: Appearance, *, acid_variant: Optional[str] = None) -> None:
+    def apply_skin(
+        self,
+        appearance: Appearance,
+        *,
+        acid_variant: Optional[str] = None,
+        _translate: bool = True,
+    ) -> None:
         self._appearance = appearance
         self._updated_appearance = appearance
         if acid_variant is not None:
@@ -851,7 +882,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.setStyleSheet(acid_stylesheet(appearance, self._acid_variant))
             else:
                 self.setStyleSheet("")
-        translate_widget_tree(self, appearance.language)
+        if _translate:
+            translate_widget_tree(self, appearance.language)
 
     def _add_page(self, key: str, widget: QtWidgets.QWidget, *, scroll: bool = False) -> None:
         if scroll:
@@ -875,7 +907,7 @@ class SettingsDialog(QtWidgets.QDialog):
         row.addWidget(verify)
         return row
 
-    def update_appearance_summary(self, appearance: Appearance) -> None:
+    def update_appearance_summary(self, appearance: Appearance, *, _translate: bool = True) -> None:
         self._appearance = appearance
         self._updated_appearance = appearance
         mode_lbl = THEME_MODES.get(appearance.theme_mode, "白天")
@@ -902,7 +934,8 @@ class SettingsDialog(QtWidgets.QDialog):
             blocker4 = QtCore.QSignalBlocker(self.focus_anim_chk)
             self.focus_anim_chk.setChecked(bool(appearance.focus_animations))
             del blocker4
-        translate_widget_tree(self, appearance.language)
+        if _translate:
+            translate_widget_tree(self, appearance.language)
 
     def _on_quick_appearance_changed(self, *_args) -> None:
         lang = str(self.language_combo.currentData() or "zh")
@@ -1051,12 +1084,15 @@ class SettingsDialog(QtWidgets.QDialog):
         app_root = get_app_root()
         target_root = app_root if os.access(app_root, os.W_OK) else default_work_dir().parent
         target_root.mkdir(parents=True, exist_ok=True)
+        self._bootstrap_target_root: Optional[Path] = target_root
         ai_venv = target_root / ("runtime\\ai" if getattr(sys, "frozen", False) else ".venv-ai")
         midi_venv = target_root / ("m" if getattr(sys, "frozen", False) else ".venv-midi")
         wheel_dir = self.setup_wheel_dir_edit.text().strip()
 
         cmd = [
             pwsh_exe,
+            "-NoProfile",
+            "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
             "-File",
@@ -1069,14 +1105,25 @@ class SettingsDialog(QtWidgets.QDialog):
         ]
         if skip_ai:
             cmd.append("-SkipAI")
+        if hasattr(self, "auto_install_py_chk") and self.auto_install_py_chk.isChecked():
+            cmd.append("-AutoInstallPython")
         if wheel_dir:
             cmd.extend(["-CudaWheelDir", wheel_dir])
 
         self._bootstrap_running = True
         self.setup_all_btn.setEnabled(False)
         self.setup_midi_only_btn.setEnabled(False)
+        if hasattr(self, "auto_install_py_chk"):
+            self.auto_install_py_chk.setEnabled(False)
         set_widget_tone(self.bootstrap_status_lbl, "info")
         self.bootstrap_status_lbl.setText("[BUSY] 正在执行一键环境初始化，请稍候（将在软件同级目录建立隔离环境）...")
+
+        proc_env = os.environ.copy()
+        proc_env["PYTHONUTF8"] = "1"
+        proc_env["PYTHONIOENCODING"] = "utf-8"
+        proc_env["NO_COLOR"] = "1"
+        proc_env["TERM"] = "dumb"
+        proc_env["DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION"] = "0"
 
         def _worker() -> None:
             last_lines: list[str] = []
@@ -1084,20 +1131,18 @@ class SettingsDialog(QtWidgets.QDialog):
                 proc = subprocess.Popen(
                     cmd,
                     cwd=str(get_bundle_root()),
+                    env=proc_env,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
                     **subprocess_no_window_kwargs(),
                 )
                 assert proc.stdout is not None
-                for raw_line in proc.stdout:
-                    line = raw_line.strip()
+                for raw_bytes in iter(proc.stdout.readline, b""):
+                    line = _clean_bootstrap_line(_decode_bootstrap_bytes(raw_bytes))
                     if line:
                         last_lines.append(line)
-                        if len(last_lines) > 8:
-                            last_lines = last_lines[-8:]
+                        if len(last_lines) > 10:
+                            last_lines = last_lines[-10:]
                         if not self._dialog_closed:
                             try:
                                 self._bootstrap_progress.emit("\n".join(last_lines[-3:]))
@@ -1108,7 +1153,7 @@ class SettingsDialog(QtWidgets.QDialog):
                     if rc == 0:
                         self._bootstrap_finished.emit(True, "[OK] 一键环境初始化完成，正在自动识别并验证解释器...")
                     else:
-                        tail = "\n".join(last_lines[-4:])
+                        tail = "\n".join(last_lines[-6:])
                         self._bootstrap_finished.emit(False, f"[ERR] 初始化失败 (exit={rc}):\n{tail}")
             except Exception as exc:
                 if not self._dialog_closed:
@@ -1128,11 +1173,19 @@ class SettingsDialog(QtWidgets.QDialog):
         self._bootstrap_running = False
         self.setup_all_btn.setEnabled(True)
         self.setup_midi_only_btn.setEnabled(True)
+        if hasattr(self, "auto_install_py_chk"):
+            self.auto_install_py_chk.setEnabled(True)
         set_widget_tone(self.bootstrap_status_lbl, "ok" if ok else "error")
         self.bootstrap_status_lbl.setText(message)
         if ok:
             ai_py, midi_py = _discover_installed_runtime_pythons(get_app_root())
-            if ai_py and not self.ai_python_edit.text().strip():
+            fallback_root = getattr(self, "_bootstrap_target_root", None)
+            if fallback_root is not None and fallback_root != get_app_root():
+                fb_ai, fb_midi = _discover_installed_runtime_pythons(fallback_root)
+                ai_py = ai_py or fb_ai
+                midi_py = midi_py or fb_midi
+            cur_ai = self.ai_python_edit.text().strip()
+            if ai_py and (not cur_ai or not Path(cur_ai).exists()):
                 self.ai_python_edit.setText(ai_py)
             if midi_py:
                 self.midi_python_edit.setText(midi_py)

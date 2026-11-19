@@ -20,26 +20,52 @@ def run_external_python(
 ) -> subprocess.CompletedProcess[str]:
     """Launch external Python without inheriting the frozen Windows DLL directory."""
     if sys.platform != "win32" or not getattr(sys, "frozen", False):
-        return subprocess.run(args, timeout=timeout, check=check, capture_output=True, **kwargs)
+        kwargs.setdefault("capture_output", True)
+        return subprocess.run(args, timeout=timeout, check=check, **kwargs)
 
     import ctypes
+
+    kwargs.pop("capture_output", None)
+    raw_env = kwargs.pop("env", None)
+    env = (os.environ if raw_env is None else raw_env).copy()
+    env.pop("PYTHONHOME", None)
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     set_dll_directory = kernel32.SetDllDirectoryW
     set_dll_directory.argtypes = [ctypes.c_wchar_p]
     bundle = str(get_bundle_root())
-    env = kwargs["env"].copy()
     bundle_path = Path(bundle)
     for key in ("PATH", "PYTHONPATH"):
         entries = env.get(key, "").split(os.pathsep)
-        env[key] = os.pathsep.join(
-            entry for entry in entries if entry and not Path(entry).resolve().is_relative_to(bundle_path)
-        )
+        kept: list[str] = []
+        for entry in entries:
+            if not entry:
+                continue
+            try:
+                if Path(entry).resolve().is_relative_to(bundle_path):
+                    continue
+            except (OSError, ValueError):
+                pass
+            kept.append(entry)
+        env[key] = os.pathsep.join(kept)
     # Bundled source modules must be below the external interpreter's stdlib and
     # site-packages. The bundle also contains Python 3.12 extensions such as _socket.
-    launcher = "import runpy, sys; root, mod = sys.argv[1:3]; sys.argv = sys.argv[2:]; sys.path.append(root); runpy.run_module(mod, run_name='__main__', alter_sys=True)"
-    command = [args[0], "-c", launcher, bundle, *args[2:]]
+    if len(args) >= 2 and args[1] == "-m":
+        launcher = (
+            "import runpy, sys; root, mod = sys.argv[1:3]; sys.argv = sys.argv[2:]; "
+            "sys.path.append(root); runpy.run_module(mod, run_name='__main__', alter_sys=True)"
+        )
+        command = [args[0], "-c", launcher, bundle, *args[2:]]
+    elif len(args) >= 2 and args[1] == "-c":
+        command = [args[0], "-c", *args[2:]]
+    else:
+        command = [args[0], *args[1:]]
     kwargs.update(env=env, cwd=str(Path(args[0]).resolve().parent))
+    no_win = subprocess_no_window_kwargs()
+    if "creationflags" in no_win:
+        kwargs.setdefault("creationflags", no_win["creationflags"])
     with _external_launch_lock:
         if not set_dll_directory(None):
             raise ctypes.WinError(ctypes.get_last_error())
@@ -163,6 +189,6 @@ def prepend_ffmpeg_path_env(env: dict[str, str]) -> dict[str, str]:
 
 def subprocess_no_window_kwargs() -> dict[str, Any]:
     """Suppress console window flicker when GUI-only Windows apps spawn helper Python processes."""
-    if sys.platform == "win32":
+    if sys.platform == "win32" and os.name == "nt":
         return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
     return {}
