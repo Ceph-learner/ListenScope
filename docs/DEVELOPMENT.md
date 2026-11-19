@@ -32,6 +32,6 @@ Windows 上执行 `pwsh -File scripts\setup_windows.ps1`（可选 `-CudaWheelDir
 3. 禁止 force push，禁止改写已推送的历史。遇到冲突时用 rebase 或 merge 解决，并核对双方意图。
 4. `backup/*` 分支和 `*-backup` 标签是历史快照，不要删除或移动。
 5. 只为真实的 Bug 或需求开 Issue，不建空 Issue、空 PR 或空分支。
-6. 发布：版本号与 [pyproject.toml](../pyproject.toml) 及 [scripts/installer.iss](../scripts/installer.iss) 保持一致（当前 `0.2.1`）。推送 `v*` 标签（须获用户明确授权）会触发 [.github/workflows/release-windows.yml](../.github/workflows/release-windows.yml) 在 `windows-latest` 构建轻量 **Core** 便携 ZIP 与 Inno Setup 6 安装包；真实 Windows 11 + RTX 5060 Ti 实机声卡、GPU 分轨与 Cubase 导入验收仍记录于 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。
+6. 发布：版本号与 [pyproject.toml](../pyproject.toml) 及 [scripts/installer.iss](../scripts/installer.iss) 保持一致（当前 `0.2.2`）。推送 `v*` 标签（须获用户明确授权）会触发 [.github/workflows/release-windows.yml](../.github/workflows/release-windows.yml) 在 `windows-latest` 构建轻量 **Core** 便携 ZIP 与 Inno Setup 6 安装包；真实 Windows 11 + RTX 5060 Ti 实机声卡、GPU 分轨与 Cubase 导入验收仍记录于 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。
 7. 结束前按 [AGENTS.md](../AGENTS.md) 更新 [CURRENT_STATE](CURRENT_STATE.md) 和 [HANDOFF](HANDOFF.md)，然后推送，并核对远端 ref。
 8. 每轮开发交付按需更新 Google Drive 的源码快照，并核对远端文件大小与修改时间。外观交付另外核验合成数据截图，压缩包排除本地配置、音频、模型和开发环境。

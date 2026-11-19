@@ -25,11 +25,12 @@ GPU 分轨和 CPU MIDI 各用独立环境（Core 仍保持零 Torch/CUDA/TF，�
 
 ## 当前验证基线
 
-- **用户真机回家实测反馈打磨分支（`feat/home-test-feedback-polish`，基于 `main` `2e5e2e0`）**：
+- **`v0.2.2` 发布验证基线（PR #27 `b89cf2e` + CI 收口 `8ef17c3`，基于 `main` `67b1b8b` · Tag `v0.2.2`）**：
   - 默认主题切换为 `preset="acid_telemetry", theme_mode="light"`（临床浅色），并在酸性主题下锁定字体家族/颜色/背景图（字号 `11–20 px` 可调），非酸性主题新增自定义背景壁纸上传；
-  - 新增 [`core/i18n.py`](../core/i18n.py) 中/英/韩/日四语引擎（英文模式零重复）、无边框 10px 圆角窗口 + 启动屏幕居中 + 点击选项位置锁定防跳动、全新酸性几何图标 `listenscope.svg` / `listenscope.ico`；
-  - 新增 [`scan_local_pytorch_installations`](../core/system_probe.py) 本机 PyTorch 扫描器与官方下载网址弹窗/按钮、设置页开源项目 Star / Issues 反馈卡片、全界面 `[?]` 说明徽标扩充（含和弦练习步数与四步用法详解）、最近和弦单行 `Name[Degree]` 防换行显示、以及贝斯独听 `0–24 dB` 自定义分贝输入 + `>12 dB` 护耳警告 + 导出音频可选应用独听增益；
-  - 第二轮截图走查打磨：分轨行固定 96px 标签列使 `VOCALS`/`DRUMS`/`BASS`/`OTHER` 的 `M`/`S` 按钮严格垂直对齐；新增 [`core/i18n_catalog.py`](../core/i18n_catalog.py) 全量补齐英/韩/日静态与动态文案、图表标题/坐标轴及全部 ~45 个 `[?]` 悬浮说明（EN/KO 全四窗零残留中文）；`AppearanceDialog` 全弹窗接入当前主题样式；重写 `22×22` 自绘无裁切 [`HelpBadge`](../ui/help_badge.py) 支持鼠标悬浮自动弹出主题卡片 + 全局「说明模式」开关 + 零 `QGraphicsEffect`「交互聚焦动画」开关；并在设置页「资源保护」加入可选 **集显 + 独显异构协同加速（方案 A：核显 DirectML 接管轻量 2-Stem ONNX；方案 B：GUI 核显卸载 + AI 子进程锁定 `CUDA_VISIBLE_DEVICES=0` + Windows 图形设置直达）**；
+  - 新增 [`core/i18n.py`](../core/i18n.py) 与 [`core/i18n_catalog.py`](../core/i18n_catalog.py) 中/英/韩/日四语引擎（英文模式零重复、EN/KO 四窗零残留中文）、无边框 10px 圆角窗口 + 启动屏幕居中 + 切换选项几何锁定、全新酸性几何图标 `listenscope.svg` / `listenscope.ico`；
+  - 新增 [`scan_local_pytorch_installations`](../core/system_probe.py) 本机 PyTorch 扫描器与官方下载直链、设置页开源项目 Star / Issues 反馈卡片、自绘 `22×22` 悬浮 [`HelpBadge`](../ui/help_badge.py) + 全局「说明模式」与零 `QGraphicsEffect`「交互聚焦动画」开关、分轨行固定 96px 标签列对齐 `M`/`S` 按钮、最近和弦单行 `Name[Degree]`、`0–24 dB` 贝斯独听自定义分贝输入（`>12 dB` 护耳警告 + 导出可选应用）、以及设置页可选 **集显 + 独显异构协同加速（方案 A：核显 DirectML 接管轻量 2-Stem ONNX；方案 B：GUI 核显卸载 + AI 子进程锁定 `CUDA_VISIBLE_DEVICES=0` + Windows 图形设置直达）**；
+  - **云端 Linux 本地（Debian 12 · Python 3.11.2 · PySide6 6.9.3 · offscreen）**：全量 **`192 passed, 6 skipped in 61.25s`**；已完成 `1360×860` 四语几何锁定与 `ResourceMonitorBar` 离屏截图目检。
+  - **GitHub Actions 双端 CI（均运行于 `8ef17c3`）**：Ubuntu 24.04 `tests.yml`（Run `44525780384`）**`198 passed in 80.15s`**；`windows-latest` `release-windows.yml`（Run `44525789042`，Tag `v0.2.2`）**`198 passed in 104.57s`**，PyInstaller 打包与 8 项 UI 资产核验通过、重定位 `ListenScope.exe --simulate --headless-smoke` 返回 `ExitCode=0`，已正式发布 [GitHub Release `v0.2.2`](https://github.com/Ceph-learner/ListenScope/releases/tag/v0.2.2)（`ListenScope-Setup-Windows-x64.exe`、`ListenScope-Core-Windows-x64-Portable.zip`、`SHA256SUMS.txt`）。真机 Windows 11 音频/GPU/核显 DirectML/DAW/高 DPI 验收待目标机按 [HANDOFF](HANDOFF.md) 补测。
   - [README.md](../README.md) 重构为简洁自然的开源项目介绍，详细工程交接状态统一归档至本文档与 [HANDOFF.md](HANDOFF.md)。
 - **PR #26 预发布验证基线（`fix/settings-dialog-compact-width` · `9bf7a43`，基于 PR #25 `f22ae12`）**：
   - 修复 [`TelemetryHeader`](../ui/acid_style.py) 与 [`SettingsDialog`](../ui/settings_dialog.py) 标题标签在 Windows 离屏等宽回退字体下撑宽至 `708px` 的问题，确保 `560×500` 紧凑窗口与 Acid Dark/Classic 切换正常。
