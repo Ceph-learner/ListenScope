@@ -535,7 +535,6 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         self.lock_btn.setCheckable(True)
         self.lock_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.lock_btn.setFixedHeight(18)
-        self.lock_btn.setToolTip("冻结 / 恢复实时分析图表画面（85/15 防视觉疲劳静态锁定）")
         self.lock_btn.toggled.connect(self._on_lock_btn_toggled)
         row.addWidget(self.lock_btn)
 

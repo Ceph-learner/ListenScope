@@ -42,11 +42,28 @@ param(
     [switch]$SkipAI,
     [switch]$SkipMidi,
     [switch]$AllowUntestedPython,
-    [switch]$CheckCudaWheels
+    [switch]$CheckCudaWheels,
+    [switch]$AutoInstallPython
 )
 
 $ErrorActionPreference = "Stop"
+$ErrorView = "NormalView"
 $env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$env:NO_COLOR = "1"
+if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) {
+    $PSStyle.OutputRendering = "PlainText"
+}
+$Utf8NoBomConsole = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = $Utf8NoBomConsole
+try {
+    if (-not [Console]::IsInputRedirected) {
+        [Console]::InputEncoding = $Utf8NoBomConsole
+    }
+    [Console]::OutputEncoding = $Utf8NoBomConsole
+} catch {
+}
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $RepoRoot
 
@@ -62,28 +79,17 @@ function Invoke-Checked {
     }
 }
 
-function Resolve-LauncherPython {
-    param([string]$SpecVersion)
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        $resolved = & py "-$SpecVersion" -c "import sys; print(sys.executable)" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $resolved) {
-            return ($resolved | Select-Object -First 1).Trim()
-        }
-    }
-    return ""
-}
-
 function Test-PythonSpec {
     param(
         [string]$Exe,
         [int]$ExpectedMajor,
         [int]$ExpectedMinor
     )
-    $info = & $Exe -c "import platform, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|{platform.architecture()[0]}')"
+    $info = & $Exe -c "import platform, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|{platform.architecture()[0]}')" 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $info) {
         throw "无法读取 Python 版本信息: $Exe"
     }
-    $parts = ($info | Select-Object -First 1).Trim().Split("|")
+    $parts = ($info | Select-Object -First 1).ToString().Trim().Split("|")
     $ver = $parts[0]
     $arch = if ($parts.Length -gt 1) { $parts[1] } else { "unknown" }
     $verNums = $ver.Split(".")
@@ -96,6 +102,175 @@ function Test-PythonSpec {
         Minor = $min
         Matches = ($maj -eq $ExpectedMajor -and $min -eq $ExpectedMinor -and $arch -eq "64bit")
     }
+}
+
+function Test-PythonCandidateMatch {
+    param(
+        [string]$Exe,
+        [int]$ExpectedMajor,
+        [int]$ExpectedMinor
+    )
+    if (-not $Exe) {
+        return $false
+    }
+    try {
+        $meta = Test-PythonSpec -Exe $Exe -ExpectedMajor $ExpectedMajor -ExpectedMinor $ExpectedMinor
+        return [bool]$meta.Matches
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-LauncherPython {
+    param([string]$SpecVersion)
+    $specParts = $SpecVersion.Split(".")
+    if ($specParts.Length -lt 2) {
+        return ""
+    }
+    $targetMaj = [int]$specParts[0]
+    $targetMin = [int]$specParts[1]
+    $compactTag = "$targetMaj$targetMin"
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        try {
+            $resolved = & py "-$SpecVersion" -c "import sys; print(sys.executable)" 2>$null
+            if ($LASTEXITCODE -eq 0 -and $resolved) {
+                $candidates.Add(($resolved | Select-Object -First 1).ToString().Trim())
+            }
+        } catch {
+        }
+        try {
+            $listOut = & py -0p 2>$null
+            if ($LASTEXITCODE -eq 0 -and $listOut) {
+                foreach ($line in $listOut) {
+                    $txt = $line.ToString().Trim()
+                    if ($txt -match "(?i)([A-Za-z]:\\[^\r\n]*python\.exe)\s*$") {
+                        $candidates.Add($Matches[1].Trim())
+                    }
+                }
+            }
+        } catch {
+        }
+    }
+
+    foreach ($regRoot in @(
+        "HKCU:\Software\Python\PythonCore",
+        "HKLM:\SOFTWARE\Python\PythonCore",
+        "HKLM:\SOFTWARE\WOW6432Node\Python\PythonCore"
+    )) {
+        if (Test-Path -LiteralPath $regRoot) {
+            try {
+                Get-ChildItem -LiteralPath $regRoot -ErrorAction SilentlyContinue | ForEach-Object {
+                    $installKey = Join-Path $_.PSPath "InstallPath"
+                    if (Test-Path -LiteralPath $installKey) {
+                        $props = Get-ItemProperty -LiteralPath $installKey -ErrorAction SilentlyContinue
+                        if ($props) {
+                            $exeProp = $props.PSObject.Properties["ExecutablePath"]
+                            if ($exeProp -and $exeProp.Value) {
+                                $candidates.Add($exeProp.Value.ToString().Trim())
+                            }
+                            $defProp = $props.PSObject.Properties["(default)"]
+                            if ($defProp -and $defProp.Value) {
+                                $candidates.Add((Join-Path $defProp.Value.ToString().Trim() "python.exe"))
+                            }
+                        }
+                    }
+                }
+            } catch {
+            }
+        }
+    }
+
+    $dirPatterns = @()
+    if ($env:LOCALAPPDATA) {
+        $dirPatterns += (Join-Path $env:LOCALAPPDATA "Programs\Python\Python$compactTag\python.exe")
+        $dirPatterns += (Join-Path $env:LOCALAPPDATA "Programs\Python\Python*\python.exe")
+        $dirPatterns += (Join-Path $env:LOCALAPPDATA "Python\pythoncore-$SpecVersion*\python.exe")
+        $dirPatterns += (Join-Path $env:LOCALAPPDATA "Python\bin\python$SpecVersion*.exe")
+        $dirPatterns += (Join-Path $env:LOCALAPPDATA "uv\python\cpython-$SpecVersion*\python.exe")
+        $dirPatterns += (Join-Path $env:LOCALAPPDATA "uv\python\cpython-$SpecVersion*\install\python.exe")
+    }
+    if ($env:ProgramFiles) {
+        $dirPatterns += (Join-Path $env:ProgramFiles "Python$compactTag\python.exe")
+        $dirPatterns += (Join-Path $env:ProgramFiles "Python*\python.exe")
+    }
+    foreach ($driveRoot in @("C:\", "D:\", "E:\")) {
+        $dirPatterns += (Join-Path $driveRoot "Python$compactTag\python.exe")
+        $dirPatterns += (Join-Path $driveRoot "Python$compactTag-64\python.exe")
+    }
+    $condaRoots = @()
+    if ($env:USERPROFILE) {
+        $condaRoots += (Join-Path $env:USERPROFILE "miniconda3")
+        $condaRoots += (Join-Path $env:USERPROFILE "anaconda3")
+    }
+    if ($env:LOCALAPPDATA) {
+        $condaRoots += (Join-Path $env:LOCALAPPDATA "miniconda3")
+        $condaRoots += (Join-Path $env:LOCALAPPDATA "anaconda3")
+    }
+    $condaRoots += @("C:\ProgramData\miniconda3", "C:\ProgramData\anaconda3", "D:\miniconda3", "D:\anaconda3")
+    foreach ($cRoot in $condaRoots) {
+        $dirPatterns += (Join-Path $cRoot "python.exe")
+        $dirPatterns += (Join-Path $cRoot "envs\*\python.exe")
+    }
+    foreach ($pat in $dirPatterns) {
+        try {
+            Get-Item -Path $pat -ErrorAction SilentlyContinue | ForEach-Object {
+                $candidates.Add($_.FullName)
+            }
+        } catch {
+        }
+    }
+
+    foreach ($cmdName in @("python$SpecVersion", "python3", "python")) {
+        $cmdObj = Get-Command $cmdName -ErrorAction SilentlyContinue
+        if ($cmdObj -and $cmdObj.Source) {
+            $candidates.Add($cmdObj.Source)
+        }
+    }
+
+    $seen = New-Object "System.Collections.Generic.HashSet[string]" ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($cand in $candidates) {
+        if (-not $cand) {
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $cand -PathType Leaf)) {
+            continue
+        }
+        if ($cand -like "*\WindowsApps\python*.exe") {
+            continue
+        }
+        $resolvedCand = (Resolve-Path -LiteralPath $cand -ErrorAction SilentlyContinue)
+        $candPath = if ($resolvedCand) { $resolvedCand.Path } else { $cand }
+        if ($seen.Add($candPath)) {
+            if (Test-PythonCandidateMatch -Exe $candPath -ExpectedMajor $targetMaj -ExpectedMinor $targetMin) {
+                return $candPath
+            }
+        }
+    }
+    return ""
+}
+
+function Install-PythonViaWinget {
+    param([string]$SpecVersion)
+    $WingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+    if (-not $WingetCmd) {
+        return ""
+    }
+    $PkgId = switch ($SpecVersion) {
+        "3.12" { "Python.Python.3.12" }
+        "3.11" { "Python.Python.3.11" }
+        default { "" }
+    }
+    if (-not $PkgId) {
+        return ""
+    }
+    Write-Host "未检测到 Python $SpecVersion x64，正在尝试通过 winget 自动安装 ($PkgId)..." -ForegroundColor Yellow
+    & $WingetCmd.Source install --id $PkgId -e --source winget --accept-package-agreements --accept-source-agreements --silent
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "winget 安装 $PkgId 返回退出码 $LASTEXITCODE。"
+    }
+    return (Resolve-LauncherPython -SpecVersion $SpecVersion)
 }
 
 function Resolve-LocalCudaWheel {
@@ -202,11 +377,32 @@ $CorePyMeta = $null
 if (-not $CheckCudaWheels -and (-not $SkipCore -or -not $SkipAI)) {
     if (-not $PythonExe) {
         $Auto312 = Resolve-LauncherPython -SpecVersion "3.12"
+        if (-not $Auto312 -and $AutoInstallPython) {
+            $Auto312 = Install-PythonViaWinget -SpecVersion "3.12"
+        }
         if ($Auto312) {
             $PythonExe = $Auto312
             Write-Host "自动检测到 Python 3.12 x64: $PythonExe" -ForegroundColor Gray
         } else {
-            $PythonExe = "python"
+            $FallbackCmd = Get-Command python -ErrorAction SilentlyContinue
+            $FallbackDetail = ""
+            if ($FallbackCmd) {
+                if ($AllowUntestedPython) {
+                    $PythonExe = $FallbackCmd.Source
+                } else {
+                    try {
+                        $FbMeta = Test-PythonSpec -Exe $FallbackCmd.Source -ExpectedMajor 3 -ExpectedMinor 12
+                        $FallbackDetail = "当前系统默认 python 为 $($FbMeta.Version) ($($FbMeta.Arch))。"
+                    } catch {
+                        $FallbackDetail = "当前默认 python 不可用或为 Microsoft Store 占位快捷方式。"
+                    }
+                }
+            }
+            if (-not $PythonExe) {
+                throw ("未在本机找到 Python 3.12 x64。${FallbackDetail}AI Worker 实测要求 Python 3.12 x64 (cu128 + onnxruntime-gpu 1.26.0)。" +
+                    "请先安装 Python 3.12 (64位): https://www.python.org/downloads/windows/ 或运行 `winget install -e --id Python.Python.3.12`；" +
+                    "也可通过 `-PythonExe <Python3.12路径>`（例如 `-PythonExe C:\Python312\python.exe`）指定。")
+            }
         }
     }
 
@@ -214,7 +410,7 @@ if (-not $CheckCudaWheels -and (-not $SkipCore -or -not $SkipAI)) {
     if (-not $CorePyMeta.Matches) {
         $msg = "检测到 Core/AI Python 为 $($CorePyMeta.Version) ($($CorePyMeta.Arch))；实测基线为 Python 3.12 x64 (cu128 + onnxruntime-gpu 1.26.0)。"
         if (-not $AllowUntestedPython) {
-            throw "$msg 请使用 `-PythonExe <Python3.12路径>`（例如 `-PythonExe C:\Python312\python.exe`），或显式加 `-AllowUntestedPython` 跳过版本校验。"
+            throw "$msg 请安装 Python 3.12 (64位): https://www.python.org/downloads/windows/ 或使用 `-PythonExe C:\Python312\python.exe`（高阶用户可加 `-AllowUntestedPython`）。"
         }
         Write-Warning $msg
     }
@@ -405,6 +601,9 @@ $MidiPyResolved = ""
 if (-not $SkipMidi) {
     if (-not $MidiPythonExe) {
         $MidiPythonExe = Resolve-LauncherPython -SpecVersion "3.11"
+        if (-not $MidiPythonExe -and $AutoInstallPython) {
+            $MidiPythonExe = Install-PythonViaWinget -SpecVersion "3.11"
+        }
     }
     if ($MidiPythonExe) {
         $MidiPyMeta = Test-PythonSpec -Exe $MidiPythonExe -ExpectedMajor 3 -ExpectedMinor 11
@@ -429,7 +628,7 @@ if (-not $SkipMidi) {
         }
     } else {
         Write-Host "=== [3/3] 跳过 .venv-midi（未找到 Python 3.11 x64；GUI 将提示配置或走轻量单音回退） ===" -ForegroundColor Yellow
-        Write-Host "如需启用 Spotify Basic Pitch CPU MIDI 转录，请先安装 Python 3.11 x64 后在短路径执行:" -ForegroundColor Yellow
+        Write-Host "如需启用 Spotify Basic Pitch CPU MIDI 转录，请先安装 Python 3.11 x64 (winget install -e --id Python.Python.3.11) 后执行:" -ForegroundColor Yellow
         Write-Host "  pwsh -ExecutionPolicy Bypass -File scripts\setup_windows.ps1 -SkipAI -MidiPythonExe <Python3.11路径> -MidiVenvPath E:\LS-midi\.venv-midi" -ForegroundColor Yellow
     }
 }

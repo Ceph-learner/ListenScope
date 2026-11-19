@@ -104,7 +104,6 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         )
         snap_note = QtWidgets.QLabel("SNAPSHOT_ONLY")
         snap_note.setObjectName("chromaCaption")
-        snap_note.setToolTip("仅参考打开「练习和弦」对话框时采集到的最近和弦与调性快照 (SNAPSHOT_ONLY // 静态快照参考)")
         self._snap_header.add_right_widget(snap_note)
         self._snap_header.add_right_widget(
             HelpBadge(
@@ -169,7 +168,6 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         self._bpm.setValue(max(30.0, min(240.0, init_bpm)))
         self._bpm.setMinimumWidth(112)
         self._bpm.setAccessibleName("练习速度 BPM")
-        self._bpm.setToolTip("设置试听进行与导出 MIDI 的速度 (BPM)")
         bpm_lbl.setBuddy(self._bpm)
         bpm_help = HelpBadge(
             "练习速度与匹配步数说明",
@@ -235,13 +233,11 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         footer.setSpacing(8)
         self._preview_btn = QtWidgets.QPushButton("试听进行")
         self._preview_btn.setAutoDefault(False)
-        self._preview_btn.setToolTip("按当前速度与实音口径在本地合成试听所选和弦进行")
         self._preview_btn.clicked.connect(self._on_preview_clicked)
 
         self._export_midi_btn = QtWidgets.QPushButton("导出进行 MIDI")
         self._export_midi_btn.setObjectName("acidPrimaryBtn")
         self._export_midi_btn.setAutoDefault(False)
-        self._export_midi_btn.setToolTip("将所选进行按当前速度、调号与实音口径导出为 Cubase 兼容标准 MIDI (.mid)")
         self._export_midi_btn.clicked.connect(self._on_export_midi_clicked)
         midi_help = HelpBadge(
             "Cubase 兼容标准 MIDI",

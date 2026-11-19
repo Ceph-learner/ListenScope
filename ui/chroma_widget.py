@@ -80,7 +80,6 @@ class TuningCentsBar(QtWidgets.QWidget):
 
         self.setFixedHeight(18)
         self.setMinimumWidth(140)
-        self.setToolTip("实时主音高音准偏离条 (-50 ~ +50 cents；青绿色 ±10c 为准音区间，科技蓝 ±25c 微偏)")
 
     def _on_anim_value(self, value: object) -> None:
         try:
@@ -247,7 +246,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         chord_box = QtWidgets.QFrame()
         chord_box.setProperty("acidCard", True)
         chord_box.setProperty("accentRail", "primary")
-        chord_box.setToolTip("12 Major / 12 Minor / N / Unknown")
         chord_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         chord_l = QtWidgets.QVBoxLayout(chord_box)
         chord_l.setContentsMargins(10, 8, 10, 8)
@@ -281,7 +279,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chord_tones_lbl.setObjectName("chromaSubtle")
         self.chord_degree_lbl = QtWidgets.QLabel("相对级数: -")
         self.chord_degree_lbl.setObjectName("chromaSubtle")
-        self.chord_degree_lbl.setToolTip("相对当前检测调性的和弦级数。小调以自然小调音阶为基准。")
         self.chord_secondary_lbl = QtWidgets.QLabel("第二候选: -")
         self.chord_secondary_lbl.setObjectName("chromaCaption")
         self.chord_stability_lbl = QtWidgets.QLabel("稳定度: Silent | 相关 0.00")
@@ -303,7 +300,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         key_box = QtWidgets.QFrame()
         key_box.setProperty("acidCard", True)
         key_box.setProperty("accentRail", "secondary")
-        key_box.setToolTip("Krumhansl-Schmuckler 滑动窗口")
         key_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         key_l = QtWidgets.QVBoxLayout(key_box)
         key_l.setContentsMargins(10, 8, 10, 8)
@@ -395,12 +391,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         met_row = QtWidgets.QHBoxLayout()
         met_row.setSpacing(6)
         self.tap_tempo_btn = QtWidgets.QPushButton("Tap 定速")
-        self.tap_tempo_btn.setToolTip("按曲子节奏连续点击 2 次以上估算 BPM")
         self.tap_tempo_btn.clicked.connect(self._on_tap_tempo_clicked)
 
         self.adopt_bpm_btn = QtWidgets.QPushButton("同步检测BPM")
         self.adopt_bpm_btn.setEnabled(False)
-        self.adopt_bpm_btn.setToolTip("将上方检测到的歌曲 BPM 应用到练习节拍器")
         self.adopt_bpm_btn.clicked.connect(self._on_adopt_bpm_clicked)
 
         self.metronome_bpm_spin = QtWidgets.QDoubleSpinBox()
@@ -420,16 +414,13 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         )
 
         self.metronome_overlay_chk = QtWidgets.QCheckBox("随播节拍器")
-        self.metronome_overlay_chk.setToolTip("在 A/B 回放或分轨混音（含变速练习）中混入同步节拍器 Click")
         self.metronome_overlay_chk.toggled.connect(self.metronome_overlay_toggled.emit)
 
         self.metronome_count_in_chk = QtWidgets.QCheckBox("预备拍 (1小节)")
-        self.metronome_count_in_chk.setToolTip("开始 A/B 回放或分轨混音前，先打一小节纯 CPU 预备拍再进入音乐")
         self.metronome_count_in_chk.toggled.connect(self.metronome_count_in_toggled.emit)
 
         self.metronome_standalone_btn = QtWidgets.QPushButton("独立节拍器")
         self.metronome_standalone_btn.setCheckable(True)
-        self.metronome_standalone_btn.setToolTip("单独播放纯 CPU 节拍器 Click 用于跟练（播放 A/B 或分轨时会自动切回随播模式）")
         self.metronome_standalone_btn.toggled.connect(self.metronome_standalone_toggled.emit)
 
         self.metronome_vol_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -437,7 +428,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.metronome_vol_slider.setValue(70)
         self.metronome_vol_slider.setMinimumWidth(80)
         self.metronome_vol_slider.setMaximumWidth(120)
-        self.metronome_vol_slider.setToolTip("调节练习节拍器（含预备拍/独立/随播）Click 音量 (0% - 150%)")
         self.metronome_vol_lbl = QtWidgets.QLabel("音量: 70%")
         self.metronome_vol_lbl.setMinimumWidth(68)
         self.metronome_vol_slider.valueChanged.connect(self._on_metronome_vol_slider_changed)
@@ -496,21 +486,15 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         self.transpose_combo = QtWidgets.QComboBox()
         self.transpose_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.transpose_combo.setToolTip("仅切换乐谱/变调夹和弦与调性显示偏移（零 PCM 拷贝/重采样开销，不影响实音分析）")
         for lbl, semi in TRANSPOSE_PRESETS:
             self.transpose_combo.addItem(lbl, semi)
         self.transpose_combo.currentIndexChanged.connect(self._on_transpose_changed)
 
         self.auto_reset_chk = QtWidgets.QCheckBox("自动切歌重置")
         self.auto_reset_chk.setChecked(True)
-        self.auto_reset_chk.setToolTip(
-            "监测到当前播放软件通过 Windows 媒体会话 (SMTC) 真实切歌时自动清空和弦/调性/BPM；"
-            "同一首歌暂停、恢复或拖动进度条不会触发误重置"
-        )
         self.auto_reset_chk.toggled.connect(self.auto_reset_toggled.emit)
 
         self.reset_harmony_btn = QtWidgets.QPushButton("换歌重置 (和弦/调性/BPM)")
-        self.reset_harmony_btn.setToolTip("切歌后一键清空和弦轨迹、调性滑动窗口与 BPM 累积，不中断当前捕获")
         self.reset_harmony_btn.clicked.connect(self._on_reset_clicked)
         prog_bar.addWidget(self.chord_progression_lbl, 1)
         prog_bar.addWidget(self.progression_mode_combo)
@@ -523,7 +507,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         )
         self.practice_chords_btn = QtWidgets.QPushButton("练习和弦")
         self.practice_chords_btn.setObjectName("analysisAction")
-        self.practice_chords_btn.setToolTip("查看基于最近和弦推荐的练习模板，支持本地试听与导出 MIDI")
         self.practice_chords_btn.clicked.connect(self._open_chord_practice)
         prog_bar.addWidget(self.practice_chords_btn)
         root.addLayout(prog_bar)

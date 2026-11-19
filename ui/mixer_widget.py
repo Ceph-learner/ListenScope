@@ -118,7 +118,6 @@ class _StemTrackRow(QtWidgets.QFrame):
         # Bridge actions (uniform width for clean column alignment)
         analyze_btn = QtWidgets.QPushButton("载入实时视图")
         analyze_btn.setMinimumWidth(116)
-        analyze_btn.setToolTip("将此分轨前 <=30s 载入实时频谱/和弦视图（会清空当前实时缓冲）")
         analyze_btn.clicked.connect(lambda: self.send_to_analysis_requested.emit(self.stem_name, self.stem_path))
         midi_btn = QtWidgets.QPushButton("转 MIDI")
         midi_btn.setObjectName("acidPrimaryBtn")
@@ -253,18 +252,13 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.loop_chk.toggled.connect(self.mixer_engine.set_loop)
 
         self.export_btn = QtWidgets.QPushButton("导出混合 WAV")
-        self.export_btn.setToolTip("流式导出当前分轨混音 WAV；若已设定局部循环、不变调倍速或随播节拍器将同步应用到导出结果")
         self.deep_analyze_btn = QtWidgets.QPushButton("分析和弦与节奏")
         self.deep_analyze_btn.setObjectName("analysisAction")
         self.deep_analyze_btn.setEnabled(False)
         self.sevenths_chk = QtWidgets.QCheckBox("扩展和弦 (maj7/m7/7/sus4)")
-        self.sevenths_chk.setToolTip("离线深度分轨和声识别是否启用 7 和弦与 sus4 模板（实时视图仍保持 12 大/小三和弦标准）")
         self.export_sheet_btn = QtWidgets.QPushButton("导出扒谱报告")
         self.export_sheet_btn.setEnabled(False)
         self.open_stem_midi_btn = QtWidgets.QPushButton("打开单轨 WAV…")
-        self.open_stem_midi_btn.setToolTip(
-            "从任意目录选择已有单轨 WAV (如上一轮导出的 bass.wav) 直接载入混音器，并通过独立 Python 3.11 Basic Pitch 转录与导出 MIDI；不中断当前实时捕获"
-        )
 
         self.play_btn.clicked.connect(self._on_play_clicked)
         self.pause_btn.clicked.connect(self.mixer_engine.pause)
@@ -281,7 +275,6 @@ class StemMixerWidget(QtWidgets.QWidget):
         ctrl_bar.addWidget(self.export_btn)
         ctrl_bar.addStretch(1)
         self.clear_results_btn = QtWidgets.QPushButton("清除分轨结果")
-        self.clear_results_btn.setToolTip("清空当前音轨、分析和 MIDI 预览，保留原音频和已导出的文件。")
         self.clear_results_btn.setEnabled(False)
         self.clear_results_btn.clicked.connect(self.clear_results_requested.emit)
         ctrl_bar.addWidget(self.clear_results_btn)
@@ -311,9 +304,6 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         self.bass_monitor_boost_chk = QtWidgets.QCheckBox(f"贝斯独听 +{BASS_MONITOR_BOOST_DB} dB")
         self.bass_monitor_boost_chk.setChecked(True)
-        self.bass_monitor_boost_chk.setToolTip(
-            "仅在播放且贝斯是唯一出声的轨道时生效。默认补偿 +12 dB 并启用 0.8 FS 软膝盖 tanh 防破音保护。"
-        )
         self.bass_monitor_boost_chk.toggled.connect(self._on_bass_boost_toggled)
         monitor_bar.addWidget(self.bass_monitor_boost_chk)
 
@@ -324,28 +314,17 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.bass_boost_db_spin.setPrefix("+")
         self.bass_boost_db_spin.setSuffix(" dB")
         self.bass_boost_db_spin.setValue(float(BASS_MONITOR_BOOST_DB))
-        self.bass_boost_db_spin.setToolTip(
-            "自定义贝斯独听增益分贝数 (0.0 ~ +24.0 dB，默认 +12.0 dB)。\n"
-            "⚠️ 超过 +12 dB 时请注意耳机/音箱音量，避免过大声压损伤听力！"
-        )
         self.bass_boost_db_spin.valueChanged.connect(self._on_bass_boost_db_changed)
         monitor_bar.addWidget(self.bass_boost_db_spin)
 
         self.bass_boost_warn_lbl = QtWidgets.QLabel("⚠️ 高增益护耳警告")
         self.bass_boost_warn_lbl.setObjectName("statusBadge")
         set_widget_tone(self.bass_boost_warn_lbl, "warn")
-        self.bass_boost_warn_lbl.setToolTip(
-            "⚠️ 当前贝斯独听增益超过 +12 dB！虽然已内置 0.8 FS 软限幅防削波，但高电平仍可能损坏听力或冲击耳机，请先调低系统音量。"
-        )
         self.bass_boost_warn_lbl.setVisible(False)
         monitor_bar.addWidget(self.bass_boost_warn_lbl)
 
         self.bass_boost_export_chk = QtWidgets.QCheckBox("导出含独听增益")
         self.bass_boost_export_chk.setChecked(False)
-        self.bass_boost_export_chk.setToolTip(
-            "勾选后，当仅导出贝斯轨（贝斯独听状态）时，导出的混合 WAV 也会应用上述贝斯独听分贝增益与软限幅保护；\n"
-            "不勾选则导出原始未增益电平。"
-        )
         self.bass_boost_export_chk.toggled.connect(self.mixer_engine.set_apply_bass_boost_on_export)
         monitor_bar.addWidget(self.bass_boost_export_chk)
 
@@ -381,7 +360,6 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.clear_subloop_btn.clicked.connect(self._on_clear_subloop)
 
         self.metronome_chk = QtWidgets.QCheckBox("随播节拍器")
-        self.metronome_chk.setToolTip("与混音回放（含 0.5x–1.25x 变速练习）同步叠加纯 CPU 节拍器")
         self.metronome_chk.toggled.connect(self.metronome_overlay_toggled.emit)
 
         self.subloop_badge_lbl = QtWidgets.QLabel("循环范围: 全曲")
@@ -558,14 +536,12 @@ class StemMixerWidget(QtWidgets.QWidget):
             )
         )
         self.preview_drums_btn = QtWidgets.QPushButton("试听鼓点")
-        self.preview_drums_btn.setToolTip("从第一个检测到的鼓点开始，试听最多 8 秒合成鼓音。")
         self.preview_drums_btn.setEnabled(False)
         self.preview_drums_btn.clicked.connect(self.drum_preview_requested.emit)
         rhythm_header.addWidget(self.preview_drums_btn)
         self.export_drums_btn = QtWidgets.QPushButton("导出鼓点 MIDI")
         self.export_drums_btn.setObjectName("acidPrimaryBtn")
         self.export_drums_btn.setEnabled(False)
-        self.export_drums_btn.setToolTip("导出检测到的底鼓、军鼓和踩镲，保留原片段中的击打时间，可直接拖入 Cubase。")
         self.export_drums_btn.clicked.connect(self._on_export_drums_clicked)
         rhythm_header.addWidget(self.export_drums_btn)
         rhythm_layout.addLayout(rhythm_header)
@@ -934,7 +910,6 @@ class StemMixerWidget(QtWidgets.QWidget):
             else:
                 available = bool(names)
             button.setEnabled(available)
-            button.setToolTip("" if available else "当前分轨结果没有此预设需要的音轨")
 
     def _apply_preset(self, preset: str) -> None:
         self.mixer_engine.apply_preset(preset)

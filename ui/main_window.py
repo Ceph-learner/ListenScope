@@ -44,6 +44,7 @@ from .chroma_widget import ChromaAndHarmonyWidget
 from .help_badge import (
     HelpBadge,
     install_focus_animations,
+    install_tooltip_guard,
     set_focus_animations_enabled,
     set_help_language,
     set_help_mode_enabled,
@@ -322,7 +323,6 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         self.lbl_playback_health = QtWidgets.QLabel("输入跳段 0 次 | 输出溢出丢弃 0 帧 | 输出重缓冲 0 次 | 声卡报告欠载 0 次")
         self.lbl_playback_health.setObjectName("mutedCaption")
         self.lbl_playback_health.setWordWrap(True)
-        self.lbl_playback_health.setToolTip("同一次分轨内累计。输出溢出按来不及播放的帧统计，启动预缓冲不计入重缓冲，声卡欠载按驱动报告统计。")
         met_grid.addWidget(self.lbl_state, 0, 0, 1, 2)
         met_grid.addWidget(self.lbl_latency, 1, 0)
         met_grid.addWidget(self.lbl_rtf, 1, 1)
@@ -466,7 +466,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._initial_centered = False
 
         self._last_capture_status_txt = "未捕获"
-        self._last_capture_tooltip = ""
         self._last_coverage_txt = "已缓冲: 0.0 / 120.0 s"
         self._last_ai_badge_txt = "AI: Idle"
         self._hist_x_key: Optional[tuple[int, float, float]] = None
@@ -576,7 +575,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         self.emergency_stop_btn = QtWidgets.QPushButton("E-STOP // 紧急停止")
         self.emergency_stop_btn.setObjectName("emergencyStopBtn")
-        self.emergency_stop_btn.setToolTip("立即终止后台 AI 分轨子进程并清空 GPU/RAM 缓存")
         self.emergency_stop_btn.clicked.connect(self.emergency_stop_requested.emit)
 
         # Frameless Window Control Buttons (Minimize / Maximize-Restore / Close)
@@ -586,19 +584,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         win_ctrl_l.setSpacing(4)
         self.win_min_btn = QtWidgets.QPushButton("—")
         self.win_min_btn.setObjectName("windowCtrlBtn")
-        self.win_min_btn.setToolTip("最小化窗口")
+        self.win_min_btn.setAccessibleName("最小化窗口")
         self.win_min_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.win_min_btn.clicked.connect(self.showMinimized)
 
         self.win_max_btn = QtWidgets.QPushButton("□")
         self.win_max_btn.setObjectName("windowCtrlBtn")
-        self.win_max_btn.setToolTip("最大化 / 还原窗口")
+        self.win_max_btn.setAccessibleName("最大化 / 还原窗口")
         self.win_max_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.win_max_btn.clicked.connect(self._toggle_maximize_restore)
 
         self.win_close_btn = QtWidgets.QPushButton("×")
         self.win_close_btn.setObjectName("windowCloseBtn")
-        self.win_close_btn.setToolTip("关闭 ListenScope")
+        self.win_close_btn.setAccessibleName("关闭 ListenScope")
         self.win_close_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.win_close_btn.clicked.connect(self.close)
 
@@ -723,16 +721,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.apply_ab_btn.clicked.connect(self._on_apply_ab_clicked)
 
         self.ab_a_back_btn = QtWidgets.QPushButton("A-1s")
-        self.ab_a_back_btn.setToolTip("将 A 点提前 1 秒（区间起点向左扩展 1s）")
         self.ab_a_back_btn.clicked.connect(lambda: self._nudge_ab("a", -1.0))
         self.ab_a_fwd_btn = QtWidgets.QPushButton("A+1s")
-        self.ab_a_fwd_btn.setToolTip("将 A 点延后 1 秒（至少保留 0.5s 片段）")
         self.ab_a_fwd_btn.clicked.connect(lambda: self._nudge_ab("a", +1.0))
         self.ab_b_back_btn = QtWidgets.QPushButton("B-1s")
-        self.ab_b_back_btn.setToolTip("将 B 点提前 1 秒（至少保留 0.5s 片段）")
         self.ab_b_back_btn.clicked.connect(lambda: self._nudge_ab("b", -1.0))
         self.ab_b_fwd_btn = QtWidgets.QPushButton("B+1s")
-        self.ab_b_fwd_btn.setToolTip("将 B 点延后 1 秒（最晚至 0.0s 最新位置）")
         self.ab_b_fwd_btn.clicked.connect(lambda: self._nudge_ab("b", +1.0))
 
         row_a_transport = QtWidgets.QHBoxLayout()
@@ -741,21 +735,17 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
         self.ab_loop_chk = QtWidgets.QCheckBox("A/B 循环")
         self.ab_loop_chk.setChecked(True)
-        self.ab_loop_chk.setToolTip("关闭后 A/B 片段播完一次自动停在 B 点")
         self.ab_loop_chk.toggled.connect(self.ab_loop_toggled.emit)
 
         self.ab_speed_combo = QtWidgets.QComboBox()
         self.ab_speed_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.ab_speed_combo.setToolTip("A/B 历史片段不变调倍速回放 (纯 CPU WSOLA)")
         for lbl, spd in [("0.5x", 0.5), ("0.65x", 0.65), ("0.75x", 0.75), ("0.85x", 0.85), ("1.0x", 1.0), ("1.25x", 1.25)]:
             self.ab_speed_combo.addItem(lbl, spd)
         self.ab_speed_combo.setCurrentIndex(4)
         self.ab_speed_combo.currentIndexChanged.connect(self._on_ab_speed_changed)
 
         self.ab_export_wav_btn = QtWidgets.QPushButton("导出 A/B 片段 WAV")
-        self.ab_export_wav_btn.setToolTip("流式导出当前 A/B 片段 WAV（自动应用当前不变调倍速与随播节拍器）")
         self.import_audio_btn = QtWidgets.QPushButton("导入本地音频(<=120s)")
-        self.import_audio_btn.setToolTip("流式读取本地 WAV/FLAC/OGG 的前 <=120s 至历史环形缓冲（禁止全文件一次加载）")
         self.ab_play_btn.clicked.connect(self.ab_play_requested.emit)
         self.ab_stop_btn.clicked.connect(self.ab_stop_requested.emit)
         self.ab_export_wav_btn.clicked.connect(self._on_ab_export_clicked)
@@ -785,7 +775,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_a_transport.addWidget(self.ab_play_btn)
         row_a_transport.addWidget(self.ab_stop_btn)
         self.ab_snap_btn = QtWidgets.QPushButton("贴近零点")
-        self.ab_snap_btn.setToolTip("停止播放后，在 A/B 边界各 ±5 毫秒内寻找更接近零的样本，以减轻循环接缝声。")
         self.ab_snap_btn.clicked.connect(self.ab_snap_requested.emit)
         row_a_transport.addWidget(self.ab_snap_btn)
         row_a_transport.addWidget(
@@ -818,7 +807,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.history_overview_plot.setMouseEnabled(x=True, y=False)
         self.history_overview_plot.setMenuEnabled(False)
         self.history_overview_plot.hideButtons()
-        self.history_overview_plot.setToolTip("0 秒为最新。滚轮缩放横轴，拖动波形空白处平移，拖动 A/B 线调整选区。")
         self._history_view_timer = QtCore.QTimer(self)
         self._history_view_timer.setSingleShot(True)
         self._history_view_timer.setInterval(60)
@@ -849,7 +837,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         for text, label, factor in (("−", "缩小横轴", 1.6), ("+", "放大横轴", 0.625)):
             button = QtWidgets.QToolButton()
             button.setText(text)
-            button.setToolTip(label)
             button.setAccessibleName(label)
             button.clicked.connect(lambda _checked=False, factor=factor: self.zoom_history(factor))
             row_a_transport.addWidget(button)
@@ -904,11 +891,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.segment_spin.setValue(max(4, min(10, int(ai_config.demucs_default_segment_sec))))
         self.segment_spin.setPrefix("Demucs seg=")
         self.segment_spin.setSuffix("s")
-        self.segment_spin.setToolTip(
-            "HTDemucs 4-Stem 模型分段 (RTX 5060 Ti 实测默认 6s)；仅作用于 4-Stem HTDemucs。\n"
-            "离线流式分块长度 (long_audio_chunk_seconds，默认 6.0s) 在「设置」单独配置；"
-            "MDX 2-Stem 内部 segment_size=256 保持独立。"
-        )
 
         self.sep_2stem_btn = QtWidgets.QPushButton("AI 2-Stem 分轨 (人声/伴奏)")
         self.sep_2stem_btn.setObjectName("acidPrimaryBtn")
@@ -940,6 +922,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         main_layout.addWidget(self._acid_footer)
 
         self.center_on_screen()
+        install_tooltip_guard(self)
         self.apply_appearance(appearance, force_theme=True)
 
     def center_on_screen(self) -> None:
@@ -1441,14 +1424,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._hardware_report = report
         if report.gpu_ai_ready:
             self.ai_gpu_chk.setText("优先 GPU")
-            dev_name = report.pytorch.device_name or (report.gpus[0].name if report.gpus else "NVIDIA GPU")
-            self.ai_gpu_chk.setToolTip(f"GPU AI 已就绪：{dev_name} (CUDA={report.pytorch.cuda_build}, ONNX CUDA=OK)")
         else:
             self.ai_gpu_chk.setText("优先 GPU（未就绪）")
-            reason = report.gpu_ai_block_reason or "未通过 CUDA/ONNX 检查"
-            self.ai_gpu_chk.setToolTip(
-                f"GPU AI 当前受阻：{reason}\n请在「设置 / 系统状态」中配置并验证独立 AI Worker 环境。"
-            )
         if auto_sync_gpu_chk:
             self.ai_gpu_chk.setChecked(bool(report.gpu_ai_ready))
 
@@ -1697,9 +1674,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             set_widget_tone(self.capture_status_lbl, "info")
             _set_label_cached(self.capture_status_lbl, "未捕获")
             self._last_capture_status_txt = "未捕获"
-            if self._last_capture_tooltip:
-                self.capture_status_lbl.setToolTip("")
-                self._last_capture_tooltip = ""
 
     def show_banner_message(self, text: str, *, tone: Optional[str] = None) -> None:
         if not text:
@@ -1731,13 +1705,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if status_txt != self._last_capture_status_txt:
             self.capture_status_lbl.setText(status_txt)
             self._last_capture_status_txt = status_txt
-        tip = (
-            f"{prefix}{stats.mode.value} | {stats.process_name} | RMS {stats.rms_dbfs:.1f} dBFS [{silence}] | "
-            f"Drop(Over)={stats.buffer_overruns} Under={stats.buffer_underruns}"
-        )
-        if tip != self._last_capture_tooltip:
-            self.capture_status_lbl.setToolTip(tip)
-            self._last_capture_tooltip = tip
         cov_txt = f"已缓冲: {ring_available_sec:.1f} / 120.0 s"
         if cov_txt != self._last_coverage_txt:
             self.history_coverage_lbl.setText(cov_txt)
