@@ -801,16 +801,23 @@ def test_home_feedback_i18n_bass_boost_export_singleline_chords_pytorch_scan_and
         w.move(80, 60)
         app.processEvents()
         geom_before = w.geometry()
+        assert geom_before.width() == 1360 and geom_before.height() == 860
         w.apply_appearance(replace(w.appearance, language="en"))
         app.processEvents()
         assert w.geometry() == geom_before
         assert w.capture_btn.text() == "CAPTURE_START"
         assert w.tabs.tabText(0) == "// 01 SPECTRUM"
         w.apply_appearance(replace(w.appearance, language="ko"))
+        app.processEvents()
+        assert w.geometry() == geom_before
         assert "캡처 시작" in w.capture_btn.text()
         w.apply_appearance(replace(w.appearance, language="ja"))
+        app.processEvents()
+        assert w.geometry() == geom_before
         assert "キャプチャ開始" in w.capture_btn.text()
         w.apply_appearance(replace(w.appearance, language="zh"))
+        app.processEvents()
+        assert w.geometry() == geom_before
         assert w.capture_btn.text() == "CAPTURE_START // 开始捕获"
     finally:
         controller.shutdown()

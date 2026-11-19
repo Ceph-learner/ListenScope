@@ -432,7 +432,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         self._track_scroll = scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(115)
+        scroll.setMinimumHeight(84)
         self._tracks_container = QtWidgets.QWidget()
         self._tracks_layout = QtWidgets.QVBoxLayout(self._tracks_container)
         self._tracks_layout.setSpacing(6)
@@ -441,7 +441,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         splitter.addWidget(scroll)
 
         self.analysis_tabs = QtWidgets.QTabWidget()
-        self.analysis_tabs.setMinimumHeight(212)
+        self.analysis_tabs.setMinimumHeight(140)
 
         # Sub-tab 1: Deep Stem Arrangement & Chord Progression Timeline (non-destructive CPU analysis)
         deep_tab = QtWidgets.QWidget()

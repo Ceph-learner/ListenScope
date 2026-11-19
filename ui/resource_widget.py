@@ -41,7 +41,7 @@ class ResourceMonitorBar(QtWidgets.QWidget):
         self.status_badge.setObjectName("statusBadge")
         set_widget_tone(self.status_badge, "normal")
         for w in (self.ram_label, self.vram_label, self.status_badge):
-            w.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Preferred)
+            w.setSizePolicy(QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Preferred)
 
         layout.addWidget(self.ram_label)
         layout.addWidget(self.vram_label)
@@ -51,17 +51,26 @@ class ResourceMonitorBar(QtWidgets.QWidget):
         if self._cached_texts.get(key) != text:
             self._cached_texts[key] = text
             lbl.setText(text)
+            lbl.adjustSize()
+            lbl.updateGeometry()
+            lay = self.layout()
+            if lay is not None:
+                lay.activate()
+            self.updateGeometry()
+            parent = self.parentWidget()
+            if parent is not None and parent.layout() is not None:
+                parent.layout().activate()
 
     def update_snapshot(self, snap: ResourceSnapshot) -> None:
         if snap.ai_worker_ram_mb >= 1.0:
-            ram_txt = f"主={snap.main_ram_mb:.0f}M | AI={snap.ai_worker_ram_mb:.0f}M | 余={snap.system_ram_available_mb:.0f}M"
+            ram_txt = f"RAM {snap.main_ram_mb:.0f}M | AI {snap.ai_worker_ram_mb:.0f}M | Free {snap.system_ram_available_mb:.0f}M"
         else:
-            ram_txt = f"主={snap.main_ram_mb:.0f}MB | 可用={snap.system_ram_available_mb:.0f}MB"
+            ram_txt = f"RAM {snap.main_ram_mb:.0f}M | Free {snap.system_ram_available_mb:.0f}M"
         self._set_text_if_changed("ram", self.ram_label, ram_txt)
         vram_txt = (
             f"VRAM {snap.vram_free_mb:.0f}/{snap.vram_total_mb:.0f}M"
             if snap.vram_total_mb is not None and snap.vram_free_mb is not None
-            else "VRAM: 无GPU"
+            else "VRAM N/A"
         )
         self._set_text_if_changed("vram", self.vram_label, vram_txt)
         self._set_text_if_changed("status", self.status_badge, snap.status.value)
@@ -100,6 +109,8 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         # Telemetry grid card
         grid_group = QtWidgets.QGroupBox("MEMORY + VRAM GRID // 实时资源监控 (主 RAM / AI RAM / RTX 5060 Ti 8GB VRAM)")
         grid = QtWidgets.QGridLayout(grid_group)
+        grid.setContentsMargins(8, 6, 8, 6)
+        grid.setVerticalSpacing(4)
 
         self._fields: dict[str, QtWidgets.QLabel] = {}
         specs = [
@@ -124,6 +135,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
             else:
                 val_lbl.setObjectName("monoTelemetry")
             cell = QtWidgets.QHBoxLayout()
+            cell.setContentsMargins(6, 2, 6, 2)
             cell.addWidget(title_lbl)
             cell.addWidget(val_lbl, 1)
             holder = QtWidgets.QWidget()
@@ -140,18 +152,25 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         # Performance log table
         perf_group = QtWidgets.QGroupBox("PERFORMANCE LEDGER // 本地 AI 性能记录 (logs/performance/)")
         perf_layout = QtWidgets.QVBoxLayout(perf_group)
+        perf_layout.setContentsMargins(6, 4, 6, 4)
         self.perf_table = QtWidgets.QTableWidget(0, 9)
         self.perf_table.setHorizontalHeaderLabels(
             ["时间(UTC)", "模型", "设备", "输入(s)", "分段(s)", "峰值RAM(MB)", "峰值VRAM(MB)", "RTF", "状态"]
         )
         self.perf_table.horizontalHeader().setStretchLastSection(True)
         self.perf_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.perf_table.setMinimumHeight(48)
+        self.perf_table.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Ignored,
+        )
         perf_layout.addWidget(self.perf_table)
         root.addWidget(perf_group, 2)
 
         # Bounded diagnostic log viewer + one-click ZIP bundle export
         log_group = QtWidgets.QGroupBox("BOUNDED DIAGNOSTIC LOG // 有界运行日志 (仅保留最近 500 条)")
         log_layout = QtWidgets.QVBoxLayout(log_group)
+        log_layout.setContentsMargins(6, 4, 6, 4)
         diag_bar = QtWidgets.QHBoxLayout()
         diag_note = QtWidgets.QLabel("日志与性能摘要严格有界；如在 Windows 遇到 CUDA/WASAPI 故障可一键导出脱敏诊断包：")
         diag_note.setObjectName("mutedCaption")
@@ -166,6 +185,11 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         self.log_text.setObjectName("diagnosticLogStream")
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumBlockCount(500)
+        self.log_text.setMinimumHeight(40)
+        self.log_text.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Ignored,
+        )
         log_layout.addWidget(self.log_text)
         root.addWidget(log_group, 1)
 

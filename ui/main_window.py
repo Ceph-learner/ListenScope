@@ -292,6 +292,8 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         # Balance sliders
         bal_box = QtWidgets.QGroupBox("MIX BALANCE // 实时人声与伴奏混音比例")
         bal_form = QtWidgets.QFormLayout(bal_box)
+        bal_form.setContentsMargins(8, 5, 8, 5)
+        bal_form.setVerticalSpacing(4)
         self.vocals_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.vocals_slider.setRange(0, 150)
         self.vocals_slider.setValue(100)
@@ -307,6 +309,8 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         # Telemetry metrics
         met_box = QtWidgets.QGroupBox("STREAM TELEMETRY // 实时分轨监控指标")
         met_grid = QtWidgets.QGridLayout(met_box)
+        met_grid.setContentsMargins(8, 5, 8, 5)
+        met_grid.setVerticalSpacing(3)
         self.lbl_state = QtWidgets.QLabel("状态: 已关闭 (默认关闭)")
         self.lbl_latency = QtWidgets.QLabel("延迟: 0.0 ms")
         self.lbl_rtf = QtWidgets.QLabel("RTF: 0.000")
@@ -485,16 +489,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self._shell_frame)
         main_layout = QtWidgets.QVBoxLayout(self._shell_frame)
         self._workspace_layout = main_layout
-        main_layout.setContentsMargins(10, 8, 10, 10)
-        main_layout.setSpacing(7)
+        main_layout.setContentsMargins(8, 6, 8, 6)
+        main_layout.setSpacing(5)
 
         # 1. TWO-TIER COMMAND HEADER: Brand Badge + Telemetry + Segmented Skin Switcher + Audio Input + Hazard/Emergency Stop + Window Controls
         self._topbar_frame = topbar_frame = QtWidgets.QFrame()
         topbar_frame.setObjectName("acidTopbar")
         topbar_frame.installEventFilter(self)
         topbar_v = QtWidgets.QVBoxLayout(topbar_frame)
-        topbar_v.setContentsMargins(10, 6, 10, 6)
-        topbar_v.setSpacing(5)
+        topbar_v.setContentsMargins(10, 4, 10, 4)
+        topbar_v.setSpacing(4)
 
         row_cmd = QtWidgets.QHBoxLayout()
         row_cmd.setContentsMargins(0, 0, 0, 0)
@@ -506,26 +510,41 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         brand_txt.setSpacing(0)
         self._brand_eye = QtWidgets.QLabel("LISTENSCOPE // AUDIO TELEMETRY")
         self._brand_eye.setObjectName("telemetryEyebrow")
+        self._brand_eye.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         brand_title_row = QtWidgets.QHBoxLayout()
         brand_title_row.setContentsMargins(0, 0, 0, 0)
         brand_title_row.setSpacing(6)
         self._brand_title = QtWidgets.QLabel("实时音频分析与吉他扒谱工作台")
         self._brand_title.setObjectName("telemetryTitle")
+        self._brand_title.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self._acid_hero_echo_lbl = QtWidgets.QLabel("WORKBENCH")
         self._acid_hero_echo_lbl.setObjectName("acidEchoTitle")
+        self._acid_hero_echo_lbl.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self._acid_hero_echo_lbl.setVisible(False)
         self._acid_hero_sub_lbl = QtWidgets.QLabel("实时频谱 · 120s 分轨终端")
         self._acid_hero_sub_lbl.setObjectName("acidHeroSub")
+        self._acid_hero_sub_lbl.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self._acid_hero_sub_lbl.setVisible(False)
         brand_title_row.addWidget(self._brand_title)
         brand_title_row.addWidget(self._acid_hero_echo_lbl)
-        brand_title_row.addWidget(self._acid_hero_sub_lbl)
+        brand_title_row.addWidget(self._acid_hero_sub_lbl, 1)
         brand_txt.addWidget(self._brand_eye)
         brand_txt.addLayout(brand_title_row)
 
         row_cmd.addWidget(self._brand_badge)
-        row_cmd.addLayout(brand_txt)
-        row_cmd.addStretch(1)
+        row_cmd.addLayout(brand_txt, 1)
 
         self.resource_bar = ResourceMonitorBar()
         self.ai_status_badge = QtWidgets.QLabel("AI: Idle")
@@ -539,8 +558,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         skin_l.setSpacing(2)
         self._skin_group = QtWidgets.QButtonGroup(self)
         self._skin_group.setExclusive(True)
-        self._pill_dark = QtWidgets.QPushButton("ACID && VOID // 黑夜")
-        self._pill_light = QtWidgets.QPushButton("CLINICAL_LIGHT // 白天")
+        self._pill_dark = QtWidgets.QPushButton("VOID // 黑夜")
+        self._pill_light = QtWidgets.QPushButton("LIGHT // 白天")
         for btn, skin_key in ((self._pill_dark, "acid_dark"), (self._pill_light, "acid_light")):
             btn.setObjectName("acidPillBtn")
             btn.setCheckable(True)
@@ -549,13 +568,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             skin_l.addWidget(btn)
         self._pill_light.setChecked(True)
 
-        self.settings_btn = QtWidgets.QPushButton("SYS // CONFIG · 设置")
+        self.settings_btn = QtWidgets.QPushButton("CONFIG // 设置")
         self.settings_btn.clicked.connect(self.open_settings_dialog)
 
         self._hazard_bar = HazardStripeBar()
         self._hazard_bar.setVisible(False)
 
-        self.emergency_stop_btn = QtWidgets.QPushButton("E-STOP // 紧急停止 AI")
+        self.emergency_stop_btn = QtWidgets.QPushButton("E-STOP // 紧急停止")
         self.emergency_stop_btn.setObjectName("emergencyStopBtn")
         self.emergency_stop_btn.setToolTip("立即终止后台 AI 分轨子进程并清空 GPU/RAM 缓存")
         self.emergency_stop_btn.clicked.connect(self.emergency_stop_requested.emit)
@@ -607,7 +626,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._src_pill = QtWidgets.QLabel("AUDIO_IN // 音源")
         self._src_pill.setObjectName("telemetryPill")
         self.source_combo = QtWidgets.QComboBox()
-        self.source_combo.setMinimumWidth(260)
+        self.source_combo.setMinimumWidth(200)
         self.source_combo.setMaximumWidth(400)
         self.source_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -675,7 +694,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         # 3. BOTTOM 120s HISTORY TIMELINE + A/B LOOP + AI TRIGGER BAR
         self._history_box = bottom_box = QtWidgets.QGroupBox("RING BUFFER // 120秒历史缓冲与 A/B 片段 (~46MB) + AI 离线分轨")
         bottom_l = QtWidgets.QVBoxLayout(bottom_box)
-        bottom_l.setSpacing(5)
+        bottom_l.setContentsMargins(8, 5, 8, 5)
+        bottom_l.setSpacing(4)
 
         row_a = QtWidgets.QHBoxLayout()
         self.history_coverage_lbl = QtWidgets.QLabel("已缓冲: 0.0 / 120.0 s")
@@ -832,10 +852,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             button.setToolTip(label)
             button.setAccessibleName(label)
             button.clicked.connect(lambda _checked=False, factor=factor: self.zoom_history(factor))
-            row_a.addWidget(button)
+            row_a_transport.addWidget(button)
         self.history_reset = QtWidgets.QPushButton("120 秒总览")
         self.history_reset.clicked.connect(lambda: self.history_overview_plot.setXRange(-120, 0, padding=0))
-        row_a.addWidget(self.history_reset)
+        row_a_transport.addWidget(self.history_reset)
 
         bookmark_row = QtWidgets.QHBoxLayout()
         bookmark_row.addWidget(QtWidgets.QLabel("A/B 书签(<=12):"))
@@ -847,7 +867,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.bookmark_save_btn.clicked.connect(self._on_bookmark_save_clicked)
 
         self.bookmark_combo = QtWidgets.QComboBox()
-        self.bookmark_combo.setMinimumWidth(260)
+        self.bookmark_combo.setMinimumWidth(180)
         self.bookmark_jump_btn = QtWidgets.QPushButton("跳转此书签")
         self.bookmark_jump_btn.setEnabled(False)
         self.bookmark_jump_btn.clicked.connect(self._on_bookmark_jump_clicked)
@@ -870,7 +890,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         row_b = QtWidgets.QHBoxLayout()
         self.ai_2stem_combo = QtWidgets.QComboBox()
-        self.ai_2stem_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.ai_2stem_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.ai_2stem_combo.setMinimumContentsLength(18)
+        self.ai_2stem_combo.setMaximumWidth(300)
         self._refresh_model_combos()
         self.ai_gpu_chk = QtWidgets.QCheckBox("优先 GPU (需通过 RTX 5060 Ti 检查)")
         self.update_hardware_report(hardware_report, auto_sync_gpu_chk=True)
@@ -1108,16 +1132,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._acid_hero_echo_lbl.setVisible(True)
             self._acid_hero_sub_lbl.setVisible(True)
             self._acid_hero_sub_lbl.setText(
-                tr_telemetry("WORKBENCH", lang, zh="实时频谱 · 120s 分轨终端", ko="실시간 스펙트럼 · 120s 분리 터미널", ja="リアルタイムスペクトル · 120s 分離端末")
-                if lang != "en"
-                else "REALTIME SPECTRUM · 120S STEM TERMINAL"
+                {
+                    "zh": "实时频谱 · 120s 分轨终端",
+                    "en": "REALTIME SPECTRUM · 120S STEM TERMINAL",
+                    "ko": "실시간 스펙트럼 · 120s 분리 터미널",
+                    "ja": "リアルタイムスペクトル · 120s 分離端末",
+                }.get(lang, "实时频谱 · 120s 分轨终端")
             )
             self._src_pill.setText(tr_telemetry("AUDIO_IN", lang, zh="音源", ko="오디오 입력", ja="音声入力"))
-            self._shortcut_pill.setText(tr_telemetry("CTRL+SPACE // TRANSPORT", lang, zh="播放控制", ko="재생 제어", ja="再生制御"))
-            self._pill_dark.setText(tr_telemetry("ACID && VOID", lang, zh="黑夜", ko="다크", ja="ダーク"))
-            self._pill_light.setText(tr_telemetry("CLINICAL_LIGHT", lang, zh="白天", ko="라이트", ja="ライト"))
-            self.settings_btn.setText(tr_telemetry("SYS // CONFIG", lang, zh="设置", ko="설정", ja="設定"))
-            self.emergency_stop_btn.setText(tr_telemetry("E-STOP // AI", lang, zh="紧急停止", ko="긴급 정지", ja="緊急停止"))
+            self._shortcut_pill.setText(tr_telemetry("CTRL+SPACE", lang, zh="播放控制", ko="재생 제어", ja="再生制御"))
+            self._pill_dark.setText(tr_telemetry("VOID", lang, zh="黑夜", ko="다크", ja="ダーク"))
+            self._pill_light.setText(tr_telemetry("LIGHT", lang, zh="白天", ko="라이트", ja="ライト"))
+            self.settings_btn.setText(tr_telemetry("CONFIG", lang, zh="设置", ko="설정", ja="設定"))
+            self.emergency_stop_btn.setText(tr_telemetry("E-STOP", lang, zh="紧急停止", ko="긴급 정지", ja="緊急停止"))
             self._history_box.setTitle(
                 tr_telemetry(
                     "RING BUFFER // 120S HISTORY · A/B LOOP + AI DISPATCH (~46MB)",
