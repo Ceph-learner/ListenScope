@@ -24,11 +24,12 @@ from analysis.chord_practice import (
 from analysis.chords import transpose_chord_symbol, transpose_key_label
 from audio.drum_preview import DrumPreviewPlayer
 from core.appearance import Appearance
+from core.i18n import get_current_language, translate_widget_tree
 from core.models import KeyEstimate
 from core.paths import default_export_dir
 from ui.acid_style import TelemetryHeader, acid_stylesheet
 from ui.appearance import set_widget_tone
-from ui.help_badge import HelpBadge
+from ui.help_badge import HelpBadge, install_focus_animations
 
 
 class _PracticeTableDelegate(QtWidgets.QStyledItemDelegate):
@@ -103,8 +104,19 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         )
         snap_note = QtWidgets.QLabel("SNAPSHOT_ONLY")
         snap_note.setObjectName("chromaCaption")
-        snap_note.setToolTip("仅参考打开「练习和弦」对话框时采集到的最近和弦与调性快照")
+        snap_note.setToolTip("仅参考打开「练习和弦」对话框时采集到的最近和弦与调性快照 (SNAPSHOT_ONLY // 静态快照参考)")
         self._snap_header.add_right_widget(snap_note)
+        self._snap_header.add_right_widget(
+            HelpBadge(
+                "原曲快照参考 (SNAPSHOT_ONLY) 与和弦练习怎么用？",
+                "• <b>什么是原曲快照 (SNAPSHOT_ONLY)</b>：打开本窗口时，系统会将刚才实时识别到的「原曲调性」、「检测 BPM」与「最近和弦走向」冻结在此卡片中，防止后台播放切歌或杂音打乱你的练习界面。<br/>"
+                "• <b>4 步跟练用法</b>：<br/>"
+                "  1. <b>确认练习调</b>：若原曲调性稳定会自动预选；若开启了 Capo 变调夹，会智能换算为你的乐器指型调。<br/>"
+                "  2. <b>看懂「最近和弦匹配 (N 步)」</b>：下表第三列显示该经典套路与原曲最近和弦连续吻合的步数（例如 <code>3 步</code> 代表该套路前 3 个和弦与原曲刚才弹奏的完全一致；<code>通用练习</code> 代表该调下的经典常用走向）。<br/>"
+                "  3. <b>本地试听进行</b>：点选任意一行，设置舒适的练习 BPM，点击「试听进行」即可在本地合成钢琴/电钢柱式和弦跟弹。<br/>"
+                "  4. <b>导出 Cubase 标准 MIDI</b>：点击「导出进行 MIDI」可将真实发声和弦导出为 <code>.mid</code> 文件拖入宿主编曲。",
+            )
+        )
         snap_layout.addWidget(self._snap_header)
 
         key_text = (
@@ -159,6 +171,11 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         self._bpm.setAccessibleName("练习速度 BPM")
         self._bpm.setToolTip("设置试听进行与导出 MIDI 的速度 (BPM)")
         bpm_lbl.setBuddy(self._bpm)
+        bpm_help = HelpBadge(
+            "练习速度与匹配步数说明",
+            "• <b>练习速度 (BPM)</b>：默认每个和弦占 4 拍（1 小节），调节 BPM 会实时改变本地试听与导出 MIDI 的快慢。<br/>"
+            "• <b>最近和弦匹配（N 步 / 通用练习）</b>：将原曲最近识别到的和弦序列与当前调的常用套路做前缀连续比对。匹配步数越高（如 <code>3 步</code>、<code>4 步</code>），说明原曲当前段落越可能采用了该和弦套路，系统会自动将其排在表格最上方！",
+        )
 
         self._status = QtWidgets.QLabel()
         self._status.setObjectName("practicePill")
@@ -169,6 +186,7 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         controls.addWidget(key_help)
         controls.addWidget(bpm_lbl)
         controls.addWidget(self._bpm)
+        controls.addWidget(bpm_help)
         controls.addWidget(self._status, 1)
         root.addLayout(controls)
 
@@ -249,6 +267,8 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         self._results.currentCellChanged.connect(self._on_selection_changed)
         self.finished.connect(self._on_dialog_finished)
         self._refresh()
+        install_focus_animations(self)
+        translate_widget_tree(self, get_current_language())
 
     def _set_feedback(self, text: str, tone: str = "info") -> None:
         self._feedback_lbl.setText(text)

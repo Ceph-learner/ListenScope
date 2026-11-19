@@ -240,11 +240,14 @@ def test_theme_modes_font_scanning_live_preview_and_system_follow(tmp_path: Path
     assert isinstance(families, tuple)
 
     # Core appearance theme_mode resolution
+    assert Appearance().preset == "acid_telemetry"
+    assert Appearance().theme_mode == "light"
     assert Appearance(theme_mode="dark").resolve_theme_mode(system_is_dark=False) == "dark"
     assert Appearance(theme_mode="light").resolve_theme_mode(system_is_dark=True) == "light"
     assert Appearance(theme_mode="system").resolve_theme_mode(system_is_dark=False) == "light"
     assert Appearance(theme_mode="system").resolve_theme_mode(system_is_dark=True) == "dark"
-    assert Appearance(theme_mode="light").effective_colors()[0] == "#F4F6FA"
+    assert Appearance(preset="classic", theme_mode="light").effective_colors()[0] == "#F4F6FA"
+    assert Appearance(preset="acid_telemetry", theme_mode="light").effective_colors()[0] == "#EEF2F6"
 
     # Dialog live preview, Restore Defaults, and safe Cancel revert
     initial = Appearance(preset="classic", theme_mode="dark", font_size=12, layout="split")
@@ -301,13 +304,18 @@ def test_help_badge_tuning_bar_and_turnkey_discovery(tmp_path: Path, monkeypatch
     shown_tips: list[str] = []
     monkeypatch.setattr(QtWidgets.QToolTip, "showText", lambda _pos, text, *_a: shown_tips.append(text))
 
+    from ui.help_badge import _get_popover
+
     lbl = QtWidgets.QLabel("示例")
     holder, badge = wrap_with_help(lbl, "复杂功能说明", "详细操作指导内容")
     assert isinstance(badge, HelpBadge)
     assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.TabFocus
     assert "复杂功能说明" in badge.toolTip()
     badge.click()
-    assert shown_tips and "详细操作指导内容" in shown_tips[-1]
+    pop = _get_popover()
+    assert pop.isVisible()
+    assert "详细操作指导内容" in pop._body_lbl.text()
+    pop.hide()
     holder.close()
 
     bar = TuningCentsBar()
@@ -370,16 +378,21 @@ def test_settings_dialog_turnkey_storage_and_help_badges():
         probe_system(),
         ResourceLimits(),
         AIConfig(),
-        appearance=Appearance(theme_mode="system", font_size=14, font_family="Sans Serif"),
+        appearance=Appearance(preset="classic", theme_mode="system", font_size=14, font_family="Sans Serif"),
     )
     try:
         dlg.open_category("appearance")
         assert "跟随系统" in dlg._theme_summary.text()
         assert "14 px" in dlg._font_summary.text()
+        assert hasattr(dlg, "open_repo_btn")
+        assert hasattr(dlg, "open_issues_btn")
+        assert hasattr(dlg, "copy_repo_url_btn")
         dlg.open_category("midi")
         assert dlg.setup_all_btn.isEnabled()
         assert dlg.setup_midi_only_btn.isEnabled()
-        assert len(dlg.findChildren(HelpBadge)) >= 3
+        assert dlg.scan_pytorch_btn.isEnabled()
+        assert dlg.open_pytorch_url_btn.isEnabled()
+        assert len(dlg.findChildren(HelpBadge)) >= 8
         assert dlg.findChildren(QtWidgets.QGraphicsEffect) == []
     finally:
         dlg.close()
@@ -417,16 +430,33 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
     assert m_light.effective_colors() == ("#EEF2F6", "#090D14", "#00A878")
     assert m_sys.effective_colors(system_is_dark=False) == ("#EEF2F6", "#090D14", "#00A878")
 
+    # Acid Telemetry locks font_family, custom colors, and background_image while allowing font_size
+    m_locked = Appearance.from_mapping({
+        "preset": "acid_telemetry",
+        "theme_mode": "light",
+        "font_size": 16,
+        "font_family": "Comic Sans MS",
+        "background": "#123456",
+        "text": "#654321",
+        "accent": "#FF00FF",
+        "background_image": "/tmp/custom_bg.png",
+    })
+    assert m_locked.font_size == 16
+    assert m_locked.font_family == ""
+    assert m_locked.background == ""
+    assert m_locked.text == ""
+    assert m_locked.accent == ""
+    assert m_locked.background_image == ""
     assert is_acid_eligible(m_dark) is True
     assert is_acid_eligible(Appearance(preset="classic")) is False
-    assert is_acid_eligible(Appearance(preset="acid_telemetry", accent="#123456")) is False
+    assert is_acid_eligible(Appearance(preset="acid_telemetry", accent="#123456")) is True
     assert resolve_acid_variant(m_dark) == "dark"
     assert resolve_acid_variant(m_light) == "light"
     assert resolve_acid_variant(m_sys, system_is_dark=False) == "light"
     assert resolve_acid_variant(m_sys, system_is_dark=True) == "dark"
     assert resolve_acid_variant(Appearance(preset="lenso")) is None
 
-    # 2. AppearanceDialog lists Acid Telemetry preset, renders Acid sample CSS, and cancels cleanly
+    # 2. AppearanceDialog lists Acid Telemetry preset, locks font/color/bg controls in Acid mode, unlocks in Lenso, and cancels cleanly
     previews: list[Appearance] = []
     initial = Appearance(preset="classic", theme_mode="dark")
     dlg = AppearanceDialog(initial, DARK_STYLESHEET, on_preview=previews.append, system_is_dark=True)
@@ -434,8 +464,20 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
     assert acid_btn.text() == "酸性遥测"
     acid_btn.click()
     assert dlg.values().preset == "acid_telemetry"
+    assert dlg._font.isEnabled() is True
+    assert dlg._font_family.isEnabled() is False
+    assert all(not edit.isEnabled() for edit in dlg._colors.values())
+    assert dlg._bg_image_edit.isEnabled() is False
+    assert dlg._acid_lock_banner.isHidden() is False
     assert "#0B0D0F" in dlg._sample.styleSheet()
     assert "#CEFF18" in dlg._sample.styleSheet()
+    # Switch to Lenso unlocks font family, colors, and background image
+    lenso_btn = next(b for b in dlg._presets.buttons() if b.property("preset") == "lenso")
+    lenso_btn.click()
+    assert dlg._font_family.isEnabled() is True
+    assert all(edit.isEnabled() for edit in dlg._colors.values())
+    assert dlg._bg_image_edit.isEnabled() is True
+    assert dlg._acid_lock_banner.isHidden() is True
     dlg.done(QtWidgets.QDialog.DialogCode.Rejected)
     assert previews[-1] == initial
 
@@ -480,28 +522,13 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         app.setFont(orig_app_font)
         app.processEvents()
 
-    # 4. Full MainWindow + Controller integration: Classic -> Clinical Light -> Topbar Acid Dark -> Static Lock -> Follow System -> Lenso
+    # 4. Full MainWindow + Controller integration: Default Clinical Light -> Topbar Acid Dark -> Static Lock -> Follow System -> Lenso
     controller = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path)
     try:
         w = controller.window
-        assert w._acid_variant is None
-        assert w._skin_switcher.isVisible() is False
-        assert w._hazard_bar.isVisible() is False
-        assert w._acid_footer.isVisible() is False
-        assert w.chroma_widget.chord_echo_lbl.isVisible() is False
-        assert w._history_box.objectName() == ""
-        assert w._skin_badge.text() == "THEME // CLASSIC"
-
-        # Accept Clinical Light via AppearanceDialog
-        class FakeAcidLightDialog(AppearanceDialog):
-            def exec(self) -> int:  # type: ignore[override]
-                next(b for b in self._presets.buttons() if b.property("preset") == "acid_telemetry").click()
-                self._theme_mode_buttons["light"].click()
-                return QtWidgets.QDialog.DialogCode.Accepted
-
-        monkeypatch.setattr("ui.main_window.AppearanceDialog", FakeAcidLightDialog)
-        w.open_appearance_dialog()
-
+        # Default startup theme is now Acid Telemetry Clinical Light!
+        assert w.appearance.preset == "acid_telemetry"
+        assert w.appearance.theme_mode == "light"
         assert w._acid_variant == "light"
         assert w._skin_switcher.isHidden() is False
         assert w._hazard_bar.isHidden() is False
@@ -510,9 +537,6 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w._pill_dark.isChecked() is False
         assert w._skin_badge.text() == "ACID // CLINICAL_LIGHT"
         assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#F8FAFC"
-        saved = load_settings(controller._settings_path).appearance
-        assert saved.preset == "acid_telemetry"
-        assert saved.theme_mode == "light"
 
         # Topbar quick switch pill flips to Acid & Void v2 Dark with Clinical Paper Dock and persists theme_mode="dark"
         w._pill_dark.click()
@@ -521,8 +545,8 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w._skin_badge.text() == "ACID // VOID_V2"
         assert w._history_box.objectName() == "historyPaperDock"
         assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#F4F5F2"
-        assert w.tabs.tabText(0) == "// 01 SPECTRUM"
-        assert w.tabs.tabText(1) == "// 02 CHROMA & HARMONY"
+        assert "// 01 SPECTRUM" in w.tabs.tabText(0)
+        assert "// 02 CHROMA & HARMONY" in w.tabs.tabText(1).replace("&&", "&")
         assert w.chroma_widget.chord_echo_lbl.isHidden() is False
         assert all(dm.isHidden() is False for dm in w.chroma_widget.findChildren(DotMatrixWidget))
         assert all(ov.isHidden() is False for ov in w.chroma_widget.findChildren(AcidGraphicOverlay))
@@ -584,7 +608,7 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w._acid_variant == "light"
         assert w._pill_light.isChecked() is True
 
-        # Switch back to Lenso Light cleanly hides topbar switcher/chrome & restores classic Chinese tabs & plots
+        # Switch back to Lenso Light cleanly hides topbar switcher/chrome & restores classic tabs & plots
         w.apply_appearance(Appearance(preset="lenso", theme_mode="light"))
         assert w._acid_variant is None
         assert w._skin_switcher.isVisible() is False
@@ -633,7 +657,7 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
     assert "acid_check_dark.svg" in qss_dark
 
     # Classic stylesheet must stay completely untouched by Acid-only chevron SVGs
-    classic_qss = appearance_stylesheet(DARK_STYLESHEET, Appearance())
+    classic_qss = appearance_stylesheet(DARK_STYLESHEET, Appearance(preset="classic", theme_mode="dark"))
     assert "acid_chevron_" not in classic_qss
 
     root = Path(__file__).resolve().parent.parent
@@ -645,8 +669,18 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         "acid_chevron_down_dark.svg",
         "acid_chevron_up_light.svg",
         "acid_chevron_up_dark.svg",
+        "listenscope.svg",
+        "listenscope.ico",
     ):
         assert (root / "ui" / "assets" / svg_name).is_file()
+    for svg_name in (
+        "acid_check_dark.svg",
+        "acid_check_light.svg",
+        "acid_chevron_down_light.svg",
+        "acid_chevron_down_dark.svg",
+        "acid_chevron_up_light.svg",
+        "acid_chevron_up_dark.svg",
+    ):
         assert svg_name in spec_txt
 
     forbidden = re.compile(r"marathon|nucaloric|\bm5\b|马拉松", re.IGNORECASE)
@@ -654,3 +688,375 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert not forbidden.search(py_file.read_text(encoding="utf-8")), f"Unexpected legacy term in {py_file.name}"
     for doc_file in [root / "README.md", root / "DESIGN.md", *sorted((root / "docs").glob("*.md"))]:
         assert not forbidden.search(doc_file.read_text(encoding="utf-8")), f"Unexpected legacy term in {doc_file.name}"
+
+
+def test_home_feedback_i18n_bass_boost_export_singleline_chords_pytorch_scan_and_frameless(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    from types import SimpleNamespace
+    from core.i18n import LANGUAGES, tr_telemetry, translate_text
+    from core.models import AnalysisSnapshot, ChordEstimate, KeyEstimate, PitchEstimate, TempoEstimate
+    from core.system_probe import (
+        PYTORCH_CU128_INDEX_URL,
+        PYTORCH_OFFICIAL_URL,
+        scan_local_pytorch_installations,
+    )
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    # 1. 4-language support (zh/en/ko/ja) without duplicate English in en mode
+    assert tuple(LANGUAGES.keys()) == ("zh", "en", "ko", "ja")
+    assert tr_telemetry("CAPTURE_START", "开始捕获", "캡처 시작", "キャプチャ開始", lang="zh") == "CAPTURE_START // 开始捕获"
+    assert tr_telemetry("CAPTURE_START", "开始捕获", "캡처 시작", "キャプチャ開始", lang="en") == "CAPTURE_START"
+    assert tr_telemetry("CAPTURE_START", "开始捕获", "캡처 시작", "キャプチャ開始", lang="ko") == "CAPTURE_START // 캡처 시작"
+    assert tr_telemetry("CAPTURE_START", "开始捕获", "캡처 시작", "キャプチャ開始", lang="ja") == "CAPTURE_START // キャプチャ開始"
+    assert translate_text("外观", "en") == "Theme"
+    assert translate_text("外观", "ko") == "테마"
+    assert translate_text("外观", "ja") == "外観"
+
+    # 2. Custom Bass Solo Boost dB (0-24 dB, default 12 dB), >12 dB warning, and optional apply on export
+    engine = StemMixerEngine()
+    assert engine.bass_monitor_boost_db == pytest.approx(12.0)
+    assert engine.apply_bass_boost_on_export is False
+    engine.set_bass_monitor_boost_db(18.5)
+    assert engine.bass_monitor_boost_db == pytest.approx(18.5)
+    engine.set_bass_monitor_boost_db(99.0)
+    assert engine.bass_monitor_boost_db == pytest.approx(24.0)
+
+    sr = 48000
+    t = np.arange(sr // 2, dtype=np.float32) / sr
+    bass_sig = (0.12 * np.sin(2.0 * np.pi * 55.0 * t)).astype(np.float32)
+    bass_wav = _write_mono_wav(tmp_path / "bass.wav", bass_sig, sr=sr)
+    engine.load_stems({"bass": bass_wav})
+    engine.set_solo("bass", True)
+    engine.set_bass_monitor_boost_db(12.0)
+
+    out_unboosted = tmp_path / "export_raw.wav"
+    out_boosted = tmp_path / "export_boosted.wav"
+    engine.export_mix_streaming(out_unboosted, apply_bass_boost=False)
+    engine.export_mix_streaming(out_boosted, apply_bass_boost=True)
+
+    with wave.open(str(out_unboosted), "rb") as wf_raw, wave.open(str(out_boosted), "rb") as wf_b:
+        arr_raw = np.frombuffer(wf_raw.readframes(wf_raw.getnframes()), dtype=np.int16).astype(np.float64)
+        arr_b = np.frombuffer(wf_b.readframes(wf_b.getnframes()), dtype=np.int16).astype(np.int64)
+    rms_raw = float(np.sqrt(np.mean(arr_raw ** 2)))
+    rms_b = float(np.sqrt(np.mean(arr_b.astype(np.float64) ** 2)))
+    assert rms_b > rms_raw * 2.5
+
+    mixer_w = StemMixerWidget(engine)
+    try:
+        assert mixer_w.bass_boost_db_spin.value() == pytest.approx(12.0)
+        assert mixer_w.bass_boost_warn_lbl.isHidden() is True
+        mixer_w.bass_boost_db_spin.setValue(15.0)
+        assert engine.bass_monitor_boost_db == pytest.approx(15.0)
+        assert mixer_w.bass_boost_warn_lbl.isHidden() is False
+        mixer_w.bass_boost_export_chk.setChecked(True)
+        assert engine.apply_bass_boost_on_export is True
+    finally:
+        mixer_w.close()
+        engine.clear()
+
+    # 3. Single-line recent chord progression in "both" mode (Name[Degree])
+    controller = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path)
+    try:
+        w = controller.window
+        cw = w.chroma_widget
+        assert cw.chord_progression_lbl.wordWrap() is False
+        cw.progression_mode_combo.setCurrentIndex(cw.progression_mode_combo.findData("both"))
+        snap_base = AnalysisSnapshot(
+            timestamp=1.0,
+            waveform_min=[-0.2],
+            waveform_max=[0.2],
+            fft_freqs_hz=[100.0],
+            fft_db=[-30.0],
+            log_freqs_hz=[100.0],
+            log_spectrum_db=[-30.0],
+            chroma_12=[0.1] * 12,
+            chord=ChordEstimate("C", "G", "High", 0.9, 0.25, False),
+            key=KeyEstimate("C major", "A minor", "High", 0.92, 0.2),
+            tempo=TempoEstimate(120.0, "High", 0.8),
+            pitch=PitchEstimate(261.63, "C4", 0.0, 0.95),
+            rms_dbfs=-18.0,
+            peak_dbfs=-6.0,
+            window_seconds=2.0,
+        )
+        for idx, ch_name in enumerate(["C", "G", "Am", "F", "Dm", "G", "C", "Am", "F", "G"]):
+            cw.update_analysis(
+                replace(
+                    snap_base,
+                    timestamp=float(idx + 1),
+                    chord=ChordEstimate(ch_name, "C", "High", 0.9, 0.25, False),
+                )
+            )
+        prog_txt = cw.chord_progression_lbl.text()
+        assert "\n" not in prog_txt
+        assert "[" in prog_txt and "]" in prog_txt
+        assert "…" in prog_txt  # 10 steps > 8 inline limit shows ellipsis prefix while full 10 are in toolTip
+        assert len(cw.chord_progression_lbl.toolTip().split("→")) == 10
+
+        # 4. Language switching (zh -> en -> ko -> ja -> zh) & window geometry lock when visible
+        w.show()
+        w.resize(1360, 860)
+        w.move(80, 60)
+        app.processEvents()
+        geom_before = w.geometry()
+        assert geom_before.width() == 1360 and geom_before.height() == 860
+        w.apply_appearance(replace(w.appearance, language="en"))
+        app.processEvents()
+        assert w.geometry() == geom_before
+        assert w.capture_btn.text() == "CAPTURE_START"
+        assert w.tabs.tabText(0) == "// 01 SPECTRUM"
+        w.apply_appearance(replace(w.appearance, language="ko"))
+        app.processEvents()
+        assert w.geometry() == geom_before
+        assert "캡처 시작" in w.capture_btn.text()
+        w.apply_appearance(replace(w.appearance, language="ja"))
+        app.processEvents()
+        assert w.geometry() == geom_before
+        assert "キャプチャ開始" in w.capture_btn.text()
+        w.apply_appearance(replace(w.appearance, language="zh"))
+        app.processEvents()
+        assert w.geometry() == geom_before
+        assert w.capture_btn.text() == "CAPTURE_START // 开始捕获"
+    finally:
+        controller.shutdown()
+        controller.window.close()
+        app.processEvents()
+
+    # 5. Local PyTorch scanner & official URL constants
+    assert PYTORCH_OFFICIAL_URL == "https://pytorch.org/get-started/locally/"
+    assert "download.pytorch.org/whl/cu128" in PYTORCH_CU128_INDEX_URL
+    fake_py = tmp_path / ".venv-ai" / "Scripts" / "python.exe"
+    fake_py.parent.mkdir(parents=True)
+    fake_py.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "core.system_probe.run_external_python",
+        lambda cmd, **_k: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "installed": True,
+                "python_executable": cmd[0],
+                "torch_version": "2.11.0+cu128",
+                "cuda_available": True,
+                "cuda_build": "12.8",
+                "supports_sm_120": True,
+                "device_name": "NVIDIA GeForce RTX 5060 Ti",
+            }),
+        ),
+    )
+    found = scan_local_pytorch_installations((tmp_path,), require_disk_torch=False)
+    assert found and found[0]["cuda_available"] is True
+    assert found[0]["torch_version"] == "2.11.0+cu128"
+
+
+def test_help_mode_focus_animations_and_hybrid_gpu_persistence(tmp_path) -> None:
+    """Help Mode, Focus Animations, and Plan A/B Hybrid iGPU+dGPU settings persist cleanly."""
+    from core.config import AIConfig, ResourceLimits
+    from core.settings_store import PersistedSettings, load_settings, save_settings
+
+    settings_path = tmp_path / "settings.json"
+    ap = Appearance(
+        preset="acid_telemetry",
+        theme_mode="light",
+        help_mode=False,
+        focus_animations=False,
+    )
+    ai = AIConfig(
+        igpu_directml_2stem=True,
+        igpu_directml_device_id=2,
+        offload_gui_to_igpu=True,
+    )
+    save_settings(
+        PersistedSettings(resource_limits=ResourceLimits(), ai_config=ai, appearance=ap),
+        path=settings_path,
+    )
+    loaded = load_settings(path=settings_path)
+    assert loaded.appearance.help_mode is False
+    assert loaded.appearance.focus_animations is False
+    assert loaded.ai_config.igpu_directml_2stem is True
+    assert loaded.ai_config.igpu_directml_device_id == 2
+    assert loaded.ai_config.offload_gui_to_igpu is True
+
+
+def test_mixer_ms_alignment_help_mode_toggle_theme_dialog_and_zero_i18n_leaks(tmp_path) -> None:
+    """Verify M/S vertical alignment, Help Mode global toggle, themed AppearanceDialog, Hybrid GPU UI, and 0 EN/KO Chinese leaks."""
+    import re
+    import wave
+
+    import numpy as np
+    import pyqtgraph as pg
+    from PySide6 import QtWidgets
+
+    from core.config import AIConfig, ResourceLimits
+    from core.i18n import set_current_language
+    from core.models import AnalysisSnapshot, ChordEstimate, KeyEstimate, PitchEstimate, TempoEstimate
+    from core.system_probe import probe_system
+    from main import ListenScopeController
+    from ui.appearance import AppearanceDialog
+    from ui.chord_practice import ChordPracticeDialog
+    from ui.help_badge import HelpBadge, set_help_mode_enabled
+    from ui.main_window import DARK_STYLESHEET
+    from ui.settings_dialog import SettingsDialog
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    cjk_re = re.compile(r"[\u4e00-\u9fff]")
+
+    stems: dict[str, str] = {}
+    for name in ("vocals", "drums", "bass", "other"):
+        p = tmp_path / f"{name}.wav"
+        with wave.open(str(p), "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(22050)
+            wf.writeframes(b"\x00\x00\x00\x00" * 11025)
+        stems[name] = str(p)
+
+    controller = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path)
+    try:
+        controller.analysis_worker.stop()
+        controller._timer.stop()
+        mw = controller.window
+        mw.resize(1380, 900)
+        mw.show()
+        mw.mixer_widget.load_stem_paths(stems)
+        mw.tabs.setCurrentIndex(2)
+        app.processEvents()
+
+        # 1. M and S buttons vertically aligned across all 4 stem tracks
+        m_xs = {
+            name: row.mute_btn.mapTo(mw.mixer_widget, row.mute_btn.rect().topLeft()).x()
+            for name, row in mw.mixer_widget._rows.items()
+        }
+        s_xs = {
+            name: row.solo_btn.mapTo(mw.mixer_widget, row.solo_btn.rect().topLeft()).x()
+            for name, row in mw.mixer_widget._rows.items()
+        }
+        assert len(set(m_xs.values())) == 1, f"M buttons misaligned: {m_xs}"
+        assert len(set(s_xs.values())) == 1, f"S buttons misaligned: {s_xs}"
+
+        # 2. Help Mode toggle globally hides and restores all HelpBadges
+        badges = mw.findChildren(HelpBadge)
+        assert len(badges) >= 15
+        mw.apply_appearance(replace(mw.appearance, help_mode=False))
+        app.processEvents()
+        assert all(b.isHidden() for b in badges)
+        mw.apply_appearance(replace(mw.appearance, help_mode=True))
+        app.processEvents()
+        assert all(not b.isHidden() for b in badges)
+
+        # 3. AppearanceDialog inherits the active theme stylesheet itself (not only preview box)
+        ap_en = Appearance(preset="acid_telemetry", theme_mode="light", language="en")
+        set_current_language("en")
+        mw.apply_appearance(ap_en)
+        dlg_app = AppearanceDialog(ap_en, DARK_STYLESHEET, parent=mw)
+        assert bool(dlg_app.styleSheet().strip())
+        assert "ACID_TELEMETRY" in dlg_app.styleSheet() or "#F3F4F6" in dlg_app.styleSheet() or "QDialog" in dlg_app.styleSheet()
+
+        # 4. SettingsDialog exposes Plan A & Plan B Hybrid GPU toggles
+        dlg_set = SettingsDialog(
+            probe_system(),
+            ResourceLimits(),
+            AIConfig(igpu_directml_2stem=True, igpu_directml_device_id=1, offload_gui_to_igpu=True),
+            appearance=ap_en,
+            parent=mw,
+        )
+        assert dlg_set.igpu_dml_chk.isChecked() is True
+        assert dlg_set.igpu_dml_id_spin.value() == 1
+        assert dlg_set.gui_offload_chk.isChecked() is True
+
+        # 5. Zero Chinese character leaks across EN & KO (including live snapshot, HelpBadges, plots, tables)
+        freqs = np.linspace(20.0, 12000.0, 64)
+        snap = AnalysisSnapshot(
+            timestamp=4.0,
+            waveform_min=[-0.2] * 64,
+            waveform_max=[0.2] * 64,
+            fft_freqs_hz=freqs.tolist(),
+            fft_db=[-20.0] * 64,
+            log_freqs_hz=freqs.tolist(),
+            log_spectrum_db=[-20.0] * 64,
+            chroma_12=[0.8, 0.1, 0.2, 0.1, 0.7, 0.3, 0.1, 0.8, 0.1, 0.5, 0.1, 0.2],
+            chord=ChordEstimate("Am", "C", "High", 0.93, 0.31, False),
+            key=KeyEstimate("C major", "A minor", "High", 0.91, 0.24, relation_note="平行大小调 C / Am"),
+            tempo=TempoEstimate(124.0, "High", 0.84),
+            pitch=PitchEstimate(440.0, "A4", +1.8, 0.95),
+            rms_dbfs=-14.2,
+            peak_dbfs=-3.6,
+            window_seconds=2.0,
+        )
+        hist = np.zeros((12, 12), dtype=np.float32)
+
+        def _collect_leaks(root: QtWidgets.QWidget) -> list[str]:
+            found_leaks: list[str] = []
+            if cjk_re.search(root.windowTitle()):
+                found_leaks.append(f"title:{root.windowTitle()}")
+            for w in root.findChildren(QtWidgets.QWidget):
+                if isinstance(w, HelpBadge):
+                    for s in (w._title, w._explanation):
+                        if cjk_re.search(s):
+                            found_leaks.append(f"help:{s[:60]}")
+                elif isinstance(w, (QtWidgets.QLabel, QtWidgets.QAbstractButton)):
+                    if cjk_re.search(w.text()):
+                        found_leaks.append(f"lbl:{w.text()[:60]}")
+                elif isinstance(w, QtWidgets.QGroupBox):
+                    if cjk_re.search(w.title()):
+                        found_leaks.append(f"grp:{w.title()[:60]}")
+                elif isinstance(w, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)):
+                    for s in (w.prefix(), w.suffix()):
+                        if cjk_re.search(s):
+                            found_leaks.append(f"spin:{s}")
+                elif isinstance(w, QtWidgets.QTabWidget):
+                    for i in range(w.count()):
+                        if cjk_re.search(w.tabText(i)):
+                            found_leaks.append(f"tab:{w.tabText(i)}")
+                elif isinstance(w, QtWidgets.QComboBox) and not w.property("lsKeepItems"):
+                    for i in range(w.count()):
+                        if cjk_re.search(w.itemText(i)):
+                            found_leaks.append(f"combo:{w.itemText(i)}")
+                elif isinstance(w, QtWidgets.QTableWidget):
+                    for c in range(w.columnCount()):
+                        hi = w.horizontalHeaderItem(c)
+                        if hi and cjk_re.search(hi.text()):
+                            found_leaks.append(f"hdr:{hi.text()}")
+                elif isinstance(w, pg.PlotWidget):
+                    pi = w.getPlotItem()
+                    if pi.titleLabel.text and cjk_re.search(pi.titleLabel.text):
+                        found_leaks.append(f"plot:{pi.titleLabel.text}")
+                    for ax_n in ("bottom", "left"):
+                        ax = pi.getAxis(ax_n)
+                        if ax and ax.labelText and cjk_re.search(ax.labelText):
+                            found_leaks.append(f"axis:{ax.labelText}")
+            return found_leaks
+
+        for lang in ("en", "ko"):
+            ap_lang = Appearance(preset="acid_telemetry", theme_mode="light", language=lang)
+            set_current_language(lang)
+            mw.apply_appearance(ap_lang)
+            mw.update_analysis_snapshot(snap, hist, None)
+            da = AppearanceDialog(ap_lang, DARK_STYLESHEET, parent=mw)
+            ds = SettingsDialog(probe_system(), ResourceLimits(), AIConfig(), appearance=ap_lang, parent=mw)
+            dc = ChordPracticeDialog(
+                ["Am", "F", "C", "G"],
+                KeyEstimate("C major", "A minor", "High", 0.91, 0.24),
+                0,
+                detected_bpm=124.0,
+                acid_variant="light",
+                parent=mw,
+            )
+            app.processEvents()
+            for name, win in (("MainWindow", mw), ("Appearance", da), ("Settings", ds), ("ChordPractice", dc)):
+                leaks = _collect_leaks(win)
+                assert leaks == [], f"{lang} leaks in {name}: {leaks}"
+            dc.close()
+            ds.close()
+            da.close()
+
+        dlg_set.close()
+        dlg_app.close()
+        set_help_mode_enabled(True)
+    finally:
+        set_current_language("zh")
+        controller.shutdown()
+        controller.window.close()
+        app.processEvents()
+

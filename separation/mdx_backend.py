@@ -137,7 +137,8 @@ class MDXSeparatorBackend(SeparationBackend):
         if self._loaded and self._separator is not None:
             return
 
-        if self.use_gpu:
+        use_dml_plan_a = False
+        if self.use_gpu or (self.ai_config.igpu_directml_2stem and self.model_spec.architecture == "MDX-ONNX"):
             try:
                 import onnxruntime as ort  # type: ignore[import-not-found]
 
@@ -147,12 +148,23 @@ class MDXSeparatorBackend(SeparationBackend):
                     except Exception as exc:
                         logger.debug("onnxruntime.preload_dlls() warning: %s", exc)
                 providers = list(ort.get_available_providers())
-                if "CUDAExecutionProvider" not in providers:
+                if (
+                    self.ai_config.igpu_directml_2stem
+                    and self.model_spec.architecture == "MDX-ONNX"
+                    and "DmlExecutionProvider" in providers
+                ):
+                    use_dml_plan_a = True
+                    logger.info(
+                        "[Hybrid Plan A] Routing 2-Stem MDX-ONNX to DirectML iGPU (device_id=%d).",
+                        int(self.ai_config.igpu_directml_device_id),
+                    )
+                elif self.use_gpu and "CUDAExecutionProvider" not in providers:
                     raise RuntimeError(
                         f"请求 GPU MDX 推理，但 ONNX Runtime 缺少 CUDAExecutionProvider (available={providers})。"
                     )
             except ImportError as exc:
-                raise RuntimeError("未安装 onnxruntime-gpu，无法运行 GPU MDX-ONNX 模型。") from exc
+                raise RuntimeError("未安装 onnxruntime-gpu / onnxruntime-directml，无法运行 GPU MDX-ONNX 模型。") from exc
+        self._using_directml = use_dml_plan_a
 
         try:
             from audio_separator.separator import Separator  # type: ignore[import-not-found]
@@ -194,6 +206,14 @@ class MDXSeparatorBackend(SeparationBackend):
                 "pitch_shift": 0,
             }
 
+        if self._using_directml:
+            import inspect
+            try:
+                sig = inspect.signature(Separator.__init__)
+                if "use_directml" in sig.parameters:
+                    kwargs["use_directml"] = True
+            except Exception:
+                pass
         try:
             separator = Separator(**kwargs)
             separator.load_model(model_filename=self.model_spec.separator_filename)

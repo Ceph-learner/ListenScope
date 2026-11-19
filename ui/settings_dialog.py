@@ -10,10 +10,13 @@ import sys
 import threading
 from typing import Any, Optional
 
+from dataclasses import replace
+
 from PySide6 import QtCore, QtGui, QtSvg, QtWidgets
 
 from core.appearance import Appearance, LAYOUTS, PRESETS, THEME_MODES
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
+from core.i18n import LANGUAGES, translate_widget_tree
 from core.models import SystemHardwareReport
 from core.paths import (
     default_export_dir,
@@ -25,12 +28,17 @@ from core.paths import (
 )
 from core.system_probe import (
     MIDI_ENV_SETUP_GUIDE,
+    PYTORCH_CU128_INDEX_URL,
+    PYTORCH_DOWNLOAD_GUIDE,
+    PYTORCH_INSTALL_COMMAND,
+    PYTORCH_OFFICIAL_URL,
     apply_external_ai_probe_to_report,
     probe_external_ai_environment,
     probe_external_midi_environment,
+    scan_local_pytorch_installations,
 )
 from ui.appearance import detect_system_is_dark, set_widget_tone
-from ui.help_badge import HelpBadge, wrap_with_help
+from ui.help_badge import HelpBadge, install_focus_animations, wrap_with_help
 from ui.acid_style import (
     TelemetryHeader,
     acid_stylesheet,
@@ -38,17 +46,20 @@ from ui.acid_style import (
     resolve_acid_variant,
 )
 
+GITHUB_REPO_URL = "https://github.com/Ceph-learner/ListenScope"
+GITHUB_ISSUES_URL = "https://github.com/Ceph-learner/ListenScope/issues"
+
 SETTINGS_CATEGORIES = {
-    "appearance": ("外观与布局", "切换工作区、黑夜/白天/跟随系统主题、字体字号与数据路径"),
+    "appearance": ("外观与布局", "切换工作区、黑夜/白天/跟随系统主题、语言、数据路径与开源项目反馈"),
     "resources": ("资源保护", "配置内存、显存阈值和分轨模型参数"),
-    "midi": ("AI 与 MIDI 环境", "自动或手动配置两个独立 Python 运行环境"),
+    "midi": ("AI 与 MIDI 环境", "扫描本机 PyTorch 或一键自动配置独立 Python 运行环境"),
     "status": ("系统诊断", "查看硬件、捕获能力和运行环境"),
 }
 
 SETTINGS_EYEBROWS = {
-    "appearance": "CONFIG // 01 · APPEARANCE & STORAGE",
+    "appearance": "CONFIG // 01 · APPEARANCE, STORAGE & COMMUNITY",
     "resources": "CONFIG // 02 · GUARDRAILS & CHUNKING",
-    "midi": "CONFIG // 03 · RUNTIME ENVIRONMENTS",
+    "midi": "CONFIG // 03 · PYTORCH SCANNER & RUNTIMES",
     "status": "CONFIG // 04 · HARDWARE DIAGNOSTICS",
 }
 
@@ -75,6 +86,10 @@ def _open_directory(path: Path) -> None:
     except OSError:
         pass
     QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path)))
+
+
+def _open_web_url(url: str) -> None:
+    QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
 
 
 def _discover_installed_runtime_pythons(app_root: Path) -> tuple[str, str]:
@@ -111,13 +126,15 @@ def _discover_installed_runtime_pythons(app_root: Path) -> tuple[str, str]:
 
 
 class SettingsDialog(QtWidgets.QDialog):
-    """Shows real SystemHardwareReport (`设置 -> 系统状态`), turnkey environment setup, and ResourceLimits/AIConfig."""
+    """Shows real SystemHardwareReport (`设置 -> 系统状态`), local PyTorch scanner, turnkey environment setup, and ResourceLimits/AIConfig."""
 
     _probe_finished = QtCore.Signal(object)
     _midi_probe_finished = QtCore.Signal(object)
+    _pytorch_scan_finished = QtCore.Signal(object)
     _bootstrap_progress = QtCore.Signal(str)
     _bootstrap_finished = QtCore.Signal(bool, str)
     appearance_requested = QtCore.Signal(object)
+    appearance_changed = QtCore.Signal(object)
 
     def __init__(
         self,
@@ -133,7 +150,7 @@ class SettingsDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope 设置")
-        self.resize(840, 710)
+        self.resize(860, 740)
 
         if acid_variant is not None:
             resolved_variant: Optional[str] = acid_variant or None
@@ -152,30 +169,43 @@ class SettingsDialog(QtWidgets.QDialog):
         self._updated_ai_config: Optional[AIConfig] = None
         self._updated_ai_python: str = ai_python_executable
         self._updated_midi_python: str = midi_python_executable
+        self._updated_appearance: Appearance = appearance
         self._verified_ai_probe: Optional[dict[str, Any]] = None
         self._dialog_closed = False
         self._bootstrap_running = False
         self._probe_finished.connect(self._on_ai_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
         self._midi_probe_finished.connect(self._on_midi_probe_finished, QtCore.Qt.ConnectionType.QueuedConnection)
+        self._pytorch_scan_finished.connect(self._on_pytorch_scan_finished, QtCore.Qt.ConnectionType.QueuedConnection)
         self._bootstrap_progress.connect(self._on_bootstrap_progress, QtCore.Qt.ConnectionType.QueuedConnection)
         self._bootstrap_finished.connect(self._on_bootstrap_finished, QtCore.Qt.ConnectionType.QueuedConnection)
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 14)
         root.setSpacing(12)
+        header_row = QtWidgets.QHBoxLayout()
         self._header = TelemetryHeader(
             "SYSTEM PREFERENCES // TELEMETRY CONFIG",
             "系统设置与运行环境管理",
             badge_text="PORTABLE // LOCAL",
         )
-        root.addWidget(self._header)
+        header_row.addWidget(self._header, 1)
+        header_row.addWidget(
+            HelpBadge(
+                "系统设置总览",
+                "• 外观与布局：切换默认酸性遥测浅色白天主题、中/英/韩/日四语、无边框圆角窗口、自定义背景图（非酸性主题）及同级存储目录。\n"
+                "• 资源保护：针对 RTX 5060 Ti 8GB 显存与 16GB 内存设定预检护栏与流式分块。\n"
+                "• AI 与 MIDI 环境：一键扫描本机已安装的 PyTorch 环境（若未安装自动提供官方下载地址），或一键配置隔离运行时。\n"
+                "• 系统诊断：查看真实 GPU、CUDA sm_120、ONNX Runtime 与 WASAPI 捕获能力。",
+            )
+        )
+        root.addLayout(header_row)
 
         body = QtWidgets.QHBoxLayout()
         body.setSpacing(16)
         navigation = QtWidgets.QWidget()
         navigation.setObjectName("settingsNavigation")
         navigation.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground)
-        navigation.setFixedWidth(172)
+        navigation.setFixedWidth(176)
         nav_layout = QtWidgets.QVBoxLayout(navigation)
         nav_layout.setContentsMargins(8, 8, 8, 8)
         nav_layout.setSpacing(5)
@@ -230,21 +260,67 @@ class SettingsDialog(QtWidgets.QDialog):
         body.addLayout(details, 1)
         root.addLayout(body, 1)
 
-        # Page 1: Appearance & Portable/Sibling Storage Locations
+        # Page 1: Appearance, Portable Storage & Open-Source Feedback
         appearance_page = QtWidgets.QWidget()
         appearance_layout = QtWidgets.QVBoxLayout(appearance_page)
         appearance_layout.setContentsMargins(0, 4, 0, 0)
         appearance_layout.setSpacing(12)
 
-        appearance_box = QtWidgets.QGroupBox("APPEARANCE // 当前外观与字体配置")
+        appearance_box = QtWidgets.QGroupBox("APPEARANCE // 当前外观、多语言与壳体配置")
         appearance_form = QtWidgets.QFormLayout(appearance_box)
-        appearance_form.setVerticalSpacing(12)
+        appearance_form.setVerticalSpacing(10)
         self._theme_summary = QtWidgets.QLabel()
         self._layout_summary = QtWidgets.QLabel()
         self._font_summary = QtWidgets.QLabel()
         appearance_form.addRow("主题与模式", self._theme_summary)
         appearance_form.addRow("工作区", self._layout_summary)
         appearance_form.addRow("字体与字号", self._font_summary)
+
+        quick_lang_row = QtWidgets.QHBoxLayout()
+        self.language_combo = QtWidgets.QComboBox()
+        self.language_combo.setProperty("lsKeepItems", True)
+        self.language_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
+        for lang_code, lang_label in LANGUAGES.items():
+            self.language_combo.addItem(lang_label, lang_code)
+        lang_idx = self.language_combo.findData(appearance.language)
+        self.language_combo.setCurrentIndex(max(0, lang_idx))
+        self.language_combo.currentIndexChanged.connect(self._on_quick_appearance_changed)
+
+        self.frameless_chk = QtWidgets.QCheckBox("无边框圆角窗口")
+        self.frameless_chk.setChecked(bool(appearance.frameless))
+        self.frameless_chk.toggled.connect(self._on_quick_appearance_changed)
+
+        quick_lang_row.addWidget(self.language_combo, 1)
+        quick_lang_row.addWidget(self.frameless_chk)
+        quick_lang_row.addWidget(
+            HelpBadge(
+                "多语言与无边框圆角窗口",
+                "• 界面语言支持简体中文、English、한국어、日本語（内置英文代号保持固定；English 模式下仅显示英文，不重复出现）。\n"
+                "• 无边框圆角窗口消除生硬的系统窗口边框，自动适配屏幕分辨率并居中。",
+            )
+        )
+        appearance_form.addRow("界面语言与壳体:", quick_lang_row)
+
+        assist_row = QtWidgets.QHBoxLayout()
+        assist_row.setSpacing(10)
+        self.help_mode_chk = QtWidgets.QCheckBox("说明模式 (显示 [?] 悬浮说明)")
+        self.help_mode_chk.setChecked(bool(appearance.help_mode))
+        self.help_mode_chk.toggled.connect(self._on_quick_appearance_changed)
+        self.focus_anim_chk = QtWidgets.QCheckBox("交互聚焦动画")
+        self.focus_anim_chk.setChecked(bool(appearance.focus_animations))
+        self.focus_anim_chk.toggled.connect(self._on_quick_appearance_changed)
+        assist_row.addWidget(self.help_mode_chk)
+        assist_row.addWidget(self.focus_anim_chk)
+        assist_row.addStretch(1)
+        assist_row.addWidget(
+            HelpBadge(
+                "说明模式与交互聚焦动画",
+                "• 说明模式：开启后在各功能旁显示 [?] 徽标，鼠标悬浮即可即时弹出功能解释；关闭后全局隐藏所有问号。\n"
+                "• 交互聚焦动画：开启后按钮、下拉框与问号徽标带有轻量丝滑的悬浮聚焦高亮动画（零显存占用）；关闭后回归静态极简。",
+            )
+        )
+        appearance_form.addRow("交互与引导:", assist_row)
+
         edit_appearance = QtWidgets.QPushButton("编辑外观与字体…")
         edit_appearance.setObjectName("appearanceEntry")
         edit_appearance.setAutoDefault(False)
@@ -253,14 +329,14 @@ class SettingsDialog(QtWidgets.QDialog):
             wrap_with_help(
                 edit_appearance,
                 "自定义外观与实时预览",
-                "可切换黑夜 / 白天 / 跟随系统模式，扫描电脑已安装字体并实时预览界面效果；支持一键恢复默认。",
+                "默认采用酸性遥测浅色白天主题（锁定标准工业字体与官方配色，字号 11–20px 可调）；切换到其他主题后可自由调节颜色、系统字体并上传自定义背景壁纸。",
             )[0]
         )
         appearance_layout.addWidget(appearance_box)
 
         storage_box = QtWidgets.QGroupBox("PORTABLE STORAGE // 同级目录保存位置（默认不写入 C 盘）")
         storage_form = QtWidgets.QFormLayout(storage_box)
-        storage_form.setVerticalSpacing(10)
+        storage_form.setVerticalSpacing(6)
         app_root = get_app_root()
         work_dir = default_work_dir()
         export_dir = default_export_dir()
@@ -296,6 +372,48 @@ class SettingsDialog(QtWidgets.QDialog):
         dir_btns.addStretch(1)
         storage_form.addRow(dir_btns)
         appearance_layout.addWidget(storage_box)
+
+        # Open-Source Project Links, Star & Feedback Card
+        community_box = QtWidgets.QGroupBox("OPEN SOURCE && FEEDBACK // 开源项目地址与问题反馈")
+        community_layout = QtWidgets.QVBoxLayout(community_box)
+        community_layout.setSpacing(6)
+        community_head = QtWidgets.QHBoxLayout()
+        self.community_intro_lbl = QtWidgets.QLabel(
+            f"如果 ListenScope 对你的扒谱、贝斯分析或和弦练习有帮助，欢迎前往 GitHub 点个 ⭐ Star 支持！\n"
+            f"• 项目仓库: {GITHUB_REPO_URL}  |  问题反馈: {GITHUB_ISSUES_URL} （暂为私有占位，转公开后可直提 Issue）"
+        )
+        self.community_intro_lbl.setWordWrap(True)
+        self.community_intro_lbl.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        community_head.addWidget(self.community_intro_lbl, 1)
+        community_head.addWidget(
+            HelpBadge(
+                "项目仓库与反馈说明",
+                "点击下方按钮可在浏览器中直达 GitHub 仓库主页或 Issues 反馈页面，也可一键复制仓库地址分享给朋友。",
+            )
+        )
+        community_layout.addLayout(community_head)
+
+        community_btns = QtWidgets.QHBoxLayout()
+        self.open_repo_btn = QtWidgets.QPushButton("⭐ 点个 Star / 项目主页")
+        self.open_repo_btn.setObjectName("analysisAction")
+        self.open_repo_btn.setAutoDefault(False)
+        self.open_repo_btn.clicked.connect(lambda: _open_web_url(GITHUB_REPO_URL))
+
+        self.open_issues_btn = QtWidgets.QPushButton("反馈问题 (GitHub Issues)")
+        self.open_issues_btn.setAutoDefault(False)
+        self.open_issues_btn.clicked.connect(lambda: _open_web_url(GITHUB_ISSUES_URL))
+
+        self.copy_repo_url_btn = QtWidgets.QPushButton("复制项目链接")
+        self.copy_repo_url_btn.setAutoDefault(False)
+        self.copy_repo_url_btn.clicked.connect(self._copy_github_url)
+
+        community_btns.addWidget(self.open_repo_btn)
+        community_btns.addWidget(self.open_issues_btn)
+        community_btns.addWidget(self.copy_repo_url_btn)
+        community_btns.addStretch(1)
+        community_layout.addLayout(community_btns)
+        appearance_layout.addWidget(community_box)
+
         appearance_layout.addStretch(1)
         self._add_page("appearance", appearance_page, scroll=True)
         self.update_appearance_summary(appearance)
@@ -305,6 +423,7 @@ class SettingsDialog(QtWidgets.QDialog):
         st_layout = QtWidgets.QVBoxLayout(status_tab)
 
         target = TargetHardwareSpec()
+        target_row = QtWidgets.QHBoxLayout()
         target_lbl = QtWidgets.QLabel(
             f"目标真机基线规格: Windows 10/11 (Build >= {target.min_windows_build_for_process_loopback}) | "
             f"GPU: {target.gpu_name} | 显存: {target.vram_gb}GB VRAM (非 16GB) | 系统内存: {target.ram_gb}GB RAM"
@@ -312,7 +431,15 @@ class SettingsDialog(QtWidgets.QDialog):
         target_lbl.setWordWrap(True)
         target_lbl.setObjectName("bannerNotice")
         set_widget_tone(target_lbl, "info")
-        st_layout.addWidget(target_lbl)
+        target_row.addWidget(target_lbl, 1)
+        target_row.addWidget(
+            HelpBadge(
+                "系统诊断表说明",
+                "显示当前电脑的操作系统 Build、可用 RAM、NVIDIA 显卡与空闲 VRAM、以及隔离 AI 环境中的 PyTorch CUDA / Blackwell sm_120 支持状态。\n"
+                "主界面进程默认不加载 PyTorch（保持轻量低内存），在「AI 与 MIDI 环境」页验证或扫描本机 PyTorch 后此表会同步更新。",
+            )
+        )
+        st_layout.addLayout(target_row)
 
         self.status_table = QtWidgets.QTableWidget(0, 2)
         self.status_table.setHorizontalHeaderLabels(["检测项", "当前环境实测状态"])
@@ -392,15 +519,57 @@ class SettingsDialog(QtWidgets.QDialog):
         self.roformer_chk = QtWidgets.QCheckBox("允许实验性 BS-RoFormer 模型 (仅在 RTX 5060 Ti 8GB 实测峰值通过后手动启用)")
         self.roformer_chk.setChecked(ai_config.allow_experimental_roformer)
 
-        form.addRow("分轨前内存提醒", self.min_ram_spin)
-        form.addRow("拒绝新分轨的内存阈值", self.pause_ram_spin)
-        form.addRow("紧急停止的内存阈值", self.crit_ram_spin)
-        form.addRow("GPU 2-Stem 最低空闲显存 (min_vram_2stem):", self.vram_2s_spin)
-        form.addRow("GPU 4-Stem 最低空闲显存 (min_vram_4stem):", self.vram_4s_spin)
-        form.addRow("桌面/QQ音乐保留最低空闲显存 (critical_vram_free):", self.crit_vram_spin)
+        form.addRow(
+            "分轨前内存提醒",
+            wrap_with_help(
+                self.min_ram_spin,
+                "分轨前内存提醒阈值",
+                "当系统可用内存 (psutil.available) 低于此值时给出黄色提示，但仍允许继续启动分轨（默认 5120 MB）。",
+            )[0],
+        )
+        form.addRow(
+            "拒绝新分轨的内存阈值",
+            wrap_with_help(
+                self.pause_ram_spin,
+                "拒绝新分轨阈值",
+                "当系统可用内存低于此值时拒绝启动新的 AI 分轨任务，防止系统卡死或浏览器崩溃（默认 3072 MB）。",
+            )[0],
+        )
+        form.addRow(
+            "紧急停止的内存阈值",
+            wrap_with_help(
+                self.crit_ram_spin,
+                "紧急停止 (E-STOP) 内存阈值",
+                "分轨运行期间若系统可用内存跌破此水位（默认 2048 MB），主程序会立即终止 AI 子进程并回收内存。",
+            )[0],
+        )
+        form.addRow(
+            "GPU 2-Stem 最低空闲显存:",
+            wrap_with_help(
+                self.vram_2s_spin,
+                "2 轨快速分离显存预检",
+                "启动 2 轨 (人声 + 伴奏 MDX ONNX) 前要求的最低空闲显存（默认 2560 MB）。",
+            )[0],
+        )
+        form.addRow(
+            "GPU 4-Stem 最低空闲显存:",
+            wrap_with_help(
+                self.vram_4s_spin,
+                "4 轨精细分离显存预检",
+                "启动 4 轨 (人声/鼓/贝斯/其他 HTDemucs) 前要求的最低空闲显存（默认 4300 MB）。",
+            )[0],
+        )
+        form.addRow(
+            "桌面/播放器保留最低空闲显存:",
+            wrap_with_help(
+                self.crit_vram_spin,
+                "桌面与音乐播放器保底显存",
+                "始终为 Windows 桌面合成器 (DWM)、QQ 音乐/网易云音乐与浏览器预留的显存安全垫（默认 1200 MB）。",
+            )[0],
+        )
         cfg_outer.addWidget(guard_box)
 
-        chunk_box = QtWidgets.QGroupBox("CHUNKING & MODELS // 流式分块与实验模型")
+        chunk_box = QtWidgets.QGroupBox("CHUNKING && MODELS // 流式分块与实验模型")
         chunk_form = QtWidgets.QFormLayout(chunk_box)
         chunk_form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         chunk_form.setHorizontalSpacing(18)
@@ -421,25 +590,82 @@ class SettingsDialog(QtWidgets.QDialog):
                 "仅控制 4 轨 HTDemucs 单段推理窗口长度（4–10s，实测默认 6s）。若偶发显存紧张会自动回落，不影响 MDX 二轨。",
             )[0],
         )
-        chunk_form.addRow("高显存模型解锁:", self.roformer_chk)
+        chunk_form.addRow(
+            "高显存模型解锁:",
+            wrap_with_help(
+                self.roformer_chk,
+                "实验性 BS-RoFormer 模型开关",
+                "BS-RoFormer 音质细腻但显存开销显著高于 MDX/HTDemucs；默认关闭以保护 8GB 显存，确认空闲显存充足时可手动勾选。",
+            )[0],
+        )
         cfg_outer.addWidget(chunk_box)
+
+        # Hybrid iGPU + dGPU heterogeneous acceleration (Plan A & Plan B)
+        hybrid_box = QtWidgets.QGroupBox("HYBRID GPU OFFLOAD // 集显 + 独显异构协同加速（可选）")
+        hybrid_form = QtWidgets.QFormLayout(hybrid_box)
+        hybrid_form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
+        hybrid_form.setHorizontalSpacing(18)
+        hybrid_form.setVerticalSpacing(10)
+
+        plan_a_row = QtWidgets.QHBoxLayout()
+        plan_a_row.setSpacing(8)
+        self.igpu_dml_chk = QtWidgets.QCheckBox("启用方案 A：核显 DirectML 接管轻量 2-Stem ONNX 分离")
+        self.igpu_dml_chk.setChecked(bool(ai_config.igpu_directml_2stem))
+        self.igpu_dml_id_spin = QtWidgets.QSpinBox()
+        self.igpu_dml_id_spin.setRange(0, 7)
+        self.igpu_dml_id_spin.setPrefix("Device ID: ")
+        self.igpu_dml_id_spin.setValue(int(ai_config.igpu_directml_device_id))
+        self.igpu_dml_id_spin.setEnabled(bool(ai_config.igpu_directml_2stem))
+        self.igpu_dml_chk.toggled.connect(self.igpu_dml_id_spin.setEnabled)
+        plan_a_row.addWidget(self.igpu_dml_chk, 1)
+        plan_a_row.addWidget(self.igpu_dml_id_spin)
+        plan_a_row.addWidget(
+            HelpBadge(
+                "方案 A：核显 DirectML + 独显 CUDA 异构分工",
+                "• NVIDIA 独显 (cuda:0) 专职重负载 4-Stem HTDemucs 与 MIDI 扒谱。\n"
+                "• AMD/Intel 核显通过 onnxruntime-directml (DmlExecutionProvider) 接管轻量 2-Stem MDX-Net ONNX 与准实时人声分离，独显满载或运行游戏时仍可在核显后台完成二轨分离。\n"
+                "• 若环境未安装 onnxruntime-directml，会自动安全回退至 CUDA / CPU，不会报错崩溃。",
+            )
+        )
+        hybrid_form.addRow("方案 A (异构计算):", plan_a_row)
+
+        plan_b_row = QtWidgets.QHBoxLayout()
+        plan_b_row.setSpacing(8)
+        self.gui_offload_chk = QtWidgets.QCheckBox("启用方案 B：GUI 渲染卸载核显 + AI 子进程锁定独显 (CUDA_VISIBLE_DEVICES=0)")
+        self.gui_offload_chk.setChecked(bool(ai_config.offload_gui_to_igpu))
+        self.open_win_graphics_btn = QtWidgets.QPushButton("Windows 图形设置")
+        self.open_win_graphics_btn.setAutoDefault(False)
+        self.open_win_graphics_btn.clicked.connect(
+            lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl("ms-settings:display-advancedgraphics"))
+        )
+        plan_b_row.addWidget(self.gui_offload_chk, 1)
+        plan_b_row.addWidget(self.open_win_graphics_btn)
+        plan_b_row.addWidget(
+            HelpBadge(
+                "方案 B：图形渲染与 AI 推理物理隔离",
+                "• 开启后，后台 AI 子进程将强制绑定 CUDA_VISIBLE_DEVICES=0 (PCI_BUS_ID) 独占 NVIDIA 独显算力。\n"
+                "• 点击右侧「Windows 图形设置」可将 ListenScope 主程序设为「节能 (AMD/Intel 核显)」渲染 Qt 界面与 PyQtGraph 波形，彻底杜绝 AI 满载时桌面掉帧。",
+            )
+        )
+        hybrid_form.addRow("方案 B (渲染隔离):", plan_b_row)
+        cfg_outer.addWidget(hybrid_box)
+
         cfg_outer.addStretch(1)
         self._add_page("resources", cfg_tab, scroll=True)
 
-        # Page 4: Turnkey AI & MIDI Environment + Auto-Bootstrap
+        # Page 4: Turnkey AI & MIDI Environment + Auto-Bootstrap + Local PyTorch Scanner
         env_tab = QtWidgets.QWidget()
         env_layout = QtWidgets.QVBoxLayout(env_tab)
         env_layout.setContentsMargins(0, 4, 0, 0)
         env_layout.setSpacing(14)
 
-        bootstrap_group = QtWidgets.QGroupBox("TURNKEY BOOTSTRAP // 零配置集成与一键修复运行环境")
+        bootstrap_group = QtWidgets.QGroupBox("TURNKEY BOOTSTRAP // 零配置集成、本机 PyTorch 扫描与一键修复")
         bootstrap_layout = QtWidgets.QVBoxLayout(bootstrap_group)
-        bootstrap_layout.setSpacing(8)
+        bootstrap_layout.setSpacing(6)
         ff_path = find_ffmpeg_executable()
-        ff_note = f"FFmpeg 已就绪 ({ff_path})" if ff_path else "FFmpeg 未在同级目录或 PATH 中发现（纯 WAV 可直接分析）"
+        ff_note = "FFmpeg 已就绪" if ff_path else "FFmpeg 未发现 (WAV 可直接分析)"
         bootstrap_intro = QtWidgets.QLabel(
-            "安装版已自动扫描同级 `runtime/ai`、`m` 短路径环境与 `.venv-ai`/`.venv-midi`。"
-            f"当前：{ff_note}。如未打包内置运行时，可点击下方按钮在软件同级目录自动配置。"
+            f"自动扫描同级 runtime/ai、短路径 m、.venv-ai/.venv-midi 及本机 Conda / 系统 Python 中的 PyTorch（{ff_note}）。"
         )
         bootstrap_intro.setObjectName("mutedCaption")
         bootstrap_intro.setWordWrap(True)
@@ -462,24 +688,49 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         bootstrap_layout.addLayout(wheel_row)
 
-        boot_btns = QtWidgets.QHBoxLayout()
+        boot_btns1 = QtWidgets.QHBoxLayout()
+        self.scan_pytorch_btn = QtWidgets.QPushButton("扫描本机 PyTorch 环境")
+        self.scan_pytorch_btn.setObjectName("analysisAction")
+        self.scan_pytorch_btn.setAutoDefault(False)
+        self.scan_pytorch_btn.clicked.connect(self._scan_local_pytorch)
+
         self.setup_all_btn = QtWidgets.QPushButton("一键自动配置 AI + MIDI")
         self.setup_all_btn.setObjectName("analysisAction")
         self.setup_all_btn.setAutoDefault(False)
         self.setup_all_btn.clicked.connect(lambda: self._run_turnkey_bootstrap(skip_ai=False))
+
         self.setup_midi_only_btn = QtWidgets.QPushButton("仅自动配置 CPU MIDI")
         self.setup_midi_only_btn.setAutoDefault(False)
         self.setup_midi_only_btn.clicked.connect(lambda: self._run_turnkey_bootstrap(skip_ai=True))
-        boot_btns.addWidget(self.setup_all_btn)
-        boot_btns.addWidget(self.setup_midi_only_btn)
-        boot_btns.addStretch(1)
-        bootstrap_layout.addLayout(boot_btns)
+
+        boot_btns1.addWidget(self.scan_pytorch_btn)
+        boot_btns1.addWidget(self.setup_all_btn)
+        boot_btns1.addWidget(self.setup_midi_only_btn)
+        boot_btns1.addStretch(1)
+        bootstrap_layout.addLayout(boot_btns1)
+
+        boot_btns2 = QtWidgets.QHBoxLayout()
+        self.open_pytorch_url_btn = QtWidgets.QPushButton("PyTorch 官方下载页 (pytorch.org)")
+        self.open_pytorch_url_btn.setAutoDefault(False)
+        self.open_pytorch_url_btn.setToolTip(f"打开 {PYTORCH_OFFICIAL_URL}")
+        self.open_pytorch_url_btn.clicked.connect(lambda: _open_web_url(PYTORCH_OFFICIAL_URL))
+
+        self.open_cu128_url_btn = QtWidgets.QPushButton("CUDA 12.8 Wheel 官方镜像")
+        self.open_cu128_url_btn.setAutoDefault(False)
+        self.open_cu128_url_btn.setToolTip(f"打开 {PYTORCH_CU128_INDEX_URL}")
+        self.open_cu128_url_btn.clicked.connect(lambda: _open_web_url(PYTORCH_CU128_INDEX_URL))
+
+        boot_btns2.addWidget(self.open_pytorch_url_btn)
+        boot_btns2.addWidget(self.open_cu128_url_btn)
+        boot_btns2.addStretch(1)
+        bootstrap_layout.addLayout(boot_btns2)
 
         self.bootstrap_status_lbl = QtWidgets.QLabel(
-            "准备就绪：若安装器已随包内置运行环境，启动时会自动识别，无需手动指定路径。"
+            "准备就绪：点击「扫描本机 PyTorch 环境」自动查找电脑已安装的 PyTorch；若未安装会给出官方下载地址与安装指令。"
         )
         self.bootstrap_status_lbl.setWordWrap(True)
         self.bootstrap_status_lbl.setObjectName("bannerNotice")
+        self.bootstrap_status_lbl.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         set_widget_tone(self.bootstrap_status_lbl, "info")
         bootstrap_layout.addWidget(self.bootstrap_status_lbl)
         env_layout.addWidget(bootstrap_group)
@@ -487,7 +738,7 @@ class SettingsDialog(QtWidgets.QDialog):
         py_row = QtWidgets.QVBoxLayout()
         self.ai_python_edit = QtWidgets.QLineEdit(ai_python_executable)
         self.ai_python_edit.setAccessibleName("AI Worker Python")
-        self.ai_python_edit.setPlaceholderText("自动识别 runtime\\ai 或 .venv-ai\\Scripts\\python.exe（也可手动指定）")
+        self.ai_python_edit.setPlaceholderText("自动识别 runtime\\ai 或 .venv-ai\\Scripts\\python.exe（也可扫描本机或手动指定）")
         self.browse_ai_py_btn = QtWidgets.QPushButton("浏览...")
         self.browse_ai_py_btn.clicked.connect(self._browse_ai_python)
         self.verify_ai_env_btn = QtWidgets.QPushButton("验证 AI 环境")
@@ -496,10 +747,11 @@ class SettingsDialog(QtWidgets.QDialog):
         py_row.addLayout(self._environment_actions(self.browse_ai_py_btn, self.verify_ai_env_btn))
 
         self.ai_probe_result_lbl = QtWidgets.QLabel(
-            "验证 CUDA、ONNX、Demucs 和 FFmpeg。安装版如内置 runtime/ai 或同级 .venv-ai 会自动加载。"
+            f"验证 CUDA、ONNX、Demucs 和 FFmpeg。若本机未安装 PyTorch，请访问 {PYTORCH_OFFICIAL_URL} 下载。"
         )
         self.ai_probe_result_lbl.setWordWrap(True)
         self.ai_probe_result_lbl.setObjectName("bannerNotice")
+        self.ai_probe_result_lbl.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         set_widget_tone(self.ai_probe_result_lbl, "info")
 
         midi_py_row = QtWidgets.QVBoxLayout()
@@ -518,18 +770,33 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self.midi_probe_result_lbl.setWordWrap(True)
         self.midi_probe_result_lbl.setObjectName("bannerNotice")
+        self.midi_probe_result_lbl.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         set_widget_tone(self.midi_probe_result_lbl, "info")
 
-        for gtitle, glabel, controls, feedback in (
-            ("AI WORKER // 分轨运行环境", "AI Worker Python", py_row, self.ai_probe_result_lbl),
-            ("MIDI WORKER // 转录运行环境", "MIDI Python 3.11", midi_py_row, self.midi_probe_result_lbl),
+        for gtitle, glabel, htitle, hbody, controls, feedback in (
+            (
+                "AI WORKER // 分轨运行环境 (PyTorch CUDA + ONNX)",
+                "AI Worker Python",
+                "独立 AI 分轨环境说明",
+                "为什么独立隔离？将数 GB 的 PyTorch CUDA 放在独立子进程环境中，平时不启动 AI 分轨时主程序内存极低、零显存占用；分轨结束后子进程退出即可 100% 释放显存。",
+                py_row,
+                self.ai_probe_result_lbl,
+            ),
+            (
+                "MIDI WORKER // 转录运行环境 (Python 3.11 Basic Pitch CPU)",
+                "MIDI Python 3.11",
+                "独立 CPU MIDI 环境说明",
+                "Spotify Basic Pitch 依赖 TensorFlow 2.15（仅支持 Python 3.11），隔离在独立 CPU 环境中既避免与 PyTorch CUDA 冲突，也不会争抢 8GB 显卡显存。",
+                midi_py_row,
+                self.midi_probe_result_lbl,
+            ),
         ):
             group = QtWidgets.QGroupBox(gtitle)
             section = QtWidgets.QFormLayout(group)
             section.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
             section.setHorizontalSpacing(14)
             section.setVerticalSpacing(10)
-            section.addRow(QtWidgets.QLabel(glabel))
+            section.addRow(wrap_with_help(QtWidgets.QLabel(glabel), htitle, hbody)[0])
             section.addRow(controls)
             section.addRow(feedback)
             env_layout.addWidget(group)
@@ -552,6 +819,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._orig_limits = resource_limits
         self._orig_ai_cfg = ai_config
+        install_focus_animations(self)
         self.apply_skin(appearance, acid_variant=self._acid_variant or "")
         self.open_category("appearance")
         self._category_buttons["appearance"].setFocus()
@@ -567,6 +835,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def apply_skin(self, appearance: Appearance, *, acid_variant: Optional[str] = None) -> None:
         self._appearance = appearance
+        self._updated_appearance = appearance
         if acid_variant is not None:
             self._acid_variant = acid_variant or None
         else:
@@ -582,6 +851,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.setStyleSheet(acid_stylesheet(appearance, self._acid_variant))
             else:
                 self.setStyleSheet("")
+        translate_widget_tree(self, appearance.language)
 
     def _add_page(self, key: str, widget: QtWidgets.QWidget, *, scroll: bool = False) -> None:
         if scroll:
@@ -606,11 +876,54 @@ class SettingsDialog(QtWidgets.QDialog):
         return row
 
     def update_appearance_summary(self, appearance: Appearance) -> None:
-        mode_lbl = THEME_MODES.get(appearance.theme_mode, "黑夜")
-        self._theme_summary.setText(f"{PRESETS[appearance.preset][0]} · {mode_lbl}")
+        self._appearance = appearance
+        self._updated_appearance = appearance
+        mode_lbl = THEME_MODES.get(appearance.theme_mode, "白天")
+        lang_lbl = LANGUAGES.get(appearance.language, "简体中文")
+        self._theme_summary.setText(f"{PRESETS[appearance.preset][0]} · {mode_lbl} · {lang_lbl}")
         self._layout_summary.setText(LAYOUTS[appearance.layout][0])
-        font_label = appearance.font_family or "系统默认"
+        font_label = "工业标准字体 (已锁定)" if appearance.is_acid_locked() else (appearance.font_family or "系统默认")
         self._font_summary.setText(f"{font_label} · {appearance.font_size} px")
+        if hasattr(self, "language_combo"):
+            blocker1 = QtCore.QSignalBlocker(self.language_combo)
+            idx = self.language_combo.findData(appearance.language)
+            if idx >= 0:
+                self.language_combo.setCurrentIndex(idx)
+            del blocker1
+        if hasattr(self, "frameless_chk"):
+            blocker2 = QtCore.QSignalBlocker(self.frameless_chk)
+            self.frameless_chk.setChecked(bool(appearance.frameless))
+            del blocker2
+        if hasattr(self, "help_mode_chk"):
+            blocker3 = QtCore.QSignalBlocker(self.help_mode_chk)
+            self.help_mode_chk.setChecked(bool(appearance.help_mode))
+            del blocker3
+        if hasattr(self, "focus_anim_chk"):
+            blocker4 = QtCore.QSignalBlocker(self.focus_anim_chk)
+            self.focus_anim_chk.setChecked(bool(appearance.focus_animations))
+            del blocker4
+        translate_widget_tree(self, appearance.language)
+
+    def _on_quick_appearance_changed(self, *_args) -> None:
+        lang = str(self.language_combo.currentData() or "zh")
+        frameless = bool(self.frameless_chk.isChecked())
+        help_mode = bool(self.help_mode_chk.isChecked()) if hasattr(self, "help_mode_chk") else True
+        focus_anim = bool(self.focus_anim_chk.isChecked()) if hasattr(self, "focus_anim_chk") else True
+        updated = replace(
+            self._appearance,
+            language=lang,
+            frameless=frameless,
+            help_mode=help_mode,
+            focus_animations=focus_anim,
+        )
+        self.update_appearance_summary(updated)
+        self.appearance_changed.emit(updated)
+
+    def _copy_github_url(self) -> None:
+        cb = QtWidgets.QApplication.clipboard()
+        if cb is not None:
+            cb.setText(GITHUB_REPO_URL)
+        self.copy_repo_url_btn.setText("已复制项目链接 ✓")
 
     def open_category(self, key: str) -> None:
         self._active_category = key
@@ -618,8 +931,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self._pages.setCurrentWidget(self._page_map[key])
         title, subtitle = SETTINGS_CATEGORIES[key]
         self._page_eyebrow.setText(SETTINGS_EYEBROWS.get(key, "CONFIG // TELEMETRY"))
+        self._title.setProperty("_ls_orig_text", title)
         self._title.setText(title)
+        self._subtitle.setProperty("_ls_orig_text", subtitle)
         self._subtitle.setText(subtitle)
+        translate_widget_tree(self, self._appearance.language)
 
     def focus_midi(self) -> None:
         self.open_category("midi")
@@ -637,6 +953,8 @@ class SettingsDialog(QtWidgets.QDialog):
     def _refresh_status_alert(self, r: SystemHardwareReport) -> None:
         if not r.gpu_ai_ready or not r.is_windows:
             warn_text = r.gpu_ai_block_reason or ""
+            if not r.pytorch.installed:
+                warn_text = f"{warn_text}\n{PYTORCH_DOWNLOAD_GUIDE}".strip()
             if not r.is_windows:
                 warn_text = (
                     f"[WARN] 当前在 {r.os_system} 运行：WASAPI Process Loopback 与 RTX 5060 Ti CUDA 未在 Windows 真机验证。\n"
@@ -648,6 +966,53 @@ class SettingsDialog(QtWidgets.QDialog):
         else:
             self.status_alert_lbl.setVisible(False)
             self.status_alert_lbl.setText("")
+
+    def _scan_local_pytorch(self) -> None:
+        self.scan_pytorch_btn.setEnabled(False)
+        set_widget_tone(self.bootstrap_status_lbl, "info")
+        self.bootstrap_status_lbl.setText("[BUSY] 正在扫描本机所有 Python / Conda / 虚拟环境中的 PyTorch 安装情况...")
+
+        def _worker() -> None:
+            found = scan_local_pytorch_installations((get_app_root(), get_bundle_root()))
+            if not self._dialog_closed:
+                try:
+                    self._pytorch_scan_finished.emit(found)
+                except RuntimeError:
+                    pass
+
+        threading.Thread(target=_worker, name="ListenScope-ScanPyTorch", daemon=True).start()
+
+    @QtCore.Slot(object)
+    def _on_pytorch_scan_finished(self, results: Any) -> None:
+        if self._dialog_closed:
+            return
+        self.scan_pytorch_btn.setEnabled(True)
+        found_list = results if isinstance(results, list) else []
+        if not found_list:
+            set_widget_tone(self.bootstrap_status_lbl, "warn")
+            self.bootstrap_status_lbl.setText(f"[WARN] {PYTORCH_DOWNLOAD_GUIDE}")
+            set_widget_tone(self.ai_probe_result_lbl, "warn")
+            self.ai_probe_result_lbl.setText(f"[WARN] {PYTORCH_DOWNLOAD_GUIDE}")
+            return
+
+        best = found_list[0]
+        best_exe = str(best.get("python_executable", "")).strip()
+        if best_exe:
+            self.ai_python_edit.setText(best_exe)
+        summary_lines = [f"[OK] 在本机扫描到 {len(found_list)} 个包含 PyTorch 的 Python 环境（已自动填入最优路径）："]
+        for item in found_list[:4]:
+            ver = item.get("torch_version", "unknown")
+            cuda_ok = "CUDA 可用" if item.get("cuda_available") else "仅 CPU"
+            sm120 = ", 支持 sm_120" if item.get("supports_sm_120") else ""
+            summary_lines.append(f"• {item.get('python_executable')} -> PyTorch {ver} ({cuda_ok}{sm120})")
+        if not best.get("cuda_available"):
+            summary_lines.append(
+                f"提示：当前扫描到的 PyTorch 不含 CUDA 加速，建议前往 {PYTORCH_OFFICIAL_URL} 或使用 {PYTORCH_CU128_INDEX_URL} 安装 CUDA 12.8 版本。"
+            )
+        set_widget_tone(self.bootstrap_status_lbl, "ok" if best.get("cuda_available") else "warn")
+        self.bootstrap_status_lbl.setText("\n".join(summary_lines))
+        if best_exe:
+            self._verify_ai_environment()
 
     def _browse_wheel_dir(self) -> None:
         chosen = QtWidgets.QFileDialog.getExistingDirectory(
@@ -848,7 +1213,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if not isinstance(result, dict) or not result.get("ok"):
             self._verified_ai_probe = None
             err = result.get("error", "未知错误") if isinstance(result, dict) else str(result)
-            self.ai_probe_result_lbl.setText(f"[ERR] 检测失败: {err}")
+            self.ai_probe_result_lbl.setText(f"[ERR] 检测失败: {err}\n{PYTORCH_DOWNLOAD_GUIDE}")
             set_widget_tone(self.ai_probe_result_lbl, "error")
             return
 
@@ -877,11 +1242,13 @@ class SettingsDialog(QtWidgets.QDialog):
         ff_txt = f"OK ({ff_info.get('path')})" if ff_info.get("installed") else "MISS (仅 WAV 可直读)"
         summary = (
             f"Python: {result.get('python_executable')}\n"
-            f"PyTorch: {pt.get('version') or 'N/A'} (CUDA={pt.get('cuda_available')}, sm_120={pt.get('supports_sm_120')}) | "
+            f"PyTorch: {pt.get('version') or '未安装'} (CUDA={pt.get('cuda_available')}, sm_120={pt.get('supports_sm_120')}) | "
             f"ONNX CUDA: {ort.get('cuda_provider_available')}\n"
             f"AI 包: {pkg_summary} | FFmpeg: {ff_txt}\n"
             f"GPU AI 准入: {'READY' if gpu_ready else f'BLOCKED ({block_reason})'}"
         )
+        if not pt.get("installed"):
+            summary += f"\n\n{PYTORCH_DOWNLOAD_GUIDE}"
         self.ai_probe_result_lbl.setText(summary)
         set_widget_tone(self.ai_probe_result_lbl, "ok" if gpu_ready else "warn")
 
@@ -933,7 +1300,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 else "N/A (目标真机为 8GB VRAM)",
             ),
             ("NVIDIA Driver / NVML", f"{r.nvidia_driver_version or '未检测到'} / {'可用' if r.nvml_available else '不可用'}"),
-            ("PyTorch", f"{r.pytorch.version} (CUDA build={r.pytorch.cuda_build})" if r.pytorch.installed else "未安装 (Core 环境隔离正常)"),
+            (
+                "PyTorch",
+                f"{r.pytorch.version} (CUDA build={r.pytorch.cuda_build})"
+                if r.pytorch.installed
+                else f"未检测到 (可点击「扫描本机 PyTorch」或前往 {PYTORCH_OFFICIAL_URL} 下载)",
+            ),
             (
                 "torch.cuda.is_available() / Compute Cap",
                 f"{'可用' if r.pytorch.cuda_available else '不可用'} / {r.pytorch.compute_capability or 'N/A'}",
@@ -989,10 +1361,20 @@ class SettingsDialog(QtWidgets.QDialog):
                 live_chunk_seconds=self._orig_ai_cfg.live_chunk_seconds,
                 live_overlap_seconds=self._orig_ai_cfg.live_overlap_seconds,
                 live_max_buffer_seconds=self._orig_ai_cfg.live_max_buffer_seconds,
+                igpu_directml_2stem=bool(self.igpu_dml_chk.isChecked()),
+                igpu_directml_device_id=int(self.igpu_dml_id_spin.value()),
+                offload_gui_to_igpu=bool(self.gui_offload_chk.isChecked()),
             )
             entered_py = self.ai_python_edit.text().strip()
             self._updated_ai_python = entered_py
             self._updated_midi_python = self.midi_python_edit.text().strip()
+            self._updated_appearance = replace(
+                self._appearance,
+                language=str(self.language_combo.currentData() or "zh"),
+                frameless=bool(self.frameless_chk.isChecked()),
+                help_mode=bool(self.help_mode_chk.isChecked()),
+                focus_animations=bool(self.focus_anim_chk.isChecked()),
+            )
             if self._verified_ai_probe is not None and str(self._verified_ai_probe.get("python_executable", "")) != entered_py:
                 self._verified_ai_probe = None
         except ValueError as exc:
@@ -1017,9 +1399,14 @@ class SettingsDialog(QtWidgets.QDialog):
         return self._updated_midi_python
 
     @property
+    def updated_appearance(self) -> Appearance:
+        return self._updated_appearance
+
+    @property
     def verified_ai_probe(self) -> Optional[dict[str, Any]]:
         return self._verified_ai_probe
 
     @property
     def verified_report(self) -> SystemHardwareReport:
         return self._report
+

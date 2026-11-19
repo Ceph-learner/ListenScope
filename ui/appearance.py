@@ -16,9 +16,19 @@ from core.appearance import (
     PRESETS,
     THEME_MODES,
 )
-from ui.help_badge import HelpBadge
+from core.i18n import LANGUAGES, translate_widget_tree
+from ui.help_badge import (
+    HelpBadge,
+    install_focus_animations,
+    set_focus_animations_enabled,
+    set_help_language,
+    set_help_mode_enabled,
+    set_help_theme,
+)
 from ui.acid_style import (
+    TelemetryHeader,
     acid_stylesheet,
+    get_acid_palette,
     is_acid_eligible,
     resolve_acid_variant,
 )
@@ -150,14 +160,61 @@ def appearance_stylesheet(
     }
     qss = re.sub(r"#[0-9A-F]{6}", lambda match: colors.get(match[0], match[0]), base)
     qss = qss.replace("font-size: 12px", f"font-size: {appearance.font_size}px")
-    if appearance.font_family:
+    eff_font = appearance.effective_font_family()
+    if eff_font:
         qss = qss.replace(
             'font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;',
-            f'font-family: "{appearance.font_family}", "Segoe UI", "Microsoft YaHei UI", sans-serif;',
+            f'font-family: "{eff_font}", "Segoe UI", "Microsoft YaHei UI", sans-serif;',
         )
+
+    has_bg_image = bool(appearance.effective_background_image())
+    card_bg = f"rgba({QtGui.QColor(surface).red()}, {QtGui.QColor(surface).green()}, {QtGui.QColor(surface).blue()}, 212)" if has_bg_image else surface
+    shell_bg = "transparent" if has_bg_image else background
 
     btn_checked_fg = foreground if is_light else foreground
     qss += f"""
+QWidget#mainShellFrame {{
+    background-color: {shell_bg};
+    color: {foreground};
+}}
+QWidget#mainShellFrame[frameless="true"] {{
+    border: 1px solid {rim};
+    border-radius: 10px;
+}}
+QPushButton#windowCtrlBtn {{
+    background: transparent;
+    color: {subtle_fg};
+    border: 1px solid {rim};
+    border-radius: 5px;
+    padding: 0px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 24px;
+    max-height: 24px;
+    font-weight: 700;
+}}
+QPushButton#windowCtrlBtn:hover {{
+    background: {hover};
+    color: {foreground};
+    border-color: {accent};
+}}
+QPushButton#windowCloseBtn {{
+    background: transparent;
+    color: {subtle_fg};
+    border: 1px solid {rim};
+    border-radius: 5px;
+    padding: 0px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 24px;
+    max-height: 24px;
+    font-weight: 700;
+}}
+QPushButton#windowCloseBtn:hover {{
+    background: #D9262E;
+    color: #FFFFFF;
+    border-color: #FF6B6B;
+}}
 QToolTip {{
     background-color: {surface};
     color: {foreground};
@@ -179,7 +236,7 @@ QTableWidget {{
     selection-color: {foreground};
 }}
 QPushButton:checked {{ color: {btn_checked_fg}; }}
-QGroupBox, QFrame[trackCard=true], QFrame#practiceCard {{ background: {surface}; }}
+QGroupBox, QFrame[trackCard=true], QFrame#practiceCard {{ background: {card_bg}; }}
 QFrame[trackCard=true], QFrame#practiceCard {{ border: 1px solid {rim}; border-radius: 7px; }}
 QGroupBox QLabel, QFrame[trackCard=true] QLabel, QFrame#practiceCard QLabel {{ background: transparent; }}
 QPushButton#analysisAction:enabled {{ background: {sel_bg}; border-color: {accent}; font-weight: 600; color: {foreground}; }}
@@ -359,9 +416,9 @@ QLabel#chromaTrackStatus[tone="warn"] {{
 }}
 QLabel#settingsHeading {{ font-size: {appearance.font_size + 12}px; font-weight: 700; }}
 QLabel#analysisHeading {{ font-size: {appearance.font_size + 7}px; font-weight: 700; }}
-QFrame#analysisMetric {{ background: {surface}; border: 1px solid {rim}; border-radius: 8px; }}
+QFrame#analysisMetric {{ background: {card_bg}; border: 1px solid {rim}; border-radius: 8px; }}
 QFrame#analysisMetric QLabel {{ background: transparent; }}
-QFrame#analysisChart {{ background: {surface}; border: 1px solid {rim}; border-radius: 7px; }}
+QFrame#analysisChart {{ background: {card_bg}; border: 1px solid {rim}; border-radius: 7px; }}
 QFrame#analysisChart QLabel {{ background: transparent; }}
 QLabel#analysisChartHeading {{ font-weight: 600; }}
 QLabel#analysisCaption {{ color: {subtle_fg}; }}
@@ -371,7 +428,7 @@ QProgressBar#analysisLevel {{ background: {sunk}; border: 0; border-radius: 2px;
 QProgressBar#analysisLevel::chunk {{ background: {accent}; border-radius: 2px; }}
 QLabel#settingsPageHeading {{ font-size: {appearance.font_size + 6}px; font-weight: 700; }}
 QLabel#settingsSubtitle {{ color: {subtle_fg}; }}
-QWidget#settingsNavigation {{ background: {surface}; border: 1px solid {rim}; border-radius: 9px; }}
+QWidget#settingsNavigation {{ background: {card_bg}; border: 1px solid {rim}; border-radius: 9px; }}
 QPushButton#settingsNavButton {{
     background: transparent; border: 1px solid transparent; border-radius: 6px;
     text-align: left; padding: 6px 8px;
@@ -387,7 +444,7 @@ QPushButton#settingsSave {{
 }}
 QPushButton#settingsSave:hover, QPushButton#settingsSave:focus {{ background: {checked_bg}; }}
 QFrame#acidTopbar {{
-    background: {surface};
+    background: {card_bg};
     border: 1px solid {rim};
     border-left: 3px solid {accent};
     border-radius: 7px;
@@ -427,7 +484,7 @@ QLabel#telemetryPill {{
     font-weight: 600;
 }}
 QFrame[acidCard="true"] {{
-    background: {surface};
+    background: {card_bg};
     border: 1px solid {rim};
     border-radius: 7px;
 }}
@@ -484,7 +541,8 @@ def apply_plot_appearance(
     background, foreground, _ = appearance.effective_colors(system_is_dark=system_is_dark)
     plot.setBackground(background)
     axis_color = _blend(background, foreground, 0.72)
-    base_font = QtGui.QFont(appearance.font_family) if appearance.font_family else QtGui.QFont(QtWidgets.QApplication.font())
+    eff_font = appearance.effective_font_family()
+    base_font = QtGui.QFont(eff_font) if eff_font else QtGui.QFont(QtWidgets.QApplication.font())
     base_font.setPixelSize(appearance.font_size)
     title = plot.getPlotItem().titleLabel
     title.setText(title.text, color=foreground, family=base_font.family(), size=f"{appearance.font_size}px")
@@ -496,7 +554,7 @@ def apply_plot_appearance(
 
 
 class AppearanceDialog(QtWidgets.QDialog):
-    """Preview theme, Dark/Light/Follow-System mode, OS font/size, and layout live with safe revert on cancel."""
+    """Preview theme, Dark/Light/Follow-System mode, OS font/size, wallpaper, language, and layout live."""
 
     def __init__(
         self,
@@ -515,7 +573,10 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._system_is_dark = system_is_dark
 
         root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(14, 12, 14, 12)
         root.setSpacing(10)
+
+        root.addWidget(TelemetryHeader("APPEARANCE // THEME & TYPOGRAPHY", "主题风格 · 字体字号 · 多语言与交互"))
 
         presets = QtWidgets.QHBoxLayout()
         self._presets = QtWidgets.QButtonGroup(self)
@@ -527,11 +588,19 @@ class AppearanceDialog(QtWidgets.QDialog):
             button.setProperty("preset", key)
             if key == "acid_telemetry":
                 button.setToolTip(
-                    "酸性遥测高对比工业视觉风格：45° 切角标识、双语遥测标题栏与精密平面网格；"
-                    "配合上方「黑夜 / 白天 / 跟随系统」切换酸性暗夜与临床浅色，选中后主窗口顶栏也可一键切换。"
+                    "酸性遥测高对比工业视觉风格（默认浅色白天）：45° 切角标识、双语遥测标题栏与精密平面网格；"
+                    "锁定官方工业配色、字体与光学参数（仅开放字号、明暗模式与语言调整）。"
                 )
             presets.addWidget(button)
         root.addLayout(presets)
+
+        self._acid_lock_banner = QtWidgets.QLabel(
+            "🔒 酸性遥测风格已锁定标准工业字体、官方配色、玻璃高光与背景图（字号 11–20px、黑夜/白天/跟随系统、语言与布局仍可自由调节）。"
+        )
+        self._acid_lock_banner.setObjectName("bannerNotice")
+        self._acid_lock_banner.setProperty("tone", "info")
+        self._acid_lock_banner.setWordWrap(True)
+        root.addWidget(self._acid_lock_banner)
 
         form = QtWidgets.QFormLayout()
         form.setVerticalSpacing(8)
@@ -552,12 +621,55 @@ class AppearanceDialog(QtWidgets.QDialog):
         mode_row.addWidget(
             HelpBadge(
                 "明暗主题与跟随系统",
-                "「黑夜」与「白天」分别使用匹配的高对比深/浅色调板；「跟随系统」会实时侦测 Windows 系统深浅色切换并自动更新界面与图表。",
+                "「白天」默认启用清爽高对比的临床浅色工作台；「黑夜」切换为深邃低眩光配色；「跟随系统」自动同步 Windows 深浅色设置。",
             )
         )
         form.addRow("主题模式", mode_row)
 
+        # Language + Frameless window row
+        lang_row = QtWidgets.QHBoxLayout()
+        lang_row.setSpacing(8)
+        self._language_combo = QtWidgets.QComboBox()
+        self._language_combo.setProperty("lsKeepItems", True)
+        self._language_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
+        for lang_code, lang_label in LANGUAGES.items():
+            self._language_combo.addItem(lang_label, lang_code)
+        self._language_combo.currentIndexChanged.connect(self._on_control_changed)
+        self._frameless_chk = QtWidgets.QCheckBox("无边框圆角窗口 (推荐)")
+        self._frameless_chk.setToolTip("启用丝滑四角圆角无边框工业壳体，支持顶栏拖拽、双击最大化与边缘缩放")
+        self._frameless_chk.toggled.connect(self._on_control_changed)
+        lang_row.addWidget(self._language_combo, 1)
+        lang_row.addWidget(self._frameless_chk)
+        lang_row.addWidget(
+            HelpBadge(
+                "多语言与无边框圆角壳体",
+                "支持简体中文、English、한국어、日本語 四种语言实时切换（固定工业英文代号保留，English 模式下仅显示英文不重复）。"
+                "无边框圆角窗口消除传统系统粗边框，四角圆润丝滑。",
+            )
+        )
+        form.addRow("界面语言", lang_row)
+
+        # Help mode + Focus hover animation toggles
+        assist_row = QtWidgets.QHBoxLayout()
+        assist_row.setSpacing(10)
+        self._help_mode_chk = QtWidgets.QCheckBox("说明模式 (显示 [?] 悬浮说明)")
+        self._help_mode_chk.toggled.connect(self._on_control_changed)
+        self._focus_anim_chk = QtWidgets.QCheckBox("交互聚焦动画")
+        self._focus_anim_chk.toggled.connect(self._on_control_changed)
+        assist_row.addWidget(self._help_mode_chk)
+        assist_row.addWidget(self._focus_anim_chk)
+        assist_row.addStretch(1)
+        assist_row.addWidget(
+            HelpBadge(
+                "说明模式与交互聚焦动画",
+                "• 说明模式：开启后在各功能旁显示 [?] 徽标，鼠标悬浮即可即时弹出中文/外语功能解释；熟悉软件后可随时关闭，界面更纯粹。\n"
+                "• 交互聚焦动画：开启后按钮、下拉框与问号徽标带有轻量丝滑的悬浮聚焦高亮动画（零显存占用）；追求极简静态时可关闭。",
+            )
+        )
+        form.addRow("交互与引导", assist_row)
+
         self._layout = QtWidgets.QComboBox()
+        self._layout.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         for key, (label, _description) in LAYOUTS.items():
             self._layout.addItem(label, key)
         self._layout.currentIndexChanged.connect(self._on_control_changed)
@@ -569,6 +681,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         form.addRow("", self._layout_hint)
 
         self._analysis_layout = QtWidgets.QComboBox()
+        self._analysis_layout.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         for key, label in ANALYSIS_LAYOUTS.items():
             self._analysis_layout.addItem(f"{label}（默认）" if key == DEFAULT_ANALYSIS_LAYOUT else label, key)
         self._analysis_layout.currentIndexChanged.connect(self._on_control_changed)
@@ -595,13 +708,14 @@ class AppearanceDialog(QtWidgets.QDialog):
         font_row.addWidget(self._font)
         font_row.addWidget(
             HelpBadge(
-                "系统字体扫描与实时预览",
-                "自动扫描本机已安装的字体。勾选「实时预览」后，调整字体、字号或明暗模式时主界面会同步刷新；点「取消」会安全恢复原样。",
+                "系统字体扫描与字号",
+                "在酸性遥测主题下字体家族锁定为标准工业体系以保证排版对齐，但字号（11–20 px）仍可自由缩放；切换到其他主题后可自定义任意系统已安装字体。",
             )
         )
         form.addRow("字体与大小", font_row)
 
         self._colors: dict[str, QtWidgets.QLineEdit] = {}
+        self._color_pickers: dict[str, QtWidgets.QPushButton] = {}
         for key, label in (("background", "背景色"), ("text", "字色"), ("accent", "强调色")):
             row = QtWidgets.QHBoxLayout()
             field = QtWidgets.QLineEdit()
@@ -614,11 +728,33 @@ class AppearanceDialog(QtWidgets.QDialog):
             row.addWidget(field, 1)
             row.addWidget(picker)
             self._colors[key] = field
+            self._color_pickers[key] = picker
             form.addRow(label, row)
+
+        # Custom background image (non-Acid themes only)
+        bg_row = QtWidgets.QHBoxLayout()
+        bg_row.setSpacing(6)
+        self._bg_image_edit = QtWidgets.QLineEdit()
+        self._bg_image_edit.setPlaceholderText("未设置自定义背景图（仅非酸性主题可用）")
+        self._bg_image_edit.textChanged.connect(self._on_control_changed)
+        self._bg_image_btn = QtWidgets.QPushButton("选择背景图…")
+        self._bg_image_btn.clicked.connect(self._pick_background_image)
+        self._bg_image_clear_btn = QtWidgets.QPushButton("清除")
+        self._bg_image_clear_btn.clicked.connect(lambda: self._bg_image_edit.setText(""))
+        bg_row.addWidget(self._bg_image_edit, 1)
+        bg_row.addWidget(self._bg_image_btn)
+        bg_row.addWidget(self._bg_image_clear_btn)
+        bg_row.addWidget(
+            HelpBadge(
+                "自定义背景壁纸（非酸性主题专享）",
+                "在经典深色、Lenso 液态玻璃、Codex 石墨、Claude 暖砂四种主题下，支持上传 PNG/JPG/WebP 图片作为主窗口背景壁纸，并自动叠加柔和可读性遮罩。酸性遥测主题为保持纯粹图形写实主义对比度，禁用自定义背景图。",
+            )
+        )
+        form.addRow("自定义背景图", bg_row)
         root.addLayout(form)
 
-        glass = QtWidgets.QGroupBox("液态玻璃卡片")
-        optics = QtWidgets.QFormLayout(glass)
+        self._glass_group = QtWidgets.QGroupBox("液态玻璃卡片")
+        optics = QtWidgets.QFormLayout(self._glass_group)
         self._scope = QtWidgets.QComboBox()
         for label, key in (("仅悬浮小件（推荐）", "floating"), ("全部面板", "panels"), ("关闭光学高光", "off")):
             self._scope.addItem(label, key)
@@ -631,7 +767,7 @@ class AppearanceDialog(QtWidgets.QDialog):
             slider.valueChanged.connect(self._on_control_changed)
             self._sliders[key] = slider
             optics.addRow(label, slider)
-        root.addWidget(glass)
+        root.addWidget(self._glass_group)
 
         hint_row = QtWidgets.QHBoxLayout()
         hint = QtWidgets.QLabel("玻璃材质使用渐变模拟，不采样背景像素。")
@@ -658,7 +794,7 @@ class AppearanceDialog(QtWidgets.QDialog):
 
         footer = QtWidgets.QHBoxLayout()
         self._reset_btn = QtWidgets.QPushButton("恢复默认")
-        self._reset_btn.setToolTip("一键将主题模式、预设配色、字体、字号与布局恢复为出厂默认值")
+        self._reset_btn.setToolTip("一键恢复为默认酸性遥测浅色白天主题、默认字号与布局")
         self._reset_btn.clicked.connect(self.reset_to_defaults)
         footer.addWidget(self._reset_btn)
         footer.addStretch(1)
@@ -673,11 +809,13 @@ class AppearanceDialog(QtWidgets.QDialog):
         footer.addWidget(self._buttons)
         root.addLayout(footer)
 
-        self.setMinimumWidth(540)
+        self.setMinimumWidth(590)
+        install_focus_animations(self)
         self._show_values(appearance, emit_preview=False)
 
     def _apply_preset(self, key: str) -> None:
         current = self.values()
+        is_acid = key == "acid_telemetry"
         updated = Appearance(
             preset=key,
             font_size=current.font_size,
@@ -691,7 +829,12 @@ class AppearanceDialog(QtWidgets.QDialog):
             layout=current.layout,
             analysis_layout=current.analysis_layout,
             theme_mode=current.theme_mode,
-            font_family=current.font_family,
+            font_family="" if is_acid else current.font_family,
+            background_image="" if is_acid else current.background_image,
+            language=current.language,
+            frameless=current.frameless,
+            help_mode=current.help_mode,
+            focus_animations=current.focus_animations,
         )
         self._show_values(updated)
 
@@ -701,15 +844,21 @@ class AppearanceDialog(QtWidgets.QDialog):
     def values(self) -> Appearance:
         checked_preset = self._presets.checkedButton()
         checked_mode = self._theme_modes.checkedButton()
+        preset_key = checked_preset.property("preset") if checked_preset else "acid_telemetry"
         return Appearance.from_mapping({
-            "preset": checked_preset.property("preset") if checked_preset else "classic",
-            "theme_mode": checked_mode.property("themeMode") if checked_mode else "dark",
-            "font_family": self._font_family.currentData() or "",
+            "preset": preset_key,
+            "theme_mode": checked_mode.property("themeMode") if checked_mode else "light",
+            "font_family": "" if preset_key == "acid_telemetry" else (self._font_family.currentData() or ""),
             "font_size": self._font.value(),
             "scope": self._scope.currentData(),
             "layout": self._layout.currentData(),
             "analysis_layout": self._analysis_layout.currentData(),
-            **{key: field.text() for key, field in self._colors.items()},
+            "background_image": "" if preset_key == "acid_telemetry" else self._bg_image_edit.text().strip(),
+            "language": self._language_combo.currentData() or "zh",
+            "frameless": self._frameless_chk.isChecked(),
+            "help_mode": self._help_mode_chk.isChecked(),
+            "focus_animations": self._focus_anim_chk.isChecked(),
+            **{key: ("" if preset_key == "acid_telemetry" else field.text()) for key, field in self._colors.items()},
             **{key: slider.value() for key, slider in self._sliders.items()},
         })
 
@@ -720,6 +869,11 @@ class AppearanceDialog(QtWidgets.QDialog):
             self._font_family,
             self._font,
             self._scope,
+            self._language_combo,
+            self._frameless_chk,
+            self._help_mode_chk,
+            self._focus_anim_chk,
+            self._bg_image_edit,
             *self._colors.values(),
             *self._sliders.values(),
         ]
@@ -737,6 +891,12 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._layout.setCurrentIndex(max(0, self._layout.findData(values.layout)))
         self._analysis_layout.setCurrentIndex(max(0, self._analysis_layout.findData(values.analysis_layout)))
         self._scope.setCurrentIndex(max(0, self._scope.findData(values.scope)))
+        lang_idx = self._language_combo.findData(values.language)
+        self._language_combo.setCurrentIndex(max(0, lang_idx))
+        self._frameless_chk.setChecked(bool(values.frameless))
+        self._help_mode_chk.setChecked(bool(values.help_mode))
+        self._focus_anim_chk.setChecked(bool(values.focus_animations))
+        self._bg_image_edit.setText(values.background_image)
         for key, field in self._colors.items():
             field.setText(getattr(values, key))
         for key, slider in self._sliders.items():
@@ -755,32 +915,91 @@ class AppearanceDialog(QtWidgets.QDialog):
     def _on_control_changed(self, *_args) -> None:
         self._refresh_sample(emit_preview=True)
 
+    def _update_acid_lock_state(self, is_acid: bool) -> None:
+        self._acid_lock_banner.setVisible(is_acid)
+        self._font_family.setEnabled(not is_acid)
+        for key, field in self._colors.items():
+            field.setEnabled(not is_acid)
+            self._color_pickers[key].setEnabled(not is_acid)
+        self._bg_image_edit.setEnabled(not is_acid)
+        self._bg_image_btn.setEnabled(not is_acid)
+        self._bg_image_clear_btn.setEnabled(not is_acid)
+        self._glass_group.setEnabled(not is_acid)
+
     def _refresh_sample(self, *, emit_preview: bool = True) -> None:
         appearance = self.values()
+        is_acid = appearance.is_acid_locked()
+        self._update_acid_lock_state(is_acid)
         self._layout_hint.setText(LAYOUTS[appearance.layout][1])
         for slider in self._sliders.values():
-            slider.setEnabled(appearance.scope != "off")
+            slider.setEnabled((not is_acid) and appearance.scope != "off")
             slider.setToolTip(f"{slider.value()}%")
         if is_acid_eligible(appearance):
-            variant = resolve_acid_variant(appearance, system_is_dark=self._system_is_dark) or "dark"
+            variant = resolve_acid_variant(appearance, system_is_dark=self._system_is_dark) or "light"
             sample_qss = acid_stylesheet(appearance, variant)
+            pal = get_acid_palette(variant)
+            set_help_theme(
+                bg=pal.bg_panel,
+                fg=pal.text_primary,
+                accent=pal.accent,
+                border=pal.border,
+                muted=pal.text_muted,
+                is_dark=(variant == "dark"),
+                is_acid=True,
+            )
         else:
             sample_qss = appearance_stylesheet(
                 self._base_stylesheet, appearance, system_is_dark=self._system_is_dark
             )
+            bg, fg, accent = appearance.effective_colors(system_is_dark=self._system_is_dark)
+            mode = appearance.resolve_theme_mode(system_is_dark=self._system_is_dark)
+            set_help_theme(
+                bg=bg,
+                fg=fg,
+                accent=accent,
+                border=_blend(bg, fg, 0.28),
+                muted=_blend(bg, fg, 0.65),
+                is_dark=(mode == "dark"),
+                is_acid=False,
+            )
+        # Theme the entire AppearanceDialog consistently with the selected preset & mode
+        self.setStyleSheet(sample_qss)
         self._sample.setStyleSheet(sample_qss)
-        valid_colors = all(field.hasAcceptableInput() for field in self._colors.values())
+        set_help_mode_enabled(appearance.help_mode)
+        set_focus_animations_enabled(appearance.focus_animations)
+        set_help_language(appearance.language)
+        translate_widget_tree(self, appearance.language)
+        valid_colors = is_acid or all(field.hasAcceptableInput() for field in self._colors.values())
         self._buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setEnabled(valid_colors)
         if emit_preview and valid_colors and self._on_preview is not None and self._live_preview_chk.isChecked():
             self._on_preview(appearance)
 
     def _pick_color(self, key: str) -> None:
+        if self.values().is_acid_locked():
+            return
         initial = dict(zip(self._colors, self.values().effective_colors(system_is_dark=self._system_is_dark)))[key]
         color = QtWidgets.QColorDialog.getColor(QtGui.QColor(initial), self)
         if color.isValid():
             self._colors[key].setText(color.name().upper())
 
+    def _pick_background_image(self) -> None:
+        if self.values().is_acid_locked():
+            return
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "选择自定义背景图",
+            self._bg_image_edit.text().strip(),
+            "图像文件 (*.png *.jpg *.jpeg *.webp *.bmp);;所有文件 (*)",
+        )
+        if path:
+            self._bg_image_edit.setText(path)
+
     def done(self, result: int) -> None:  # type: ignore[override]
-        if result != QtWidgets.QDialog.DialogCode.Accepted and self._on_preview is not None:
-            self._on_preview(self._initial_appearance)
+        if result != QtWidgets.QDialog.DialogCode.Accepted:
+            set_help_mode_enabled(self._initial_appearance.help_mode)
+            set_focus_animations_enabled(self._initial_appearance.focus_animations)
+            set_help_language(self._initial_appearance.language)
+            if self._on_preview is not None:
+                self._on_preview(self._initial_appearance)
         super().done(result)
+

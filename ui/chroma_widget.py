@@ -21,6 +21,7 @@ from analysis.chords import (
 from analysis.chroma import PITCH_CLASSES
 from audio.drum_preview import DrumPreviewPlayer
 from audio.metronome import TapTempoTracker
+from core.i18n import get_current_language, translate_text
 from core.models import AnalysisSnapshot
 from ui.appearance import apply_plot_appearance, set_widget_tone
 from ui.chord_practice import ChordPracticeDialog
@@ -251,7 +252,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         chord_l = QtWidgets.QVBoxLayout(chord_box)
         chord_l.setContentsMargins(10, 8, 10, 8)
         chord_l.setSpacing(4)
-        chord_l.addWidget(TelemetryHeader("CHORD // 01", "和弦推测", badge_text="MAJ / MIN"))
+        chord_hdr = TelemetryHeader("CHORD // 01", "和弦推测", badge_text="MAJ / MIN")
+        chord_hdr.add_right_widget(
+            HelpBadge(
+                "实时和弦推测与稳定度",
+                "• <b>识别原理</b>：基于 12 音级色度向量与 24 个大/小三和弦模板进行余弦相关匹配。<br/>"
+                "• <b>相对级数</b>：自动计算当前和弦在主调中的罗马数字级数（如 C 大调下 Am 为 vi 级）。<br/>"
+                "• <b>相关度与差值</b>：相关度越接近 1.0、与第二候选差值越大，代表和弦越清晰稳定（右侧点阵亮起更多格）。",
+            )
+        )
+        chord_l.addWidget(chord_hdr)
         chord_hero_row = QtWidgets.QHBoxLayout()
         chord_hero_row.setContentsMargins(0, 0, 0, 0)
         chord_hero_row.setSpacing(8)
@@ -298,7 +308,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         key_l = QtWidgets.QVBoxLayout(key_box)
         key_l.setContentsMargins(10, 8, 10, 8)
         key_l.setSpacing(4)
-        key_l.addWidget(TelemetryHeader("TONALITY // 02", "调性推测", badge_text="K-S WINDOW"))
+        key_hdr = TelemetryHeader("TONALITY // 02", "调性推测", badge_text="K-S WINDOW")
+        key_hdr.add_right_widget(
+            HelpBadge(
+                "K-S 滑动窗口调性推测与转调预警",
+                "• <b>算法</b>：采用 Krumhansl-Schmuckler 认知音级轮廓算法，在最近约 15–30 秒滑动窗口内累积色度分布估算全局主调。<br/>"
+                "• <b>关系大小调</b>：如 C major 与 A minor 共用相同自然音阶，第二候选会提示关系调或平行调。<br/>"
+                "• <b>[可能转调]</b>：当近期窗口与长窗口调性发生显著偏移时自动高亮提醒，谨防歌曲中途升调/转调。",
+            )
+        )
+        key_l.addWidget(key_hdr)
         key_hero_row = QtWidgets.QHBoxLayout()
         key_hero_row.setContentsMargins(0, 0, 0, 0)
         key_hero_row.setSpacing(8)
@@ -339,7 +358,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         rhythm_l = QtWidgets.QVBoxLayout(rhythm_box)
         rhythm_l.setContentsMargins(10, 8, 10, 8)
         rhythm_l.setSpacing(4)
-        rhythm_l.addWidget(TelemetryHeader("TEMPO & PITCH // 03", "节拍 · 音高 · CPU 节拍器", badge_text="SYNTH CLICK"))
+        rhythm_hdr = TelemetryHeader("TEMPO & PITCH // 03", "节拍 · 音高 · CPU 节拍器", badge_text="SYNTH CLICK")
+        rhythm_hdr.add_right_widget(
+            HelpBadge(
+                "BPM 节拍、主音高与音分偏差条",
+                "• <b>BPM 速度</b>：基于瞬态包络自相关峰值估算歌曲速度，点击「同步检测BPM」可一键赋给节拍器。<br/>"
+                "• <b>主音高与 MIDI 编号</b>：实时输出当前最显著基频的音名、MIDI 编号、赫兹频率及音分偏差 (cents)。<br/>"
+                "• <b>音分校准尺</b>：中心为 0c 标准音高（±5c 内绿色精准、±20c 内黄色微偏、>20c 红色偏离）。",
+            )
+        )
+        rhythm_l.addWidget(rhythm_hdr)
 
         bpm_hero_row = QtWidgets.QHBoxLayout()
         bpm_hero_row.setContentsMargins(0, 0, 0, 0)
@@ -359,8 +387,9 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         pitch_row.setSpacing(8)
         self.pitch_lbl = QtWidgets.QLabel("主音高: -")
         self.pitch_lbl.setObjectName("chromaSubtle")
+        self.pitch_lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
         self.tuning_bar = TuningCentsBar()
-        pitch_row.addWidget(self.pitch_lbl)
+        pitch_row.addWidget(self.pitch_lbl, 1)
         pitch_row.addWidget(self.tuning_bar, 1)
 
         met_row = QtWidgets.QHBoxLayout()
@@ -383,6 +412,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.metronome_bpm_spin.valueChanged.connect(self.metronome_bpm_changed.emit)
 
         self.metronome_sig_combo = QtWidgets.QComboBox()
+        self.metronome_sig_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         for sig_lbl, beats in [("4/4", 4), ("3/4", 3), ("2/4", 2), ("6/8", 6)]:
             self.metronome_sig_combo.addItem(sig_lbl, beats)
         self.metronome_sig_combo.currentIndexChanged.connect(
@@ -452,14 +482,20 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         prog_bar.setSpacing(8)
         self.chord_progression_lbl = QtWidgets.QLabel("最近和弦进行 (最多 12 步): -")
         self.chord_progression_lbl.setObjectName("chromaProgression")
-        self.chord_progression_lbl.setWordWrap(True)
+        self.chord_progression_lbl.setWordWrap(False)
+        self.chord_progression_lbl.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self.progression_mode_combo = QtWidgets.QComboBox()
+        self.progression_mode_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         for label, value in (("和弦名", "chords"), ("罗马数字", "degrees"), ("和弦名与级数", "both")):
             self.progression_mode_combo.addItem(label, value)
         self.progression_mode_combo.setAccessibleName("最近和弦进行显示方式")
         self.progression_mode_combo.currentIndexChanged.connect(self._on_progression_mode_changed)
 
         self.transpose_combo = QtWidgets.QComboBox()
+        self.transpose_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.transpose_combo.setToolTip("仅切换乐谱/变调夹和弦与调性显示偏移（零 PCM 拷贝/重采样开销，不影响实音分析）")
         for lbl, semi in TRANSPOSE_PRESETS:
             self.transpose_combo.addItem(lbl, semi)
@@ -478,6 +514,13 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.reset_harmony_btn.clicked.connect(self._on_reset_clicked)
         prog_bar.addWidget(self.chord_progression_lbl, 1)
         prog_bar.addWidget(self.progression_mode_combo)
+        prog_bar.addWidget(
+            HelpBadge(
+                "最近和弦进行与练习和弦工作流",
+                "• <b>最近和弦进行</b>：记录最近 12 次稳定和弦切换轨迹。选择「和弦名与级数」时会以单行紧凑格式（如 <code>C[I] → G[V] → Am[vi]</code>）呈现，鼠标悬停可查看完整 12 步历史，绝不折行撑乱界面。<br/>"
+                "• <b>练习和弦</b>：点击右侧按钮可将当前识别到的和弦与调性快照带入和弦练习台，自动匹配常见套路（如卡农、4536251）、支持本地合成试听并导出 Cubase 标准 MIDI。",
+            )
+        )
         self.practice_chords_btn = QtWidgets.QPushButton("练习和弦")
         self.practice_chords_btn.setObjectName("analysisAction")
         self.practice_chords_btn.setToolTip("查看基于最近和弦推荐的练习模板，支持本地试听与导出 MIDI")
@@ -507,7 +550,11 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         root.addLayout(tools_bar)
 
         self.track_status_lbl = QtWidgets.QLabel("曲目会话监测 (SMTC): 待启动按进程捕获（也可随时手动点击「换歌重置」）")
-        self.track_status_lbl.setWordWrap(True)
+        self.track_status_lbl.setWordWrap(False)
+        self.track_status_lbl.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self.track_status_lbl.setObjectName("chromaTrackStatus")
         root.addWidget(self.track_status_lbl)
 
@@ -615,18 +662,26 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     def _render_recent_progression(self) -> None:
         key = self._last_snapshot.key.primary if self._last_snapshot is not None else ""
         mode = self.progression_mode
-        labels = []
+        full_labels: list[str] = []
         for chord in self._chord_history:
             name = transpose_chord_symbol(chord, self._transpose_semitones)
             degree = chord_scale_degree(chord, key) if mode != "chords" else "-"
             if degree == "-":
-                labels.append(name)
+                full_labels.append(name)
             elif mode == "degrees":
-                labels.append(degree)
+                full_labels.append(degree)
             else:
-                labels.append(f"{name} ({degree})")
-        text = " → ".join(labels) or "-"
-        self.chord_progression_lbl.setText(f"最近和弦进行 (最多 12 步): {text}")
+                full_labels.append(f"{name}[{degree}]")
+        full_text = " → ".join(full_labels) or "-"
+        # Keep display strictly single-line: in "both" mode show latest 8 steps inline if > 8 steps exist, full 12 in tooltip
+        if mode == "both" and len(full_labels) > 8:
+            disp_text = "… → " + " → ".join(full_labels[-8:])
+        else:
+            disp_text = full_text
+        self._set_cached_text(self.chord_progression_lbl, f"最近和弦进行 (最多 12 步): {disp_text}")
+        self.chord_progression_lbl.setToolTip(
+            translate_text(f"完整最近和弦进行 ({len(full_labels)}/12 步):\n{full_text}", get_current_language())
+        )
 
     def configure_chord_practice(
         self,
@@ -762,10 +817,13 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.metronome_vol_lbl.setText(f"音量: {pct}%")
 
     def _set_cached_text(self, label: QtWidgets.QLabel, text: str) -> None:
+        lang = get_current_language()
         key = id(label)
-        if self._label_cache.get(key) != text:
-            self._label_cache[key] = text
-            label.setText(text)
+        cache_val = f"{lang}\x00{text}"
+        if self._label_cache.get(key) != cache_val:
+            self._label_cache[key] = cache_val
+            label.setProperty("_ls_orig_text", text)
+            label.setText(translate_text(text, lang))
 
     def apply_theme(
         self,
@@ -781,8 +839,23 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             dm.setVisible(is_acid)
         for ov in self._acid_overlays:
             ov.setVisible(is_acid)
-        self.practice_chords_btn.setText("CHORD_PRACTICE // OPEN" if is_acid else "练习和弦")
-        self.reset_harmony_btn.setText("RESET // TRACK" if is_acid else "换歌重置 (和弦/调性/BPM)")
+        lang = getattr(appearance, "language", "zh")
+        if is_acid:
+            from core.i18n import tr_telemetry
+
+            self.practice_chords_btn.setText(
+                tr_telemetry("CHORD_PRACTICE", "练习和弦", "코드 연습", "コード練習", lang=lang)
+            )
+            self.reset_harmony_btn.setText(
+                tr_telemetry("RESET // TRACK", "换歌重置", "트랙 리셋", "曲変更リセット", lang=lang)
+            )
+        else:
+            from core.i18n import tr
+
+            self.practice_chords_btn.setText(tr("练习和弦", "Chord Practice", "코드 연습", "コード練習", lang=lang))
+            self.reset_harmony_btn.setText(
+                tr("换歌重置 (和弦/调性/BPM)", "Reset Harmony (Chord/Key/BPM)", "화성 리셋 (코드/조성/BPM)", "和声リセット (コード/調性/BPM)", lang=lang)
+            )
 
         if is_acid:
             variant = self._acid_variant or "dark"

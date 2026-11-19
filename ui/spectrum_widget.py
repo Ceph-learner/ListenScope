@@ -73,14 +73,19 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         root.setSpacing(8)
         self._header = TelemetryHeader("AUDIO SPECTRUM // REALTIME", "实时频谱与波形分析")
         self.view_combo = QtWidgets.QComboBox()
+        self.view_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.view_combo.setAccessibleName("实时分析布局")
         for key, name in ANALYSIS_LAYOUTS.items():
             self.view_combo.addItem(name, key)
         self._header.add_right_widget(self.view_combo)
         self._header.add_right_widget(
             HelpBadge(
-                "实时分析布局",
-                "可随时在「实时监听 / 频率诊断 / 时频追踪」三种画布排布间切换；切换时保留全部波形曲线与已缩放的坐标范围。",
+                "实时分析布局与四大图表说明",
+                "• <b>布局切换</b>：可随时在「实时监听 / 频率诊断 / 时频追踪」三种画布排布间切换；切换时保留全部波形曲线与已缩放的坐标范围。<br/>"
+                "• <b>CH-01 实时波形</b>：展示最新音频块的最大/最小包络振幅，用于观察动态与过载。<br/>"
+                "• <b>CH-02 FFT 频谱</b>：高分辨率对数频率轴频谱，便于定位基频与高次谐波峰值。<br/>"
+                "• <b>CH-03 频带能量</b>：按人耳听感划分的对数频带能量分布（低频贝斯底鼓在左侧，高频齿音擦片在右侧）。<br/>"
+                "• <b>CH-04 最近时频图</b>：滚动声谱瀑布图，直观追踪随时间变化的旋律线与共振峰轨迹。",
             )
         )
         root.addWidget(self._header)
@@ -100,13 +105,48 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.level_meter.setValue(0)
         self.level_meter.setTextVisible(False)
         self.level_meter.setFixedHeight(4)
-        for eyebrow, caption, value, detail, stretch, rail in (
-            ("PITCH // F0", "主音高", self.pitch_label, self.pitch_detail, 5, "primary"),
-            ("LEVEL // RMS", "平均电平 · RMS", self.rms_label, self.level_meter, 4, "secondary"),
-            ("PEAK // dBFS", "峰值电平", self.peak_label, None, 3, "secondary"),
-            ("RING // BUFFER", "历史缓冲", self.window_label, None, 3, "primary"),
+        for eyebrow, caption, value, detail, stretch, rail, help_tip in (
+            (
+                "PITCH // F0",
+                "主音高",
+                self.pitch_label,
+                self.pitch_detail,
+                5,
+                "primary",
+                "采用 YIN / 自相关基频算法实时追踪当前最显著音高（显示音名、Hz 频率与音分偏差 cents）。",
+            ),
+            (
+                "LEVEL // RMS",
+                "平均电平 · RMS",
+                self.rms_label,
+                self.level_meter,
+                4,
+                "secondary",
+                "RMS (均方根) 反映人耳主观感知的平均响度（单位 dBFS，0 dBFS 为满刻度）。",
+            ),
+            (
+                "PEAK // dBFS",
+                "峰值电平",
+                self.peak_label,
+                None,
+                3,
+                "secondary",
+                "当前分析帧的瞬时最大采样振幅；若接近 0.0 dBFS 说明信号逼近数字削波。",
+            ),
+            (
+                "RING // BUFFER",
+                "历史缓冲",
+                self.window_label,
+                None,
+                3,
+                "primary",
+                "固定 120 秒内存环形缓冲区已写入的有效音频时长（上限约 43.95 MiB 原始 PCM，绝不无限增长）。",
+            ),
         ):
-            metrics.addWidget(self._metric_card(eyebrow, caption, value, detail, accent_rail=rail), stretch)
+            metrics.addWidget(
+                self._metric_card(eyebrow, caption, value, detail, accent_rail=rail, help_tip=help_tip),
+                stretch,
+            )
         root.addLayout(metrics)
         self._plot_grid = QtWidgets.QGridLayout()
         self._plot_grid.setSpacing(8)
@@ -204,7 +244,15 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._spec_img.setLookupTable(self._default_spec_lut)
 
     @staticmethod
-    def _metric_card(eyebrow: str, caption: str, value, detail, *, accent_rail: str = "primary"):
+    def _metric_card(
+        eyebrow: str,
+        caption: str,
+        value,
+        detail,
+        *,
+        accent_rail: str = "primary",
+        help_tip: str = "",
+    ):
         card = QtWidgets.QFrame()
         card.setObjectName("analysisMetric")
         card.setProperty("accentRail", accent_rail)
@@ -220,6 +268,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         title.setObjectName("analysisCaption")
         top_row.addWidget(eb)
         top_row.addWidget(title, 1)
+        if help_tip:
+            top_row.addWidget(HelpBadge(f"{eyebrow} · {caption}", help_tip))
         layout.addLayout(top_row)
         if not value.objectName():
             value.setObjectName("analysisValue")

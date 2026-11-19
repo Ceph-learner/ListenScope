@@ -92,6 +92,7 @@ jobs:
           }
           foreach ($asset in @(
             "listenscope.ico",
+            "listenscope.svg",
             "acid_check_dark.svg",
             "acid_check_light.svg",
             "acid_chevron_down_dark.svg",
@@ -199,8 +200,10 @@ jobs:
             "## ListenScope $tag (Windows x64 Core)",
             "",
             "### 本版亮点",
-            "- **Acid Telemetry v2（酸性遥测）视觉重塑**：新增第 5 档无圆角建筑式工业预设（``ACID & VOID`` 暗夜 ``#0B0D0F`` / 酸性青柠 ``#CEFF18`` / 电光钴蓝 ``#2211FF`` 与 ``CLINICAL_LIGHT`` 临床浅色 ``#EEF2F6`` / 实验室翡翠 ``#00A878``），搭配底部 **Clinical Paper 对比扩展坞（``#historyPaperDock``）**、45° 警示斜纹 ``HazardStripeBar``、动态 5 点信号置信矩阵、卡片角落准星/棋盘格/序号水印与底部交互式 ``[STATIC_LOCK]`` 条码带；支持经典 / Lenso / Codex / Claude Code 无串色切换及旧预设配置静默兼容迁移。",
-            "- **核心功能集**：QQ 音乐等应用 WASAPI 按进程捕获、120s 零溢出环形缓冲、实时频谱 / Chroma / 24 调练习和弦试听与 ``.mid`` 导出、FFT-YIN 贝斯最低音与转调提示、Cubase 兼容 SMF Type-0 (``480 TPB``) MIDI 导出、同级目录便携存储（默认不写 ``C:\``）与免管理员非 ``C:`` 盘智能安装。",
+            "- **默认 Acid Telemetry Clinical Light + 无边框圆角窗口 & 外观联动**：默认启动进入 ``Acid Telemetry (临床浅色)`` 无边框圆角（10 px）居中窗口，切换选项/语言锁定窗口几何尺寸；``编辑外观与字体`` 弹窗全量跟随当前主题，Acid 模式下锁定字体/配色/自定义壁纸，非 Acid 主题开放自定义背景图上传与可读性遮罩；同步更新酸性风格图标（``listenscope.svg`` / ``listenscope.ico``）与 Tab 3 混音器 ``M / S`` 按钮垂直对齐、单行和弦进行 ``Name[Degree]``。",
+            "- **4 语言实时切换（中文 / English / 한국어 / 日本語）**：全界面控件、图表标题与坐标轴、表格表头、弹窗与约 45 处 ``[?]`` 说明徽标支持四语实时切换，保留固定英文遥测代码且无英文重复。",
+            "- **自绘悬浮 ``[?]`` 帮助徽标、说明模式与交互聚焦动画**：重构 ``22×22`` 抗锯齿自绘 ``HelpBadge``（无边框裁剪、鼠标悬停即时浮卡），新增全局「说明模式」开关与零 ``QGraphicsEffect`` 交互聚焦动画开关。",
+            "- **双 GPU 核显/独显协同卸载 + 贝斯独听增益 + 本机 PyTorch 扫描**：新增可选方案 A（AMD/Intel 核显 DirectML 卸载轻量 2-Stem MDX ONNX，安全回退 CUDA/CPU）与方案 B（锁定 AI 子进程独显 + 一键打开 Windows 图形设置）；支持 ``0–24 dB`` 自定义贝斯独听增益（>12 dB 听力保护提示、可选烘焙导出 WAV）；内置本机 PyTorch 环境扫描、官方下载直链与 GitHub 开源反馈入口。",
             "",
             "### 下载说明（Core 版架构边界）",
             "- **``ListenScope-Setup-Windows-x64.exe``**：Inno Setup 6 单文件安装版（免管理员，默认优先安装至 ``D:\ListenScope`` / ``E:\ListenScope`` 并保留升级后 ``exports\``）。",
@@ -209,7 +212,7 @@ jobs:
             "",
             "### 已在 CI 验证 vs. 需实机验收项",
             "- **CI 自动通过**：Linux 离屏全量测试、Windows x64 offscreen ``pytest`` 全量测试、PyInstaller 打包资产核验、便携重定位执行 ``--simulate --headless-smoke`` 退出码校验、``ISCC.exe`` 安装包编译及 ``SHA256SUMS.txt`` 校验生成。",
-            "- **仍需在个人 Windows 11 真机复测**：实际桌面音频 WASAPI 捕获与声卡试听、RTX 5060 Ti 8GB VRAM / 16GB RAM 下真实歌曲 2-Stem/4-Stem AI 分轨与 SMTC 切歌重置、三类 ``.mid`` 拖入 Steinberg Cubase 验证、以及 ``ListenScope-Setup-Windows-x64.exe`` 双击安装与不同 DPI 缩放下 SVG 控件渲染。"
+            "- **仍需在个人 Windows 11 真机复测**：实际桌面音频 WASAPI 捕获与声卡试听、RTX 5060 Ti 8GB VRAM / 16GB RAM 下真实歌曲 2-Stem/4-Stem AI 分轨与核显 DirectML 卸载实测、SMTC 切歌重置、三类 ``.mid`` 拖入 Steinberg Cubase 验证、以及 ``ListenScope-Setup-Windows-x64.exe`` 双击安装与不同 DPI 缩放下无边框窗口/SVG 控件渲染。"
           )
           $notesFile = Join-Path $env:RUNNER_TEMP "release-notes.md"
           $notesLines | Set-Content -Path $notesFile -Encoding utf8
