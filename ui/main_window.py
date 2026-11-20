@@ -76,11 +76,16 @@ from .help_badge import (
 )
 from .acid_style import (
     AcidBarcodeFooter,
+    AcidTabBar,
     ChamferBadge,
+    ElidedLabel,
     HazardStripeBar,
     MarqueeComboBox,
+    SignalLockDot,
     TelemetryHeader,
     TelemetryPulseStrip,
+    WindowGlyphButton,
+    WorkspaceRailHandle,
     acid_stylesheet,
     apply_acid_plot_theme,
     get_acid_palette,
@@ -573,7 +578,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         brand_txt = QtWidgets.QVBoxLayout()
         brand_txt.setContentsMargins(0, 0, 0, 0)
         brand_txt.setSpacing(0)
-        self._brand_eye = QtWidgets.QLabel("LISTENSCOPE // AUDIO TELEMETRY")
+        self._brand_eye = ElidedLabel("LISTENSCOPE // AUDIO TELEMETRY")
         self._brand_eye.setObjectName("telemetryEyebrow")
         self._brand_eye.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -641,19 +646,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         win_ctrl_l = QtWidgets.QHBoxLayout(self._win_ctrl_box)
         win_ctrl_l.setContentsMargins(4, 0, 0, 0)
         win_ctrl_l.setSpacing(4)
-        self.win_min_btn = QtWidgets.QPushButton("—")
+        self.win_min_btn = WindowGlyphButton("min", "—")
         self.win_min_btn.setObjectName("windowCtrlBtn")
         self.win_min_btn.setAccessibleName("最小化窗口")
         self.win_min_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.win_min_btn.clicked.connect(self.showMinimized)
 
-        self.win_max_btn = QtWidgets.QPushButton("□")
+        self.win_max_btn = WindowGlyphButton("max", "□")
         self.win_max_btn.setObjectName("windowCtrlBtn")
         self.win_max_btn.setAccessibleName("最大化 / 还原窗口")
         self.win_max_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.win_max_btn.clicked.connect(self._toggle_maximize_restore)
 
-        self.win_close_btn = QtWidgets.QPushButton("×")
+        self.win_close_btn = WindowGlyphButton("close", "×")
         self.win_close_btn.setObjectName("windowCloseBtn")
         self.win_close_btn.setAccessibleName("关闭 ListenScope")
         self.win_close_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
@@ -696,6 +701,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.setCheckable(True)
         self.capture_btn.clicked.connect(self._on_capture_clicked)
 
+        self._capture_dot = SignalLockDot()
         self.capture_status_lbl = QtWidgets.QLabel("未捕获")
         self.capture_status_lbl.setObjectName("captureStatus")
         set_widget_tone(self.capture_status_lbl, "info")
@@ -716,6 +722,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         )
         row_io.addWidget(self.refresh_btn)
         row_io.addWidget(self.capture_btn)
+        row_io.addWidget(self._capture_dot)
         row_io.addWidget(self.capture_status_lbl)
         row_io.addStretch(1)
         row_io.addWidget(self._shortcut_pill)
@@ -747,8 +754,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         set_widget_tone(self.notice_banner, "warn")
         main_layout.addWidget(self._notice_bar)
 
-        # 2. CENTER TABS (Slash-indexed Telemetry navigation)
+        # 2. CENTER TABS (Slash-indexed Telemetry navigation with animated signal-lock rail)
         self.tabs = QtWidgets.QTabWidget()
+        self._main_tab_bar = AcidTabBar(self.tabs)
+        self.tabs.setTabBar(self._main_tab_bar)
         self.spectrum_widget = SpectrumAnalysisWidget()
         self.spectrum_widget.view_combo.activated.connect(self._on_analysis_layout_selected)
         self.chroma_widget = ChromaAndHarmonyWidget()
@@ -762,6 +771,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.resource_panel, "// 04 TELEMETRY & LOGS · 资源与日志")
         self.tabs.addTab(self.live_widget, "// 05 LIVE ENGINE · 近实时分轨")
         main_layout.addWidget(self.tabs, 1)
+
+        self._workspace_rail = WorkspaceRailHandle()
+        self._workspace_rail.rail_dragged.connect(self._on_workspace_rail_dragged)
+        self._workspace_rail.rail_reset_requested.connect(self._on_workspace_rail_reset)
+        main_layout.addWidget(self._workspace_rail)
 
         # 3. BOTTOM 120s HISTORY TIMELINE + A/B LOOP + AI TRIGGER BAR
         self._history_box = bottom_box = QtWidgets.QGroupBox("RING BUFFER // 120秒历史缓冲与 A/B 片段 (~46MB) + AI 离线分轨")
@@ -1119,9 +1133,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if self.isMaximized():
             self.showNormal()
             self.win_max_btn.setText("□")
+            self.win_max_btn.set_maximized(False)
         else:
             self.showMaximized()
             self.win_max_btn.setText("❐")
+            self.win_max_btn.set_maximized(True)
         self._update_rounded_mask()
 
     def _apply_frameless_mode(self, frameless: bool) -> None:
@@ -1404,6 +1420,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             locked=locked,
             phase=phase,
         )
+        self._capture_dot.set_pulse(
+            phase=phase,
+            energy=energy if reactive else 0.35,
+            strength=strength,
+            locked=locked,
+        )
         self.spectrum_widget.update_telemetry(
             energy=energy,
             climax=climax,
@@ -1649,6 +1671,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if variant in ("light", "dark"):
             p = get_acid_palette(variant)
             self._header_pulse.set_theme_color(p.accent)
+            self._capture_dot.set_colors(p.accent, p.text_muted)
+            self._main_tab_bar.set_rail_colors(
+                p.accent if variant == "light" else p.ribbon_bg,
+                p.accent_secondary,
+            )
+            self._workspace_rail.set_grip_colors(
+                grip=p.text_muted,
+                accent=p.accent,
+                line=p.border,
+            )
+            self.win_min_btn.set_glyph_colors(p.text_secondary, p.text_inverse)
+            self.win_max_btn.set_glyph_colors(p.text_secondary, p.text_inverse)
+            self.win_close_btn.set_glyph_colors(p.text_secondary, "#FFFFFF")
             set_help_theme(
                 bg=p.bg_panel,
                 fg=p.text_primary,
@@ -1683,12 +1718,20 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             bg, fg, accent = appearance.effective_colors(system_is_dark=self._system_is_dark)
             self._header_pulse.set_theme_color(accent)
             mode = appearance.resolve_theme_mode(system_is_dark=self._system_is_dark)
+            muted_col = "#94A3B8" if mode == "dark" else "#475569"
+            border_col = "#3A4254" if mode == "dark" else "#CBD5E1"
+            self._capture_dot.set_colors(accent, muted_col)
+            self._main_tab_bar.set_rail_colors(accent, muted_col)
+            self._workspace_rail.set_grip_colors(grip=muted_col, accent=accent, line=border_col)
+            self.win_min_btn.set_glyph_colors(fg, fg)
+            self.win_max_btn.set_glyph_colors(fg, fg)
+            self.win_close_btn.set_glyph_colors(fg, "#FFFFFF")
             set_help_theme(
                 bg=bg,
                 fg=fg,
                 accent=accent,
-                border="#3A4254" if mode == "dark" else "#CBD5E1",
-                muted="#94A3B8" if mode == "dark" else "#475569",
+                border=border_col,
+                muted=muted_col,
                 is_dark=(mode == "dark"),
                 is_acid=False,
             )
@@ -1739,14 +1782,32 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.apply_appearance(replace(self.appearance, analysis_layout=layout))
             self.appearance_applied.emit()
 
+    def _on_workspace_rail_dragged(self, dy: int) -> None:
+        practice = getattr(self.appearance, "layout", "split") == "practice"
+        cur_h = max(48, self.history_overview_plot.height())
+        target_h = max(48, min(220, cur_h + (dy if practice else -dy)))
+        self.history_overview_plot.setMinimumHeight(target_h)
+        self.history_overview_plot.setMaximumHeight(max(target_h, target_h + 12))
+
+    def _on_workspace_rail_reset(self) -> None:
+        practice = getattr(self.appearance, "layout", "split") == "practice"
+        self.history_overview_plot.setMinimumHeight(112 if practice else 56)
+        self.history_overview_plot.setMaximumHeight(140 if practice else 70)
+
     def _apply_workspace_layout(self, layout: str) -> None:
         was_visible = self.isVisible()
         saved_geom = self.geometry() if was_visible else None
         practice = layout == "practice"
         main = self._workspace_layout
+        main.removeWidget(self._workspace_rail)
         main.removeWidget(self._history_box)
-        index = main.indexOf(self.tabs) + (0 if practice else 1)
-        main.insertWidget(index, self._history_box)
+        tabs_idx = main.indexOf(self.tabs)
+        if practice:
+            main.insertWidget(tabs_idx, self._history_box)
+            main.insertWidget(tabs_idx + 1, self._workspace_rail)
+        else:
+            main.insertWidget(tabs_idx + 1, self._workspace_rail)
+            main.insertWidget(tabs_idx + 2, self._history_box)
         self.history_overview_plot.setMinimumHeight(112 if practice else 56)
         self.history_overview_plot.setMaximumHeight(140 if practice else 70)
         self.mixer_widget.apply_workspace_layout(layout)
@@ -2159,6 +2220,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         lang = getattr(getattr(self, "appearance", Appearance()), "language", "zh")
         self.capture_btn.blockSignals(True)
         self.capture_btn.setChecked(active)
+        self._capture_dot.set_active(active)
         if is_acid:
             self.capture_btn.setText(
                 tr_telemetry("CAPTURE_ACTIVE", lang, zh="停止捕获", ko="캡처 중지", ja="キャプチャ停止")
@@ -2171,8 +2233,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if not active:
             self._last_capture_banner = None
             set_widget_tone(self.capture_status_lbl, "info")
-            _set_label_cached(self.capture_status_lbl, "未捕获")
-            self._last_capture_status_txt = "未捕获"
+            idle_txt = translate_text("未捕获", lang)
+            self.capture_status_lbl.setProperty("_ls_orig_text", "未捕获")
+            _set_label_cached(self.capture_status_lbl, idle_txt)
+            self._last_capture_status_txt = idle_txt
 
     def dismiss_banner(self) -> None:
         self._last_capture_banner = None
@@ -2193,7 +2257,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             resolved_tone = tone if tone is not None else _infer_banner_tone(text)
             set_widget_tone(self._notice_bar, resolved_tone)
             set_widget_tone(self.notice_banner, resolved_tone)
-            _set_label_cached(self.notice_banner, text)
+            self.notice_banner.setProperty("_ls_orig_text", text)
+            _set_label_cached(self.notice_banner, translate_text(text, get_current_language()))
             if not self.notice_banner.isVisible():
                 self.notice_banner.setVisible(True)
             if not self._notice_bar.isVisible():
@@ -2202,6 +2267,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def update_capture_stats(self, stats: CaptureStats, ring_available_sec: float) -> None:
         if self.capture_btn.isChecked() != stats.is_running:
             self.set_capture_active_ui(stats.is_running)
+        lang = get_current_language()
         silence = "静音" if stats.is_silent else "有信号"
         if stats.mode == CaptureMode.SYSTEM_LOOPBACK:
             tone = "warn"
@@ -2213,12 +2279,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             tone = "info"
             prefix = ""
         set_widget_tone(self.capture_status_lbl, tone)
-        status_txt = f"{prefix}{silence} · {stats.rms_dbfs:.1f} dBFS" if stats.is_running else "未捕获"
+        raw_status = f"{prefix}{silence} · {stats.rms_dbfs:.1f} dBFS" if stats.is_running else "未捕获"
+        status_txt = translate_text(raw_status, lang)
         if status_txt != self._last_capture_status_txt:
+            self.capture_status_lbl.setProperty("_ls_orig_text", raw_status)
             self.capture_status_lbl.setText(status_txt)
             self._last_capture_status_txt = status_txt
-        cov_txt = f"已缓冲: {ring_available_sec:.1f} / 120.0 s"
+        raw_cov = f"已缓冲: {ring_available_sec:.1f} / 120.0 s"
+        cov_txt = translate_text(raw_cov, lang)
         if cov_txt != self._last_coverage_txt:
+            self.history_coverage_lbl.setProperty("_ls_orig_text", raw_cov)
             self.history_coverage_lbl.setText(cov_txt)
             self._last_coverage_txt = cov_txt
 

@@ -332,6 +332,50 @@ class ChamferBadge(QtWidgets.QWidget):
         painter.end()
 
 
+class ElidedLabel(QtWidgets.QLabel):
+    """Single-line label that paints a clean trailing ellipsis instead of hard-clipping glyphs.
+
+    `text()` always keeps the full original string (tests / i18n rely on it); only painting is elided.
+    """
+
+    def _cjk_height(self) -> int:
+        fm = self.fontMetrics()
+        return max(fm.height(), fm.lineSpacing(), fm.boundingRect("国Ag").height()) + 3
+
+    def sizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        hint = super().sizeHint()
+        fm_h = self._cjk_height()
+        return QtCore.QSize(min(hint.width(), 180), max(hint.height(), fm_h))
+
+    def minimumSizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        hint = super().minimumSizeHint()
+        fm_h = self._cjk_height()
+        return QtCore.QSize(min(hint.width(), 24), max(hint.height(), fm_h))
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        txt = self.text()
+        cr = self.contentsRect()
+        fm = self.fontMetrics()
+        if (
+            self.wordWrap()
+            or not txt
+            or fm.horizontalAdvance(txt) <= cr.width()
+            or self.textFormat() == QtCore.Qt.TextFormat.RichText
+        ):
+            super().paintEvent(event)
+            return
+        opt = QtWidgets.QStyleOption()
+        opt.initFrom(self)
+        p = QtGui.QPainter(self)
+        self.style().drawPrimitive(QtWidgets.QStyle.PrimitiveElement.PE_Widget, opt, p, self)
+        p.setFont(self.font())
+        p.setPen(self.palette().color(QtGui.QPalette.ColorRole.WindowText))
+        elided = fm.elidedText(txt, QtCore.Qt.TextElideMode.ElideRight, max(8, cr.width()))
+        align = self.alignment() or (QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        p.drawText(cr, int(align), elided)
+        p.end()
+
+
 class TelemetryHeader(QtWidgets.QFrame):
     """Bilingual Telemetry Header: uppercase monospace eyebrow + bold title + optional right strip."""
 
@@ -347,10 +391,14 @@ class TelemetryHeader(QtWidgets.QFrame):
         super().__init__(parent)
         self.setObjectName("telemetryHeader")
         self.setProperty("divider", divider)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
 
         outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 5 if divider else 0)
-        outer.setSpacing(2)
+        outer.setContentsMargins(0, 0, 0, 4 if divider else 0)
+        outer.setSpacing(1)
 
         row = QtWidgets.QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -360,17 +408,19 @@ class TelemetryHeader(QtWidgets.QFrame):
         stack.setContentsMargins(0, 0, 0, 0)
         stack.setSpacing(1)
 
-        self.eyebrow_lbl = QtWidgets.QLabel(eyebrow.upper())
+        self.eyebrow_lbl = ElidedLabel(eyebrow.upper())
         self.eyebrow_lbl.setObjectName("telemetryEyebrow")
+        self.eyebrow_lbl.setMinimumHeight(14)
         self.eyebrow_lbl.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Ignored,
-            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        self.title_lbl = QtWidgets.QLabel(title)
+        self.title_lbl = ElidedLabel(title)
         self.title_lbl.setObjectName("telemetryTitle")
+        self.title_lbl.setMinimumHeight(22)
         self.title_lbl.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Ignored,
-            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
         )
 
         stack.addWidget(self.eyebrow_lbl)
@@ -1058,6 +1108,501 @@ class MarqueeComboBox(QtWidgets.QComboBox):
                 QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
                 txt,
             )
+        p.end()
+
+
+def _motion_enabled() -> bool:
+    """Respect the global「交互聚焦动画」switch for chrome micro-motion (lazy import avoids cycles)."""
+    try:
+        from ui.help_badge import is_focus_animations_enabled
+
+        return bool(is_focus_animations_enabled())
+    except Exception:
+        return True
+
+
+class AcidTabBar(QtWidgets.QTabBar):
+    """Tab bar with a sliding 'signal-lock' rail that glides to the selected channel.
+
+    The rail eases (OutCubic, 220 ms) from the previous tab to the new one — the motion reads as a
+    tuner locking onto a new channel. Respects the global focus-animation switch (instant jump when off).
+    """
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._rail_color = QtGui.QColor("#00A878")
+        self._hover_color = QtGui.QColor("#94A3B8")
+        self._rail_rect = QtCore.QRectF()
+        self._from_rect = QtCore.QRectF()
+        self._to_rect = QtCore.QRectF()
+        self._hover_idx = -1
+        self.setMouseTracking(True)
+        self.setDrawBase(False)
+        self._anim = QtCore.QVariantAnimation(self)
+        self._anim.setDuration(220)
+        self._anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.valueChanged.connect(self._on_anim)
+        self.currentChanged.connect(self._on_current_changed)
+
+    def set_rail_colors(self, rail: str, hover: str) -> None:
+        self._rail_color = QtGui.QColor(rail)
+        self._hover_color = QtGui.QColor(hover)
+        self.update()
+
+    def _target_rect(self, idx: int) -> QtCore.QRectF:
+        if idx < 0 or idx >= self.count():
+            return QtCore.QRectF()
+        r = QtCore.QRectF(self.tabRect(idx))
+        return QtCore.QRectF(r.left() + 1.0, r.top(), max(0.0, r.width() - 2.0), 3.0)
+
+    def _on_current_changed(self, idx: int) -> None:
+        if not _is_qt_valid(self):
+            return
+        target = self._target_rect(idx)
+        if not _motion_enabled() or self._rail_rect.isEmpty() or not self.isVisible():
+            self._anim.stop()
+            self._rail_rect = target
+            self.update()
+            return
+        self._from_rect = QtCore.QRectF(self._rail_rect)
+        self._to_rect = target
+        self._anim.stop()
+        self._anim.start()
+
+    def _on_anim(self, value: object) -> None:
+        if not _is_qt_valid(self):
+            return
+        try:
+            t = float(value)  # type: ignore[arg-type]
+        except Exception:
+            t = 1.0
+        a, b = self._from_rect, self._to_rect
+        self._rail_rect = QtCore.QRectF(
+            a.left() + (b.left() - a.left()) * t,
+            b.top(),
+            a.width() + (b.width() - a.width()) * t,
+            b.height(),
+        )
+        self.update()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self._anim.state() != QtCore.QAbstractAnimation.State.Running:
+            self._rail_rect = self._target_rect(self.currentIndex())
+
+    def tabLayoutChange(self) -> None:  # type: ignore[override]
+        super().tabLayoutChange()
+        if _is_qt_valid(self) and self._anim.state() != QtCore.QAbstractAnimation.State.Running:
+            self._rail_rect = self._target_rect(self.currentIndex())
+            self.update()
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        idx = self.tabAt(event.position().toPoint())
+        if idx != self._hover_idx:
+            self._hover_idx = idx
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        if self._hover_idx != -1:
+            self._hover_idx = -1
+            self.update()
+        super().leaveEvent(event)
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        self._anim.stop()
+        super().hideEvent(event)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        if self.count() == 0:
+            return
+        if self._rail_rect.isEmpty():
+            self._rail_rect = self._target_rect(self.currentIndex())
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
+        if 0 <= self._hover_idx < self.count() and self._hover_idx != self.currentIndex():
+            hr = self._target_rect(self._hover_idx)
+            hc = QtGui.QColor(self._hover_color)
+            hc.setAlpha(200)
+            p.fillRect(QtCore.QRectF(hr.left(), hr.top(), hr.width(), 2.0), hc)
+        p.fillRect(self._rail_rect, self._rail_color)
+        # Tiny leading notch (registration tick) at the rail head for an instrument-grade finish
+        head = QtCore.QRectF(self._rail_rect.left(), self._rail_rect.bottom(), 3.0, 3.0)
+        p.fillRect(head, self._rail_color)
+        p.end()
+
+
+class _AcidSplitterHandle(QtWidgets.QSplitterHandle):
+    """Splitter handle painting a dot-matrix grip that lights up with the accent on hover / drag."""
+
+    def __init__(self, orientation: QtCore.Qt.Orientation, parent: QtWidgets.QSplitter) -> None:
+        super().__init__(orientation, parent)
+        self.setMouseTracking(True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
+        self._hot = 0.0
+        self._dragging = False
+        self._anim = QtCore.QVariantAnimation(self)
+        self._anim.setDuration(140)
+        self._anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        self._anim.valueChanged.connect(self._on_anim)
+
+    def _on_anim(self, value: object) -> None:
+        if not _is_qt_valid(self):
+            return
+        try:
+            self._hot = float(value)  # type: ignore[arg-type]
+        except Exception:
+            self._hot = 0.0
+        self.update()
+
+    def _animate(self, target: float) -> None:
+        if not _is_qt_valid(self):
+            return
+        if not _motion_enabled():
+            self._anim.stop()
+            self._hot = target
+            self.update()
+            return
+        self._anim.stop()
+        self._anim.setStartValue(self._hot)
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    def enterEvent(self, event: QtGui.QEnterEvent) -> None:  # type: ignore[override]
+        self._animate(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        if not self._dragging:
+            self._animate(0.0)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        self._dragging = True
+        self.update()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        self._dragging = False
+        if not self.underMouse():
+            self._animate(0.0)
+        self.update()
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        del event
+        sp = self.splitter()
+        grip = QtGui.QColor(getattr(sp, "_grip_color", QtGui.QColor("#94A3B8")))
+        accent = QtGui.QColor(getattr(sp, "_grip_accent", QtGui.QColor("#00A878")))
+        line = QtGui.QColor(getattr(sp, "_grip_line", QtGui.QColor("#CBD5E1")))
+        t = 1.0 if self._dragging else max(0.0, min(1.0, self._hot))
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
+        w, h = self.width(), self.height()
+        horizontal_bar = self.orientation() == QtCore.Qt.Orientation.Vertical  # handle runs horizontally
+        mix = QtGui.QColor(
+            int(grip.red() + (accent.red() - grip.red()) * t),
+            int(grip.green() + (accent.green() - grip.green()) * t),
+            int(grip.blue() + (accent.blue() - grip.blue()) * t),
+        )
+        if horizontal_bar:
+            cy = h // 2
+            if t > 0.02:
+                rail = QtGui.QColor(accent)
+                rail.setAlpha(int(70 * t))
+                p.fillRect(0, cy, w, 1, rail)
+            else:
+                p.fillRect(0, cy, w, 1, line)
+            n = 7
+            span = n * 5
+            x0 = w // 2 - span // 2
+            for i in range(n):
+                p.fillRect(x0 + i * 5, cy - 1, 2, 3 if i % 3 == 0 else 2, mix)
+        else:
+            cx = w // 2
+            p.fillRect(cx, 0, 1, h, line if t <= 0.02 else QtGui.QColor(accent.red(), accent.green(), accent.blue(), int(70 * t)))
+            n = 7
+            span = n * 5
+            y0 = h // 2 - span // 2
+            for i in range(n):
+                p.fillRect(cx - 1, y0 + i * 5, 3 if i % 3 == 0 else 2, 2, mix)
+        p.end()
+
+
+class AcidSplitter(QtWidgets.QSplitter):
+    """QSplitter whose handles paint a dot-matrix grip (upper/lower & left/right rails)."""
+
+    def __init__(self, orientation: QtCore.Qt.Orientation, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(orientation, parent)
+        self._grip_color = QtGui.QColor("#94A3B8")
+        self._grip_accent = QtGui.QColor("#00A878")
+        self._grip_line = QtGui.QColor("#CBD5E1")
+        self.setHandleWidth(9)
+        self.setObjectName("acidSplitter")
+
+    def createHandle(self) -> QtWidgets.QSplitterHandle:  # type: ignore[override]
+        return _AcidSplitterHandle(self.orientation(), self)
+
+    def set_grip_colors(self, *, grip: str, accent: str, line: str) -> None:
+        self._grip_color = QtGui.QColor(grip)
+        self._grip_accent = QtGui.QColor(accent)
+        self._grip_line = QtGui.QColor(line)
+        for i in range(self.count()):
+            handle = self.handle(i)
+            if handle is not None and _is_qt_valid(handle):
+                handle.update()
+
+
+class WorkspaceRailHandle(QtWidgets.QWidget):
+    """Interactive horizontal grip rail between main workspace tabs and 120s history dock.
+
+    Allows dragging to adjust the 120s history waveform height (or double-clicking to reset),
+    while keeping `tabs` and `_history_box` as direct siblings in `_workspace_layout`.
+    """
+
+    rail_dragged = QtCore.Signal(int)
+    rail_reset_requested = QtCore.Signal()
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("workspaceRailHandle")
+        self.setFixedHeight(7)
+        self.setCursor(QtCore.Qt.CursorShape.SplitVCursor)
+        self.setMouseTracking(True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
+        self._grip = QtGui.QColor("#94A3B8")
+        self._accent = QtGui.QColor("#00A878")
+        self._line = QtGui.QColor("#CBD5E1")
+        self._hot = 0.0
+        self._dragging = False
+        self._last_global_y = 0
+        self._anim = QtCore.QVariantAnimation(self)
+        self._anim.setDuration(140)
+        self._anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        self._anim.valueChanged.connect(self._on_anim)
+
+    def set_grip_colors(self, *, grip: str, accent: str, line: str) -> None:
+        self._grip = QtGui.QColor(grip)
+        self._accent = QtGui.QColor(accent)
+        self._line = QtGui.QColor(line)
+        self.update()
+
+    def _on_anim(self, value: object) -> None:
+        if not _is_qt_valid(self):
+            return
+        try:
+            self._hot = float(value)  # type: ignore[arg-type]
+        except Exception:
+            self._hot = 0.0
+        self.update()
+
+    def _animate(self, target: float) -> None:
+        if not _is_qt_valid(self):
+            return
+        if not _motion_enabled():
+            self._anim.stop()
+            self._hot = target
+            self.update()
+            return
+        self._anim.stop()
+        self._anim.setStartValue(self._hot)
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    def enterEvent(self, event: QtGui.QEnterEvent) -> None:  # type: ignore[override]
+        self._animate(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        if not self._dragging:
+            self._animate(0.0)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._last_global_y = int(event.globalPosition().y())
+            self.update()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if self._dragging:
+            gy = int(event.globalPosition().y())
+            dy = gy - self._last_global_y
+            if dy != 0:
+                self._last_global_y = gy
+                self.rail_dragged.emit(dy)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if self._dragging:
+            self._dragging = False
+            if not self.underMouse():
+                self._animate(0.0)
+            self.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.rail_reset_requested.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        del event
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
+        w, h = self.width(), self.height()
+        cy = h // 2
+        t = 1.0 if self._dragging else max(0.0, min(1.0, self._hot))
+        mix = QtGui.QColor(
+            int(self._grip.red() + (self._accent.red() - self._grip.red()) * t),
+            int(self._grip.green() + (self._accent.green() - self._grip.green()) * t),
+            int(self._grip.blue() + (self._accent.blue() - self._grip.blue()) * t),
+        )
+        if t > 0.02:
+            rail = QtGui.QColor(self._accent)
+            rail.setAlpha(int(120 * t))
+            p.fillRect(0, cy, w, 1, rail)
+        else:
+            p.fillRect(0, cy, w, 1, self._line)
+        n = 9
+        span = n * 5
+        x0 = w // 2 - span // 2
+        for i in range(n):
+            p.fillRect(x0 + i * 5, cy - 1, 2, 3 if i % 4 == 0 else 2, mix)
+        p.end()
+
+
+class WindowGlyphButton(QtWidgets.QPushButton):
+    """Frameless window control painting crisp 1px vector glyphs (minimize / maximize / restore / close).
+
+    The visible text is kept (for accessibility / i18n) but replaced on screen by pixel-snapped glyphs,
+    avoiding font-dependent '—' '□' '×' rendering differences across Windows fonts and DPI scales.
+    """
+
+    def __init__(self, kind: str, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._kind = kind
+        self._maximized = False
+        self._idle = QtGui.QColor("#334155")
+        self._hover = QtGui.QColor("#FFFFFF")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
+
+    def set_glyph_colors(self, idle: str, hover: str) -> None:
+        self._idle = QtGui.QColor(idle)
+        self._hover = QtGui.QColor(hover)
+        self.update()
+
+    def set_maximized(self, maximized: bool) -> None:
+        if bool(maximized) != self._maximized:
+            self._maximized = bool(maximized)
+            self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        del event
+        opt = QtWidgets.QStyleOptionButton()
+        self.initStyleOption(opt)
+        opt.text = ""
+        sp = QtWidgets.QStylePainter(self)
+        sp.drawControl(QtWidgets.QStyle.ControlElement.CE_PushButton, opt)
+        col = self._hover if (self.underMouse() or self.isDown()) else self._idle
+        dpr = self.devicePixelRatioF() or 1.0
+        pen = QtGui.QPen(col, 1.0 if dpr < 1.5 else 1.25)
+        pen.setCapStyle(QtCore.Qt.PenCapStyle.SquareCap)
+        sp.setPen(pen)
+        sp.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        cx = self.width() / 2.0
+        cy = self.height() / 2.0
+        s = 4.5
+        if self._kind == "min":
+            sp.drawLine(QtCore.QPointF(cx - s, cy + 0.5), QtCore.QPointF(cx + s, cy + 0.5))
+        elif self._kind == "max":
+            if self._maximized:
+                sp.drawRect(QtCore.QRectF(cx - s, cy - s + 2.0, 2 * s - 2.0, 2 * s - 2.0))
+                sp.drawLine(QtCore.QPointF(cx - s + 2.0, cy - s), QtCore.QPointF(cx + s, cy - s))
+                sp.drawLine(QtCore.QPointF(cx + s, cy - s), QtCore.QPointF(cx + s, cy + s - 2.0))
+            else:
+                sp.drawRect(QtCore.QRectF(cx - s, cy - s, 2 * s, 2 * s))
+        else:
+            sp.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+            sp.drawLine(QtCore.QPointF(cx - s, cy - s), QtCore.QPointF(cx + s, cy + s))
+            sp.drawLine(QtCore.QPointF(cx + s, cy - s), QtCore.QPointF(cx - s, cy + s))
+        sp.end()
+
+
+class SignalLockDot(QtWidgets.QWidget):
+    """Capture 'signal lock' indicator: hollow when idle, solid + breathing ring when listening.
+
+    Driven by the existing telemetry phase tick (no extra timer). STATIC_LOCK freezes it solid.
+    """
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._active = False
+        self._phase = 0.0
+        self._energy = 0.0
+        self._locked = False
+        self._strength = 0.7
+        self._color = QtGui.QColor("#00A878")
+        self._idle = QtGui.QColor("#94A3B8")
+        self.setFixedSize(16, 16)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def set_colors(self, active: str, idle: str) -> None:
+        self._color = QtGui.QColor(active)
+        self._idle = QtGui.QColor(idle)
+        self.update()
+
+    def set_active(self, active: bool) -> None:
+        if bool(active) != self._active:
+            self._active = bool(active)
+            self.update()
+
+    def is_active(self) -> bool:
+        return self._active
+
+    def set_pulse(self, *, phase: float, energy: float, strength: float, locked: bool) -> None:
+        self._phase = float(phase)
+        self._energy = max(0.0, min(1.0, float(energy)))
+        self._strength = max(0.0, min(1.0, float(strength)))
+        self._locked = bool(locked)
+        if self._active and self.isVisible():
+            self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        del event
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        c = QtCore.QPointF(self.width() / 2.0, self.height() / 2.0)
+        if not self._active:
+            p.setPen(QtGui.QPen(self._idle, 1.2))
+            p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            p.drawRect(QtCore.QRectF(c.x() - 3.5, c.y() - 3.5, 7.0, 7.0))
+            p.end()
+            return
+        animate = not self._locked and self._strength > 0.02
+        if animate:
+            wave = 0.5 + 0.5 * math.sin(self._phase * 1.3)
+            ring_r = 4.5 + 2.8 * wave * (0.5 + 0.5 * self._energy)
+            ring = QtGui.QColor(self._color)
+            ring.setAlpha(int(150 * (1.0 - wave) * self._strength) + 30)
+            p.setPen(QtGui.QPen(ring, 1.1))
+            p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            p.drawRect(QtCore.QRectF(c.x() - ring_r, c.y() - ring_r, 2 * ring_r, 2 * ring_r))
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
+        p.setBrush(self._color)
+        p.drawRect(QtCore.QRectF(c.x() - 3.5, c.y() - 3.5, 7.0, 7.0))
         p.end()
 
 
@@ -1864,7 +2409,7 @@ QScrollBar:vertical {{
 }}
 QTableWidget#practiceTable QScrollBar::handle:vertical,
 QScrollBar::handle:vertical {{
-    background: {p.border_strong};
+    background: {'#94A3B8' if is_light else p.border_strong};
     min-height: 20px;
 }}
 QScrollBar:horizontal {{
@@ -1873,7 +2418,7 @@ QScrollBar:horizontal {{
     margin: 1px;
 }}
 QScrollBar::handle:horizontal {{
-    background: {p.border_strong};
+    background: {'#94A3B8' if is_light else p.border_strong};
     min-width: 20px;
 }}
 QScrollBar::handle:vertical:hover,
@@ -1897,6 +2442,22 @@ QSplitter::handle {{
 }}
 QSplitter::handle:hover {{
     background-color: {p.accent};
+}}
+QSplitter#acidSplitter::handle,
+QSplitter#acidSplitter::handle:hover {{
+    background-color: transparent;
+}}
+QScrollArea#stemTrackScroll {{
+    background-color: {p.bg_code};
+    border: 1px solid {p.border_strong};
+    border-left: 3px solid {p.accent};
+    border-radius: 0px;
+}}
+QFrame#emptyStemBay {{
+    background-color: {p.bg_panel};
+    border: 1px solid {p.border};
+    border-left: 3px solid {p.accent_secondary};
+    border-radius: 0px;
 }}
 """
 

@@ -418,13 +418,13 @@ class HelpBadge(QtWidgets.QAbstractButton):
         super().leaveEvent(event)
 
     def focusInEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
-        self._animate_to(1.0)
-        if _HELP_MODE_ENABLED and not self.isHidden() and self.parentWidget() is not None:
-            if event.reason() in (
-                QtCore.Qt.FocusReason.TabFocusReason,
-                QtCore.Qt.FocusReason.BacktabFocusReason,
-                QtCore.Qt.FocusReason.ShortcutFocusReason,
-            ):
+        if event.reason() in (
+            QtCore.Qt.FocusReason.TabFocusReason,
+            QtCore.Qt.FocusReason.BacktabFocusReason,
+            QtCore.Qt.FocusReason.ShortcutFocusReason,
+        ):
+            self._animate_to(1.0)
+            if _HELP_MODE_ENABLED and not self.isHidden() and self.parentWidget() is not None:
                 self._show_help_popup()
         super().focusInEvent(event)
 
@@ -580,18 +580,21 @@ class _FocusOverlay(QtWidgets.QWidget):
 
         if self._style == "underline":
             rail = QtGui.QColor(self._accent)
-            rail.setAlpha(int(215 * self._alpha))
+            rail.setAlpha(int(225 * self._alpha))
             p.setPen(QtGui.QPen(rail, 2.0, QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenCapStyle.SquareCap))
             inset = min(6.0, r.width() * 0.12)
+            cx = r.center().x()
+            half = max(2.0, (r.width() * 0.5 - inset) * (0.35 + 0.65 * self._alpha))
             y = r.bottom() - 0.5
-            p.drawLine(QtCore.QPointF(r.left() + inset, y), QtCore.QPointF(r.right() - inset, y))
+            p.drawLine(QtCore.QPointF(cx - half, y), QtCore.QPointF(cx + half, y))
         elif self._style == "brackets":
-            tick = max(4.0, min(7.0, min(r.width(), r.height()) * 0.28))
+            tick = max(4.0, min(7.5, min(r.width(), r.height()) * 0.28))
             col = QtGui.QColor(self._accent)
-            col.setAlpha(int(215 * self._alpha))
+            col.setAlpha(int(225 * self._alpha))
             p.setPen(QtGui.QPen(col, 1.5, QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenCapStyle.SquareCap))
-            br = r.adjusted(-1.5, -1.5, 1.5, 1.5)
-            # Four minimal crisp corner calipers
+            spread = 1.5 + (1.0 - self._alpha) * 2.2
+            br = r.adjusted(-spread, -spread, spread, spread)
+            # Four optical corner calipers contracting inward onto the control
             p.drawLine(QtCore.QPointF(br.left(), br.top()), QtCore.QPointF(br.left() + tick, br.top()))
             p.drawLine(QtCore.QPointF(br.left(), br.top()), QtCore.QPointF(br.left(), br.top() + tick))
             p.drawLine(QtCore.QPointF(br.right(), br.top()), QtCore.QPointF(br.right() - tick, br.top()))
@@ -601,19 +604,22 @@ class _FocusOverlay(QtWidgets.QWidget):
             p.drawLine(QtCore.QPointF(br.right(), br.bottom()), QtCore.QPointF(br.right() - tick, br.bottom()))
             p.drawLine(QtCore.QPointF(br.right(), br.bottom()), QtCore.QPointF(br.right(), br.bottom() - tick))
         else:
-            # 'sleek': subtle hairline edge + delicate micro-tint, zero bulky outer box
+            # 'sleek': subtle hairline edge + sweeping top optical glint + corner registration pip
             wash = QtGui.QColor(self._accent)
             wash.setAlpha(int(18 * self._alpha))
             edge = QtGui.QColor(self._accent)
-            edge.setAlpha(int(175 * self._alpha))
+            edge.setAlpha(int(180 * self._alpha))
             p.setBrush(wash)
             p.setPen(QtGui.QPen(edge, 1.25))
             p.drawRoundedRect(r, radius, radius)
 
             glint = QtGui.QColor(self._accent)
-            glint.setAlpha(int(220 * self._alpha))
-            p.setPen(QtGui.QPen(glint, 1.6))
-            p.drawLine(QtCore.QPointF(r.left() + radius, r.top()), QtCore.QPointF(r.left() + min(18.0, r.width() * 0.35), r.top()))
+            glint.setAlpha(int(230 * self._alpha))
+            p.setPen(QtGui.QPen(glint, 1.7))
+            glint_span = min(22.0, r.width() * 0.38) * (0.3 + 0.7 * self._alpha)
+            p.drawLine(QtCore.QPointF(r.left() + radius, r.top()), QtCore.QPointF(r.left() + radius + glint_span, r.top()))
+            if self._is_acid and r.width() >= 28 and r.height() >= 18:
+                p.fillRect(QtCore.QRectF(r.right() - 3.5, r.bottom() - 3.5, 2.5, 2.5), glint)
         p.end()
 
 

@@ -14,6 +14,7 @@ from core.models import AnalysisSnapshot
 from ui.appearance import apply_plot_appearance
 from ui.help_badge import HelpBadge
 from ui.acid_style import (
+    AcidGraphicOverlay,
     TelemetryHeader,
     TelemetryPulseStrip,
     acid_colormap_lut,
@@ -68,10 +69,11 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self._cached_texts: dict[str, str] = {}
         self._last_level_val: int = -1
         self._default_spec_lut: Optional[np.ndarray] = None
+        self._metric_overlays: list[AcidGraphicOverlay] = []
 
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(10, 6, 10, 8)
+        root.setSpacing(6)
         self._header = TelemetryHeader("AUDIO SPECTRUM // REALTIME", "实时频谱与波形分析")
         self._pulse_strip = TelemetryPulseStrip(bar_count=10)
         self._header.add_right_widget(self._pulse_strip)
@@ -146,10 +148,11 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                 "固定 120 秒内存环形缓冲区已写入的有效音频时长（上限约 43.95 MiB 原始 PCM，绝不无限增长）。",
             ),
         ):
-            metrics.addWidget(
-                self._metric_card(eyebrow, caption, value, detail, accent_rail=rail, help_tip=help_tip),
-                stretch,
-            )
+            card = self._metric_card(eyebrow, caption, value, detail, accent_rail=rail, help_tip=help_tip)
+            ov = AcidGraphicOverlay(card, stencil="")
+            ov.setVisible(False)
+            self._metric_overlays.append(ov)
+            metrics.addWidget(card, stretch)
         root.addLayout(metrics)
         self._plot_grid = QtWidgets.QGridLayout()
         self._plot_grid.setSpacing(8)
@@ -244,6 +247,13 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         if acid_variant in ("light", "dark"):
             p = get_acid_palette(acid_variant)
             self._pulse_strip.set_theme_color(p.accent)
+            cross = QtGui.QColor(241, 242, 236, 55) if acid_variant == "dark" else QtGui.QColor(9, 13, 20, 45)
+            stencil = QtGui.QColor(241, 242, 236, 14) if acid_variant == "dark" else QtGui.QColor(9, 13, 20, 11)
+            checker = QtGui.QColor(206, 255, 24, 175) if acid_variant == "dark" else QtGui.QColor(0, 168, 120, 165)
+            for ov in self._metric_overlays:
+                ov.set_colors(cross, stencil, checker)
+                ov.setVisible(True)
+                ov.raise_()
             for plot in self._plots:
                 apply_acid_plot_theme(plot, appearance, acid_variant)
             wave_pen = pg.mkPen(p.plot_wave, width=1.2)
@@ -255,6 +265,9 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._log_curve.setBrush((qc.red(), qc.green(), qc.blue(), 34 if acid_variant == "light" else 42))
             self._spec_img.setLookupTable(acid_colormap_lut("spectrogram", acid_variant))
             return
+
+        for ov in self._metric_overlays:
+            ov.setVisible(False)
 
         mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
         _bg, _fg, accent = appearance.effective_colors(system_is_dark=system_is_dark)

@@ -489,7 +489,7 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
     "打开单轨 WAV...": {"en": "Open Stem WAV...", "ko": "단일 WAV 열기...", "ja": "単一 WAV を開く..."},
     "MIDI 环境设置": {"en": "MIDI Setup", "ko": "MIDI 환경 설정", "ja": "MIDI 環境設定"},
     "另存 MIDI (.mid)": {"en": "Save MIDI (.mid)", "ko": "MIDI 다른 이름 저장 (.mid)", "ja": "MIDI 別名保存 (.mid)"},
-    "分析和弦与节奏": {"en": "Analyze Chords & Rhythm", "ko": "코드 & 리듬 분석", "ja": "コード＆リズム解析"},
+    "分析和弦与节奏": {"en": "Analyze Chords && Rhythm", "ko": "코드 && 리듬 분석", "ja": "コード＆リズム解析"},
     "导出扒谱表 (.md/.csv)": {"en": "Export Sheet (.md/.csv)", "ko": "채보 시트 내보내기 (.md/.csv)", "ja": "耳コピ表出力 (.md/.csv)"},
     "取消任务": {"en": "Cancel Job", "ko": "작업 취소", "ja": "ジョブ中止"},
     # UX Polish, Animations, Surface Styles, Tray, Bootstrap Progress & Logs
@@ -567,6 +567,10 @@ _PREFIX_REPLACEMENTS: tuple[tuple[str, dict[str, str]], ...] = (
     ("贝斯独听 +", {"en": "Bass Solo +", "ko": "베이스 솔로 +", "ja": "ベース独聴 +"}),
     ("循环范围:", {"en": "Loop Scope:", "ko": "루프 범위:", "ja": "ループ範囲:"}),
     ("当前和弦:", {"en": "Current Chord:", "ko": "현재 코드:", "ja": "現在コード:"}),
+    ("[混入警告] 有信号 ·", {"en": "[Loopback Warn] Signal ·", "ko": "[루프백 경고] 신호 있음 ·", "ja": "[ループバック警告] 信号あり ·"}),
+    ("[混入警告] 静音 ·", {"en": "[Loopback Warn] Silent ·", "ko": "[루프백 경고] 무음 ·", "ja": "[ループバック警告] 無音 ·"}),
+    ("有信号 ·", {"en": "Signal ·", "ko": "신호 있음 ·", "ja": "信号あり ·"}),
+    ("静音 ·", {"en": "Silent ·", "ko": "무음 ·", "ja": "無音 ·"}),
     ("注意：调性中心(Key)与调号(Key Signature)不同", {"en": "Note: Key center differs from Key Signature (relative/modal keys share signatures)", "ko": "참고: 조성 중심(Key)과 조표(Key Signature)는 다릅니다", "ja": "注: 調性中心(Key)と調号(Key Signature)は異なります"}),
 )
 

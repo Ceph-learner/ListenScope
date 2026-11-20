@@ -140,10 +140,20 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ja": "実験的な準リアルタイム2ステム分離（ボーカル＋伴奏）です。モニター前にプロセス別キャプチャを選択してください（システムループバックでは出力が再録音されます）。\n速度ベンチマークでリアルタイム追従可否を確認でき、資源警告時は自動停止してスペクトル解析のみ継続します。",
     },
     # --- Mixer & Subtabs ---
-    "// 01 和弦与节奏": {"en": "// 01 Chords & Rhythm", "ko": "// 01 코드 & 리듬", "ja": "// 01 コードとリズム"},
+    "// 01 和弦与节奏": {"en": "// 01 Chords && Rhythm", "ko": "// 01 코드 && 리듬", "ja": "// 01 コードとリズム"},
     "// 02 MIDI 卷帘": {"en": "// 02 Piano Roll", "ko": "// 02 MIDI 피아노 롤", "ja": "// 02 MIDI ピアノロール"},
     "// 03 MIDI 音符": {"en": "// 03 MIDI Notes", "ko": "// 03 MIDI 노트", "ja": "// 03 MIDI ノート"},
     "// 04 16 步鼓点": {"en": "// 04 16-Step Drums", "ko": "// 04 16스텝 드럼", "ja": "// 04 16ステップドラム"},
+    "分轨音轨槽位 · 待载入": {
+        "en": "Stem Track Bay · Standby",
+        "ko": "스템 트랙 슬롯 · 대기 중",
+        "ja": "ステムトラックスロット · 待機中",
+    },
+    "在下方 120s 历史缓冲选定 A/B 区间后，点击「AI 2-Stem 分轨」或「AI 4-Stem 分轨」；分离后的人声 / 伴奏 / 贝斯 / 鼓组独立波形轨、M/S 独听与单轨转 MIDI 按钮将在此处就位。": {
+        "en": "Select an A/B region on the 120s history buffer below and trigger 'AI 2-Stem' or 'AI 4-Stem'. Isolated Vocals / Instrumental / Bass / Drums waveform rows, M/S solo controls, and stem-to-MIDI actions will dock here.",
+        "ko": "아래 120초 히스토리 버퍼에서 A/B 구간을 선택한 뒤 'AI 2-Stem 분리' 또는 'AI 4-Stem 분리'를 실행하세요. 분리된 보컬 / 반주 / 베이스 / 드럼 파형 트랙과 M/S 솔로 및 MIDI 변환 버튼이 이곳에 배치됩니다.",
+        "ja": "下部の120秒履歴バッファでA/B区間を選択し、「AI 2-Stem 分離」または「AI 4-Stem 分離」を実行してください。分離後のボーカル／伴奏／ベース／ドラム波形トラックとM/S・MIDI変換ボタンがここに配置されます。",
+    },
     "空闲：请在下方 120s 历史时间轴选择片段并启动 2-Stem 或 4-Stem 分轨": {
         "en": "Idle: Select an A/B excerpt on the 120s history timeline below and launch 2-Stem or 4-Stem AI separation.",
         "ko": "대기 중: 아래 120초 히스토리 타임라인에서 구간을 선택하고 2-Stem 또는 4-Stem 분리를 시작하세요.",
@@ -210,6 +220,8 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
     },
     # --- AppearanceDialog ---
     "经典": {"en": "Classic", "ko": "클래식", "ja": "クラシック"},
+    "石墨靛紫": {"en": "Graphite", "ko": "그래파이트", "ja": "グラファイト"},
+    "暖砂琥珀": {"en": "Warm Sand", "ko": "웜 샌드", "ja": "ウォームサンド"},
     "白天": {"en": "Light", "ko": "라이트", "ja": "ライト"},
     "黑夜": {"en": "Dark", "ko": "다크", "ja": "ダーク"},
     "主题模式": {"en": "Theme Mode", "ko": "테마 모드", "ja": "テーマモード"},
@@ -664,8 +676,8 @@ DYNAMIC_REGEX_RULES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
             ("酸性遥测", {"en": "Acid Telemetry", "ko": "애시드 텔레메트리", "ja": "アシッドテレメトリ"}),
             ("经典", {"en": "Classic", "ko": "클래식", "ja": "クラシック"}),
             ("Lenso", {"en": "Lenso", "ko": "Lenso", "ja": "Lenso"}),
-            ("Codex", {"en": "Codex", "ko": "Codex", "ja": "Codex"}),
-            ("Claude Code", {"en": "Claude Code", "ko": "Claude Code", "ja": "Claude Code"}),
+            ("石墨靛紫", {"en": "Graphite", "ko": "그래파이트", "ja": "グラファイト"}),
+            ("暖砂琥珀", {"en": "Warm Sand", "ko": "웜 샌드", "ja": "ウォームサンド"}),
         )
         for _m_zh, _m_tr in (
             ("白天", {"en": "Light", "ko": "라이트", "ja": "ライト"}),
@@ -718,6 +730,46 @@ DYNAMIC_REGEX_RULES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
     (
         re.compile(r"Loop Scope:\s*全曲$"),
         {"en": "Loop Scope: Full Track", "ko": "루프 범위: 전체", "ja": "ループ範囲: 全曲"},
+    ),
+    (
+        re.compile(r"同主音调式混合倾向\s*\((.+?)\)"),
+        {
+            "en": r"Parallel Mode Mixture (\1)",
+            "ko": r"동주음 선법 혼합 경향 (\1)",
+            "ja": r"同主音モード混合傾向 (\1)",
+        },
+    ),
+    (
+        re.compile(r"关系大小调接近\s*\((.+?)\)"),
+        {
+            "en": r"Relative Major/Minor Close (\1)",
+            "ko": r"관계 장단조 근접 (\1)",
+            "ja": r"平行調近接 (\1)",
+        },
+    ),
+    (
+        re.compile(r"调性中心稳定"),
+        {"en": "Stable Tonal Center", "ko": "조성 중심 안정", "ja": "調性中心安定"},
+    ),
+    (
+        re.compile(r"调性证据不足或为无调性/打击乐段落"),
+        {
+            "en": "Insufficient tonal evidence or percussive passage",
+            "ko": "조성 근거 부족 또는 타악 구간",
+            "ja": "調性根拠不足または打楽器区間",
+        },
+    ),
+    (
+        re.compile(r"疑似转调:\s*(.+)"),
+        {"en": r"Modulation Hint: \1", "ko": r"전조 의심: \1", "ja": r"転調の疑い: \1"},
+    ),
+    (
+        re.compile(r"当前运行合成测试信号源（非 Windows 真机 WASAPI 捕获）。"),
+        {
+            "en": "Running synthetic test signal source (not live Windows WASAPI capture).",
+            "ko": "합성 테스트 신호원 실행 중 (Windows 실기 WASAPI 캡처 아님).",
+            "ja": "合成テスト信号源を実行中（Windows実機WASAPIキャプチャではありません）。",
+        },
     ),
     (
         re.compile(r"已降级为安全 CPU 模式。"),
@@ -1008,15 +1060,15 @@ HELP_TRANSLATIONS: dict[str, dict[str, tuple[str, str]]] = {
     "自定义背景壁纸（非酸性主题专享）": {
         "en": (
             "Custom Background Wallpaper (Non-Acid Themes Only)",
-            "In Classic, Lenso, Codex, and Claude themes, upload any PNG/JPG/WebP image as the window backdrop with an automatic readability scrim. Disabled under Acid Telemetry to preserve graphic realism contrast.",
+            "In Classic, Lenso, Graphite, and Warm Sand themes, upload any PNG/JPG/WebP image as the window backdrop with an automatic readability scrim. Disabled under Acid Telemetry to preserve graphic realism contrast.",
         ),
         "ko": (
             "사용자 배경 이미지 (비-애시드 테마 전용)",
-            "Classic, Lenso, Codex, Claude 테마에서는 PNG/JPG/WebP 이미지를 배경으로 업로드할 수 있으며 가독성 보호 오버레이가 자동 적용됩니다. 애시드 테마에서는 고대비 유지 차원에서 비활성화됩니다.",
+            "Classic, Lenso, 그래파이트, 웜 샌드 테마에서는 PNG/JPG/WebP 이미지를 배경으로 업로드할 수 있으며 가독성 보호 오버레이가 자동 적용됩니다. 애시드 테마에서는 고대비 유지 차원에서 비활성화됩니다.",
         ),
         "ja": (
             "カスタム壁紙（非アシッドテーマ専用）",
-            "Classic / Lenso / Codex / Claude テーマでは PNG/JPG/WebP 画像を背景に設定でき、視認性保護マスクが自動適用されます。アシッドテーマではコントラスト維持のため無効化されます。",
+            "Classic / Lenso / グラファイト / ウォームサンド テーマでは PNG/JPG/WebP 画像を背景に設定でき、視認性保護マスクが自動適用されます。アシッドテーマではコントラスト維持のため無効化されます。",
         ),
     },
     "按进程捕获说明": {
@@ -1302,7 +1354,7 @@ HELP_TRANSLATIONS: dict[str, dict[str, tuple[str, str]]] = {
     "自定义外观与实时预览": {
         "en": (
             "Customize Appearance & Live Preview",
-            "Defaults to Acid Telemetry Clinical Light (industrial font & palette locked, 11–20px size adjustable). Switch to Classic/Lenso/Codex/Claude to customize colors, OS fonts, and upload custom wallpapers.",
+            "Defaults to Acid Telemetry Clinical Light (industrial font & palette locked, 11–20px size adjustable). Switch to Classic/Lenso/Graphite/Warm Sand to customize colors, OS fonts, and upload custom wallpapers.",
         ),
         "ko": (
             "외관 사용자 지정 및 실시간 미리보기",

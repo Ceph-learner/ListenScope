@@ -872,7 +872,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         bg_row.addWidget(
             HelpBadge(
                 "自定义背景壁纸（非酸性主题专享）",
-                "在经典深色、Lenso 液态玻璃、Codex 石墨、Claude 暖砂四种主题下，支持上传 PNG/JPG/WebP 图片作为主窗口背景壁纸，并自动叠加柔和可读性遮罩。酸性遥测主题为保持纯粹图形写实主义对比度，禁用自定义背景图。",
+                "在经典深色、Lenso 液态玻璃、石墨靛紫、暖砂琥珀四种主题下，支持上传 PNG/JPG/WebP 图片作为主窗口背景壁纸，并自动叠加柔和可读性遮罩。酸性遥测主题为保持纯粹图形写实主义对比度，禁用自定义背景图。",
             )
         )
         form.addRow("自定义背景图", bg_row)
@@ -926,7 +926,9 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
-        self._buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("保存")
+        save_btn = self._buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        save_btn.setText("保存")
+        save_btn.setObjectName("settingsSave")
         self._buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel).setText("取消")
         self._buttons.accepted.connect(self.accept)
         self._buttons.rejected.connect(self.reject)

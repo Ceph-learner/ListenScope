@@ -463,3 +463,107 @@ def test_mainwindow_ux_polish_marquee_dismiss_hide_a_resize_tray_and_4lang(
         win.force_quit()
         win.deleteLater()
         app.processEvents()
+
+
+def test_ui_rails_tabbar_elided_standby_bay_and_preset_brand_hygiene(tmp_path: Path) -> None:
+    from dataclasses import replace
+    from core.appearance import LIGHT_PRESETS, PRESETS
+    from core.i18n import translate_text
+    from core.models import CaptureMode, CaptureStats
+    from core.system_probe import probe_system
+    from ui.acid_style import (
+        AcidSplitter,
+        AcidTabBar,
+        ElidedLabel,
+        SignalLockDot,
+        WindowGlyphButton,
+        WorkspaceRailHandle,
+    )
+    from ui.main_window import ListenScopeMainWindow
+
+    # 1. Preset brand hygiene: zero Codex / Claude in PRESETS, LIGHT_PRESETS, or ui/*.py; silent legacy migration works
+    forbidden_brand = re.compile(r"\bcodex\b|\bclaude\b", re.IGNORECASE)
+    for table in (PRESETS, LIGHT_PRESETS):
+        assert tuple(table.keys()) == ("classic", "lenso", "graphite", "terracotta", "acid_telemetry")
+        for key, entry in table.items():
+            assert not forbidden_brand.search(key)
+            assert not forbidden_brand.search(entry[0])
+    assert Appearance.from_mapping({"preset": "codex"}).preset == "graphite"
+    assert Appearance.from_mapping({"preset": "claude"}).preset == "terracotta"
+
+    repo_root = Path(__file__).resolve().parent.parent
+    for py_file in sorted((repo_root / "ui").glob("*.py")):
+        assert not forbidden_brand.search(py_file.read_text(encoding="utf-8")), f"Forbidden brand in {py_file.name}"
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=StemMixerEngine(sample_rate=44100, channels=2),
+        appearance=Appearance(preset="acid_telemetry", theme_mode="dark", frameless=True),
+    )
+    try:
+        win.resize(1280, 820)
+        win.show()
+        app.processEvents()
+
+        # 2. Signature widgets wired & rendered cleanly
+        assert isinstance(win._brand_eye, ElidedLabel)
+        assert win._brand_eye.minimumSizeHint().width() <= 24
+        assert win._brand_eye.minimumSizeHint().height() >= win._brand_eye.fontMetrics().height()
+        assert isinstance(win.tabs.tabBar(), AcidTabBar)
+        assert isinstance(win.mixer_widget.analysis_tabs.tabBar(), AcidTabBar)
+        assert isinstance(win.chroma_widget._chroma_splitter, AcidSplitter)
+        assert isinstance(win.mixer_widget._workspace_splitter, AcidSplitter)
+        assert isinstance(win._workspace_rail, WorkspaceRailHandle)
+        assert isinstance(win.win_min_btn, WindowGlyphButton)
+        assert isinstance(win.win_max_btn, WindowGlyphButton)
+        assert isinstance(win.win_close_btn, WindowGlyphButton)
+        assert isinstance(win._capture_dot, SignalLockDot)
+
+        # 3. SignalLockDot tracks capture active state & pulse
+        assert win._capture_dot.is_active() is False
+        win.set_capture_active_ui(True)
+        assert win._capture_dot.is_active() is True
+        win.set_capture_active_ui(False)
+        assert win._capture_dot.is_active() is False
+
+        # 4. Interactive upper/lower WorkspaceRailHandle adjusts history_overview_plot height & resets
+        base_h = win.history_overview_plot.minimumHeight()
+        win._on_workspace_rail_dragged(-36)
+        assert win.history_overview_plot.minimumHeight() > base_h
+        win._on_workspace_rail_reset()
+        assert win.history_overview_plot.minimumHeight() == base_h
+
+        # 5. StemMixerWidget empty-bay standby card is visible when no stems are loaded
+        assert win.mixer_widget._empty_tracks_card.isHidden() is False
+
+        # 6. Dynamic capture status & key relation strings translate cleanly in EN/KO with zero CJK leak
+        for lang in ("en", "ko"):
+            win.apply_appearance(replace(win.appearance, language=lang), force_theme=True)
+            win.update_capture_stats(
+                CaptureStats(
+                    mode=CaptureMode.PROCESS_LOOPBACK,
+                    pid=42,
+                    process_name="synthetic.exe",
+                    sample_rate=48000,
+                    channels=2,
+                    dtype="float32",
+                    is_running=True,
+                    is_silent=False,
+                    rms_dbfs=-14.2,
+                ),
+                ring_available_sec=18.5,
+            )
+            assert not _CJK_CHAR_RE.search(win.capture_status_lbl.text())
+            assert not _CJK_CHAR_RE.search(win.history_coverage_lbl.text())
+            assert not _CJK_CHAR_RE.search(win.mixer_widget._empty_tracks_hint_lbl.text())
+            assert not _CJK_CHAR_RE.search(translate_text("同主音调式混合倾向 (A major / A minor)", lang))
+            assert not _CJK_CHAR_RE.search(translate_text("关系大小调接近 (C major / A minor)", lang))
+    finally:
+        win.prepare_for_shutdown()
+        win.force_quit()
+        win.deleteLater()
+        app.processEvents()
+

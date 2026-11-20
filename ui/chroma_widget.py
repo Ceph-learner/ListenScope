@@ -28,7 +28,9 @@ from ui.chord_practice import ChordPracticeDialog
 from ui.help_badge import HelpBadge
 from ui.acid_style import (
     AcidGraphicOverlay,
+    AcidSplitter,
     DotMatrixWidget,
+    ElidedLabel,
     MarqueeLabel,
     TelemetryHeader,
     acid_colormap_lut,
@@ -236,8 +238,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._dot_matrices: list[DotMatrixWidget] = []
 
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(10, 6, 10, 6)
+        root.setSpacing(5)
 
         # Harmonic summary cards (top)
         cards = QtWidgets.QHBoxLayout()
@@ -249,8 +251,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         chord_box.setProperty("accentRail", "primary")
         chord_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         chord_l = QtWidgets.QVBoxLayout(chord_box)
-        chord_l.setContentsMargins(10, 8, 10, 8)
-        chord_l.setSpacing(4)
+        chord_l.setContentsMargins(10, 6, 10, 6)
+        chord_l.setSpacing(3)
         chord_hdr = TelemetryHeader("CHORD // 01", "和弦推测", badge_text="MAJ / MIN")
         chord_hdr.add_right_widget(
             HelpBadge(
@@ -280,6 +282,11 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chord_tones_lbl.setObjectName("chromaSubtle")
         self.chord_degree_lbl = QtWidgets.QLabel("相对级数: -")
         self.chord_degree_lbl.setObjectName("chromaSubtle")
+        tones_deg_row = QtWidgets.QHBoxLayout()
+        tones_deg_row.setContentsMargins(0, 0, 0, 0)
+        tones_deg_row.setSpacing(10)
+        tones_deg_row.addWidget(self.chord_tones_lbl, 3)
+        tones_deg_row.addWidget(self.chord_degree_lbl, 2)
         self.chord_secondary_lbl = QtWidgets.QLabel("第二候选: -")
         self.chord_secondary_lbl.setObjectName("chromaCaption")
         self.chord_stability_lbl = QtWidgets.QLabel("稳定度: Silent | 相关 0.00")
@@ -287,8 +294,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chord_stability_lbl.setWordWrap(True)
         self.chord_stability_lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         chord_l.addLayout(chord_hero_row)
-        chord_l.addWidget(self.chord_tones_lbl)
-        chord_l.addWidget(self.chord_degree_lbl)
+        chord_l.addLayout(tones_deg_row)
         chord_l.addWidget(self.chord_secondary_lbl)
         chord_l.addWidget(self.chord_stability_lbl)
         chord_l.addStretch(1)
@@ -303,8 +309,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         key_box.setProperty("accentRail", "secondary")
         key_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         key_l = QtWidgets.QVBoxLayout(key_box)
-        key_l.setContentsMargins(10, 8, 10, 8)
-        key_l.setSpacing(4)
+        key_l.setContentsMargins(10, 6, 10, 6)
+        key_l.setSpacing(3)
         key_hdr = TelemetryHeader("TONALITY // 02", "调性推测", badge_text="K-S WINDOW")
         key_hdr.add_right_widget(
             HelpBadge(
@@ -353,8 +359,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         rhythm_box.setProperty("accentRail", "obsidian")
         rhythm_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         rhythm_l = QtWidgets.QVBoxLayout(rhythm_box)
-        rhythm_l.setContentsMargins(10, 8, 10, 8)
-        rhythm_l.setSpacing(4)
+        rhythm_l.setContentsMargins(10, 6, 10, 6)
+        rhythm_l.setSpacing(3)
         rhythm_hdr = TelemetryHeader("TEMPO & PITCH // 03", "节拍 · 音高 · CPU 节拍器", badge_text="SYNTH CLICK")
         rhythm_hdr.add_right_widget(
             HelpBadge(
@@ -371,23 +377,23 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         bpm_hero_row.setSpacing(8)
         self.bpm_lbl = QtWidgets.QLabel("BPM: Unknown")
         self.bpm_lbl.setObjectName("chromaWarnHero")
+        self.bpm_stab_lbl = ElidedLabel("节拍稳定度: Unknown")
+        self.bpm_stab_lbl.setObjectName("chromaCaption")
         self._bpm_dots = DotMatrixWidget(0, 5)
         self._bpm_dots.setVisible(False)
         self._dot_matrices.append(self._bpm_dots)
-        bpm_hero_row.addWidget(self.bpm_lbl, 1)
+        bpm_hero_row.addWidget(self.bpm_lbl)
+        bpm_hero_row.addWidget(self.bpm_stab_lbl, 1)
         bpm_hero_row.addWidget(self._bpm_dots)
-        self.bpm_stab_lbl = QtWidgets.QLabel("节拍稳定度: Unknown")
-        self.bpm_stab_lbl.setObjectName("chromaCaption")
-        self.bpm_stab_lbl.setWordWrap(True)
 
         pitch_row = QtWidgets.QHBoxLayout()
-        pitch_row.setSpacing(8)
-        self.pitch_lbl = QtWidgets.QLabel("主音高: -")
+        pitch_row.setSpacing(6)
+        self.pitch_lbl = ElidedLabel("主音高: -")
         self.pitch_lbl.setObjectName("chromaSubtle")
-        self.pitch_lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.pitch_lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
         self.tuning_bar = TuningCentsBar()
-        pitch_row.addWidget(self.pitch_lbl, 1)
-        pitch_row.addWidget(self.tuning_bar, 1)
+        pitch_row.addWidget(self.pitch_lbl, 3)
+        pitch_row.addWidget(self.tuning_bar, 2)
 
         met_row = QtWidgets.QHBoxLayout()
         met_row.setSpacing(6)
@@ -456,7 +462,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         met_row2.addWidget(self.tap_status_lbl, 1)
 
         rhythm_l.addLayout(bpm_hero_row)
-        rhythm_l.addWidget(self.bpm_stab_lbl)
         rhythm_l.addLayout(pitch_row)
         rhythm_l.addLayout(met_row)
         rhythm_l.addLayout(met_row2)
@@ -530,8 +535,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             )
         )
         tools_bar.addWidget(self.reset_harmony_btn)
-        tools_bar.addStretch(1)
-        root.addLayout(tools_bar)
 
         self.track_status_lbl = MarqueeLabel("曲目会话监测 (SMTC): 待启动按进程捕获（也可随时手动点击「换歌重置」）")
         self.track_status_lbl.setWordWrap(False)
@@ -540,16 +543,18 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
         self.track_status_lbl.setObjectName("chromaTrackStatus")
-        root.addWidget(self.track_status_lbl)
+        tools_bar.addWidget(self.track_status_lbl, 1)
+        root.addLayout(tools_bar)
 
-        # Plots splitter: 12-bin Chroma Bar + Bounded Chroma History Heatmap
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        # Plots splitter: 12-bin Chroma Bar + Bounded Chroma History Heatmap (tactile dot-matrix rail)
+        self._chroma_splitter = splitter = AcidSplitter(QtCore.Qt.Orientation.Vertical)
         splitter.setChildrenCollapsible(False)
 
         self._chroma_bar_heights = np.zeros(12, dtype=np.float32)
         self._label_cache: dict[int, str] = {}
 
         self.chroma_bar_plot = pg.PlotWidget(title="12-BIN CHROMA // 实时色度分布")
+        self.chroma_bar_plot.setMinimumHeight(56)
         try:
             self.chroma_bar_plot.hideButtons()
         except Exception:
@@ -570,6 +575,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         splitter.addWidget(self.chroma_bar_plot)
 
         self.chroma_hist_plot = pg.PlotWidget(title="CHROMA HEATMAP // 有界时序热图 (120s)")
+        self.chroma_hist_plot.setMinimumHeight(60)
         try:
             self.chroma_hist_plot.hideButtons()
         except Exception:
@@ -874,6 +880,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         if is_acid:
             variant = self._acid_variant or "dark"
             p = get_acid_palette(variant)
+            self._chroma_splitter.set_grip_colors(grip=p.text_muted, accent=p.accent, line=p.border)
             if variant == "dark":
                 cross = QtGui.QColor(241, 242, 236, 65)
                 stencil = QtGui.QColor(241, 242, 236, 15)

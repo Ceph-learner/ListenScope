@@ -32,6 +32,9 @@ from ui.chroma_widget import (
 )
 from ui.help_badge import HelpBadge
 from ui.acid_style import (
+    AcidGraphicOverlay,
+    AcidSplitter,
+    AcidTabBar,
     SegmentedBatteryProgressBar,
     TelemetryHeader,
     TelemetryPulseStrip,
@@ -211,8 +214,8 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._cached_hud_txt: str = ""
 
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 10)
-        root.setSpacing(7)
+        root.setContentsMargins(10, 6, 10, 6)
+        root.setSpacing(5)
 
         self._header = TelemetryHeader("STEM WORKSTATION // MIX & MIDI", "分轨混音 · 深度扒谱 · MIDI 转录")
         self._pulse_strip = TelemetryPulseStrip(bar_count=10)
@@ -222,6 +225,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         # AI Job status & segmented battery progress bar
         job_box = QtWidgets.QGroupBox("AI SEPARATION // 分轨任务队列")
         job_l = QtWidgets.QHBoxLayout(job_box)
+        job_l.setContentsMargins(8, 4, 8, 4)
         self.job_status_lbl = QtWidgets.QLabel("空闲：请在下方 120s 历史时间轴选择片段并启动 2-Stem 或 4-Stem 分轨")
         self.job_status_lbl.setWordWrap(True)
         self.job_progress = SegmentedBatteryProgressBar(cells=16)
@@ -424,20 +428,46 @@ class StemMixerWidget(QtWidgets.QWidget):
         root.addLayout(scrub_bar)
 
         # Splitter between Stem tracks and Deep Analysis + Piano Roll + MIDI Table tabs
-        self._workspace_splitter = splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self._workspace_splitter = splitter = AcidSplitter(QtCore.Qt.Orientation.Vertical)
 
         self._track_scroll = scroll = QtWidgets.QScrollArea()
+        scroll.setObjectName("stemTrackScroll")
         scroll.setWidgetResizable(True)
         scroll.setMinimumHeight(84)
         self._tracks_container = QtWidgets.QWidget()
         self._tracks_layout = QtWidgets.QVBoxLayout(self._tracks_container)
+        self._tracks_layout.setContentsMargins(6, 6, 6, 6)
         self._tracks_layout.setSpacing(6)
+
+        self._empty_tracks_card = QtWidgets.QFrame()
+        self._empty_tracks_card.setObjectName("emptyStemBay")
+        empty_l = QtWidgets.QVBoxLayout(self._empty_tracks_card)
+        empty_l.setContentsMargins(12, 10, 12, 10)
+        empty_l.setSpacing(6)
+        empty_hdr = TelemetryHeader(
+            "STEM BAY // STANDBY",
+            "分轨音轨槽位 · 待载入",
+            badge_text="2-STEM / 4-STEM",
+        )
+        self._empty_tracks_hint_lbl = QtWidgets.QLabel(
+            "在下方 120s 历史缓冲选定 A/B 区间后，点击「AI 2-Stem 分轨」或「AI 4-Stem 分轨」；"
+            "分离后的人声 / 伴奏 / 贝斯 / 鼓组独立波形轨、M/S 独听与单轨转 MIDI 按钮将在此处就位。"
+        )
+        self._empty_tracks_hint_lbl.setObjectName("mutedCaption")
+        self._empty_tracks_hint_lbl.setWordWrap(True)
+        empty_l.addWidget(empty_hdr)
+        empty_l.addWidget(self._empty_tracks_hint_lbl)
+        empty_l.addStretch(1)
+        self._empty_tracks_ov = AcidGraphicOverlay(self._empty_tracks_card, stencil="4X")
+        self._tracks_layout.addWidget(self._empty_tracks_card)
         self._tracks_layout.addStretch(1)
         scroll.setWidget(self._tracks_container)
         splitter.addWidget(scroll)
 
         self.analysis_tabs = QtWidgets.QTabWidget()
-        self.analysis_tabs.setMinimumHeight(140)
+        self._analysis_tab_bar = AcidTabBar(self.analysis_tabs)
+        self.analysis_tabs.setTabBar(self._analysis_tab_bar)
+        self.analysis_tabs.setMinimumHeight(118)
 
         # Sub-tab 1: Deep Stem Arrangement & Chord Progression Timeline (non-destructive CPU analysis)
         deep_tab = QtWidgets.QWidget()
@@ -637,6 +667,24 @@ class StemMixerWidget(QtWidgets.QWidget):
         if acid_variant in ("light", "dark"):
             p = get_acid_palette(acid_variant)
             self._pulse_strip.set_theme_color(p.accent)
+            self._workspace_splitter.set_grip_colors(grip=p.text_muted, accent=p.accent, line=p.border)
+            self._analysis_tab_bar.set_rail_colors(
+                p.accent if acid_variant == "light" else p.ribbon_bg,
+                p.accent_secondary,
+            )
+            self._empty_tracks_ov.setVisible(True)
+            if acid_variant == "dark":
+                self._empty_tracks_ov.set_colors(
+                    QtGui.QColor(241, 242, 236, 65),
+                    QtGui.QColor(241, 242, 236, 15),
+                    QtGui.QColor(206, 255, 24, 190),
+                )
+            else:
+                self._empty_tracks_ov.set_colors(
+                    QtGui.QColor(9, 13, 20, 52),
+                    QtGui.QColor(9, 13, 20, 12),
+                    QtGui.QColor(0, 168, 120, 175),
+                )
             self.job_progress.set_theme_colors(
                 accent=p.accent,
                 accent_hi=p.accent_secondary,
@@ -652,11 +700,16 @@ class StemMixerWidget(QtWidgets.QWidget):
                 self._piano_roll_item.setOpts(brush=p.accent, pen=pg.mkPen(p.accent_strong, width=0.8))
             dot_color = QtGui.QColor(p.accent)
         else:
+            self._empty_tracks_ov.setVisible(False)
             apply_plot_appearance(self.piano_roll_plot, appearance, system_is_dark=system_is_dark)
             mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
             bg, fg, accent = appearance.effective_colors(system_is_dark=system_is_dark)
             self._pulse_strip.set_theme_color(accent)
             is_l = mode == "light"
+            muted_col = "#64748B" if is_l else "#94A3B8"
+            border_col = "#CBD5E1" if is_l else "#3A4254"
+            self._workspace_splitter.set_grip_colors(grip=muted_col, accent=accent, line=border_col)
+            self._analysis_tab_bar.set_rail_colors(accent, muted_col)
             self.job_progress.set_theme_colors(
                 accent=accent,
                 accent_hi=QtGui.QColor(accent).lighter(135).name(),
@@ -1065,6 +1118,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         set_widget_tone(self.live_chord_hud_lbl, "info")
 
         tracks = self.mixer_engine.load_stems(stem_paths)
+        self._empty_tracks_card.setVisible(not bool(tracks))
         self._sync_preset_availability(tracks)
         self.deep_analyze_btn.setEnabled(bool(tracks))
         self.clear_results_btn.setEnabled(bool(tracks))
