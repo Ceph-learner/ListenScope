@@ -1,24 +1,31 @@
 # 最新交接
 
-## 前端 UI 深度打磨与预设命名合规（分支 `feature/ui-polish-v026` · 代码证据基线 `c42ed88b5e16fe651ab4c9d0a92b87d072ecc269` · 基于 `main` `7e4878d`）
+## 前端 UI 深度打磨与第二轮细节精修（分支 `feature/ui-polish-v026` · PR #30 · 代码证据基线 `41044bacadbeddf3e85ac46707bf7556283398e9` · 基于 `main` `7e4878d`）
 
-- **目标与结果**：对 ListenScope 前端桌面 UI 进行系统级质感、动效、聚焦、上下/左右轨布局与细节打磨，并将外观预设中的原第三方工具名称更名为原创配色「石墨靛紫 (`graphite`)」与「暖砂琥珀 (`terracotta`)」（旧配置经 `_PRESET_ALIASES` 静默迁移，保持 `schema_version == 2` 向后兼容）；同时修复了设置弹窗首次打开时 `BootstrapManager` 默认提示文案的四语缺漏。未触碰 `main`、`backup/*` 分支及 `*-backup` 标签，未创建 Release / Tag。
+- **目标与结果**：在首轮动效/轨道/预设去品牌化（`石墨靛紫` / `暖砂琥珀`）基础上，完成用户逐项指出的四项第二轮精修并同步修复英文静音帧动态翻译缺漏：
+  1. **复选框间距舒展**：统一 `QCheckBox` 指标框为 `15×15` 居中对勾（非酸性主题同步补齐矢量对勾图标）、`spacing: 8px`、`padding: 2px 8px 2px 2px`，拉宽设置/外观/混音/Chroma/底部 A/B 栏所有复选框行距，消除贴边挤压。
+  2. **顶栏品牌排版与满 VRAM 不截断**：`self._brand_eye` 切换为 `#brandEyebrow` CJK 字体栈与精炼四语文案（`LISTENSCOPE · 实时频谱 / 120s 分轨`），加装竖向分割线 `#topbarVDivider` 与下沉式硬件遥测胶囊 `ResourceMonitorBar`（`#resourceCapsule`），经自动化断言与离屏实拍确认在 `1280×800` + `VRAM 5890/8151M` 下 100% 完整展示不裁切。
+  3. **全部弹窗无边框圆角化**：新增 `FramelessDialogChrome` 封装 10px 圆角 `#dialogShellFrame`、Win11 DWM 原生圆角 / `QRegion` 兜底、顶栏拖拽移动、8 边缩放与嵌入 `TelemetryHeader` 右侧对齐的矢量关闭键 `×`，覆盖 `SettingsDialog`、`AppearanceDialog` 与 `ChordPracticeDialog` 并随「无边框圆角窗口」开关实时切换（构造期零多余顶层窗口闪现）。
+  4. **图标体系再打磨**：重绘双切角碳黑五柱声学主图标 `ui/assets/listenscope.svg` 与 7 尺寸 `listenscope.ico`（16–256px）、与主图标一致的新版顶栏 `ChamferBadge`、方端直角工业风 `ui/assets/settings/{appearance,resources,midi,status}.svg` 及 14×14 居中 `acid_check_{light,dark}.svg`。
+  未触碰 `main`、`backup/*` 分支及 `*-backup` 标签，未创建 Release / Tag，PR #30 保持待用户审图确认后决定合入。
 - **关键改动文件**：
-  - 工业视觉与自绘组件：[`ui/acid_style.py`](../ui/acid_style.py)（新增 `ElidedLabel`、`AcidTabBar`、`AcidSplitter`、`WorkspaceRailHandle`、`WindowGlyphButton`、`SignalLockDot`；升级 `TelemetryHeader` 防纵裁；柔和浅色滚动条为 `#94A3B8`；增加 `#stemTrackScroll` / `#emptyStemBay` 样式）
-  - 聚焦与助记交互：[`ui/help_badge.py`](../ui/help_badge.py)（`_FocusOverlay` 三态光学落锁微动效；修复对话框打开时首个 `HelpBadge` 被动实心高亮）
-  - 主壳体与工作区：[`ui/main_window.py`](../ui/main_window.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)
-  - 外观预设、弹窗与四语本地化：[`core/appearance.py`](../core/appearance.py)、[`ui/appearance.py`](../ui/appearance.py)、[`core/i18n.py`](../core/i18n.py)、[`core/i18n_catalog.py`](../core/i18n_catalog.py)
-  - 回归测试与说明文档：[`tests/test_ux_polish_bootstrap_tray_marquee.py`](../tests/test_ux_polish_bootstrap_tray_marquee.py)、[`README.md`](../README.md)、[`DESIGN.md`](../DESIGN.md)、[`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
-- **分支与工作区状态**：当前检出特性分支 `feature/ui-polish-v026`（基于 `main` `7e4878d`），推送后创建 PR 至 `main`；未修改 `packaging/listenscope_core.spec`（无需新增二进制/SVG 资产，全程纯 `QPainter` 零 `QGraphicsEffect`）。
+  - 工业视觉、无边框弹窗壳体与自绘组件：[`ui/acid_style.py`](../ui/acid_style.py)、[`ui/help_badge.py`](../ui/help_badge.py)
+  - 图标与矢量资产：`ui/assets/listenscope.svg`、`ui/assets/listenscope.ico`、`ui/assets/acid_check_{light,dark}.svg`、`ui/assets/settings/{appearance,resources,midi,status}.svg`（均已纳入 [`packaging/listenscope_core.spec`](../packaging/listenscope_core.spec) 与 [`.github/workflows/release-windows.yml`](../.github/workflows/release-windows.yml) 校验）
+  - 主壳体、硬件胶囊、各标签页与弹窗：[`ui/main_window.py`](../ui/main_window.py)、[`ui/resource_widget.py`](../ui/resource_widget.py)、[`ui/settings_dialog.py`](../ui/settings_dialog.py)、[`ui/appearance.py`](../ui/appearance.py)、[`ui/chord_practice.py`](../ui/chord_practice.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)
+  - 预设、四语本地化、回归测试与文档：[`core/appearance.py`](../core/appearance.py)、[`core/i18n.py`](../core/i18n.py)、[`core/i18n_catalog.py`](../core/i18n_catalog.py)、[`tests/test_ux_polish_bootstrap_tray_marquee.py`](../tests/test_ux_polish_bootstrap_tray_marquee.py)、[`README.md`](../README.md)、[`DESIGN.md`](../DESIGN.md)、[`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
+- **分支与工作区状态**：当前检出特性分支 `feature/ui-polish-v026`（基于 `main` `7e4878d`，关联已开启的 PR #30），本交接提交后同步推送至 `origin/feature/ui-polish-v026`，工作区无未跟踪草稿脚本。
 - **已验证命令与实测结果（Linux / offscreen 环境，不代表 Windows 真机已验）**：
-  - Debian 12 · Python 3.11.2 · PySide6 6.9.3 · `QT_QPA_PLATFORM=offscreen`：
-    - `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short` → **`206 passed, 6 skipped in 78.31s`**（6 项为 Windows 专属 PowerShell/WinRT 跳过）；
-    - `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python main.py --simulate --headless-smoke` → **exit 0**；
-    - `/home/antigravity/.venv_test/bin/python scripts/check_env.py --no-write` & `scripts/probe_media_session.py --self-test-mock --json` → **exit 0**；
-    - 离屏截图审查：已实际渲染并逐张目检 `1360×860` 下临床浅色 / 暗夜双模 5 个主 Tab、`SettingsDialog`、`AppearanceDialog`、`ChordPracticeDialog` 以及英文暗夜工作区截图，确认无 CJK 裁切、EN 零中文泄漏、无 `&` 误下划线、滚动条与主按钮视觉统一。
+  - Debian 12 · Python 3.11.2 · PySide6 6.9.3 · `QT_QPA_PLATFORM=offscreen`（证据提交 `41044ba`）：
+    - `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short` → **`207 passed, 6 skipped in 86.80s`**（6 项为 Windows 专属 PowerShell/WinRT 跳过）；
+    - `QT_QPA_PLATFORM=offscreen python main.py --simulate --headless-smoke` → **exit 0**；
+    - `python scripts/check_env.py --no-write` & `python scripts/probe_media_session.py --self-test-mock --json` → **exit 0**；
+    - 图标与离屏截图审查：验证 11 枚 SVG 资产 `QSvgRenderer.isValid()` 与 `listenscope.ico` 7 档位（16–256px）有效；实际渲染并目检 `1360×860`、`1280×800`（满 VRAM 模拟）、浅色/暗夜 5 个主 Tab、无边框 `SettingsDialog` / `AppearanceDialog` / `ChordPracticeDialog`、英文暗夜页与图标对比总览图。
+- **本轮失败尝试与修正**：
+  - 曾为 `SettingsDialog` 设置 `setMinimumWidth(860)` 以避免滚动区水平溢出，导致既有窄窗回归测试 `test_settings_navigation_keeps_draft_edits_and_midi_focus` 与 `test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packaging` 的 `resize(560, 500)` 断言失败；移除硬性最小宽度、保留默认 `resize(920, 750)` 并收敛 `assist_row` 冗余间距后，全量测试 `207 passed, 6 skipped` 且无水平溢出。
 - **未在云端验证的项目（须 Windows 11 + RTX 5060 Ti 8GB VRAM / 16GB RAM 真机复测）**：
-  - Windows 11 高 DPI（125%/150%）及 Microsoft YaHei UI 下 `WindowGlyphButton` 1px 矢量三键、`AcidTabBar` 220ms 滑动信标轨、`WorkspaceRailHandle` / `AcidSplitter` 拖拽手感与双眼视觉舒适度；
-  - 真实音频 WASAPI 按进程捕获下 `SignalLockDot` 脉动响应、`[STATIC_LOCK]` 冻结、系统托盘与无边框 8 边缩放手感、以及 RTX 5060 Ti `cu128` 实机分轨流畅度。
+  - Windows 11 原生 DWM 圆角在主窗口与三大无边框弹窗（设置 / 外观 / 和弦练习）上的边框贴合度、标题区拖拽移动与 8 边缩放手感；
+  - 125%/150% HiDPI 与 Microsoft YaHei UI 下的顶栏品牌区/硬件胶囊、复选框对勾居中度、`WindowGlyphButton` 矢量细线与新版 `listenscope.ico` 任务栏/托盘清晰度；
+  - 真实 WASAPI 进程捕获下 `SignalLockDot` 脉动响应、`[STATIC_LOCK]` 冻结、以及 RTX 5060 Ti `cu128` 实机分轨流畅度。
 - **Windows 目标机可复制复测命令**：
   ```powershell
   git fetch origin
@@ -28,12 +35,12 @@
   Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
   .\.venv-core\Scripts\python.exe main.py
   # 启动后实机核查：
-  # 1. 切换 01–05 Tab 与 03 内子 Tab，观察顶部信号锁轨 220ms 滑动与悬停预高亮；
-  # 2. 拖拽主工作区与 120s 历史缓冲间的水平点阵轨（双击复原），及 Tab 02/03 内部点阵分隔轨；
-  # 3. 切换「编辑外观与字体…」确认预设为 经典 / Lenso / 石墨靛紫 / 暖砂琥珀 / 酸性遥测，且打开各弹窗时右上角 [?] 不会自动实心高亮；
-  # 4. 切换英文/韩文模式并启动音频捕获，确认实时状态与缓冲计数无中文残留、SignalLockDot 正常脉动。
+  # 1. 核对左上角新版五柱声学徽标、「LISTENSCOPE · 实时频谱 / 120s 分轨」完整不截断及右侧 RAM/VRAM 硬件胶囊；
+  # 2. 打开「设置」「编辑外观与字体…」「练习和弦」，确认均为无边框圆角窗口、可拖顶部移动、可拖 8 边缩放、点右上角 × 关闭，且取消勾选「无边框圆角窗口」可即时切回系统边框；
+  # 3. 核对设置/外观/混音/Chroma/底部栏复选框对勾居中且与邻近控件间距舒展；
+  # 4. 核对任务栏与系统托盘新版 listenscope.ico 图标清晰度及真实 WASAPI/GPU 分轨体验。
   ```
-- **下一步**：合入 PR 并在 Windows 11 真机按上述步骤验收，若确认发布新版本再单独授权打 Tag。
+- **下一步**：待用户审阅第二轮最新截图预览并确认效果后，决定是否继续微调或合入 PR #30 并安排 Windows 11 真机验收。
 
 ---
 

@@ -25,16 +25,19 @@ GPU 分轨和 CPU MIDI 各用独立环境（Core 仍保持零 Torch/CUDA/TF，�
 
 ## 当前验证基线
 
-- **UI 深度打磨特性分支（分支 `feature/ui-polish-v026` · 代码证据基线 `c42ed88b5e16fe651ab4c9d0a92b87d072ecc269`，基于 `main` `7e4878d`）**：
+- **UI 深度打磨特性分支（分支 `feature/ui-polish-v026` · PR #30 · 代码证据基线 `41044bacadbeddf3e85ac46707bf7556283398e9`，基于 `main` `7e4878d`）**：
   - **Linux/offscreen 已验证**（Debian 12 · Python 3.11.2 · PySide6 6.9.3 · `QT_QPA_PLATFORM=offscreen`）：
-    - `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short` → **`206 passed, 6 skipped in 78.31s`**（新增 `test_ui_rails_tabbar_elided_standby_bay_and_preset_brand_hygiene`；6 项为 Windows 专属 PowerShell/WinRT 跳过）；
+    - `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short` → **`207 passed, 6 skipped in 86.80s`**（新增 `test_ui_rails_tabbar_elided_standby_bay_and_preset_brand_hygiene` 与 `test_frameless_dialogs_topbar_no_clip_and_checkbox_spacing`；6 项为 Windows 专属 PowerShell/WinRT 跳过）；
     - `QT_QPA_PLATFORM=offscreen python main.py --simulate --headless-smoke`、`python scripts/check_env.py --no-write` 与 `python scripts/probe_media_session.py --self-test-mock --json` 均通过（exit 0）；
-    - 已实际离屏渲染并逐图审查 `1360×860` 下中文临床浅色/暗夜 5 个主标签页 + `SettingsDialog` + `AppearanceDialog` + `ChordPracticeDialog` 以及英文暗夜主工作区截图，确认无 CJK 纵/横硬裁切、英文零中文泄漏、无快捷键下划线吞字符、无弹窗初开误触发 `[?]` 实心高亮。
+    - 校验全部 `ui/assets/**/*.svg` 经 `QSvgRenderer.isValid()` 与 `ui/assets/listenscope.ico` 7 档位（16–256px）加载无误；实际离屏渲染并逐图审查 `1360×860` 与 `1280×800`（模拟满载 `VRAM 5890/8151M`）下浅色/暗夜 5 个主标签页、三大无边框弹窗、英文暗夜页与图标总览图。
   - **核心视觉与交互改动**：
-    - 工业风动效与控件体系升级（[`ui/acid_style.py`](../ui/acid_style.py)、[`ui/help_badge.py`](../ui/help_badge.py)）：新增 `AcidTabBar`（`220 ms OutCubic` 滑动信标锁定轨）、`AcidSplitter` 与 `WorkspaceRailHandle`（左右/上下点阵握把拖拽轨，悬停/拖拽平滑亮起，双击复原 120s 波形高度）、`WindowGlyphButton`（1px 像素对齐矢量窗口三键）、`SignalLockDot`（捕获态实心锁频脉冲方点）、`ElidedLabel`（防硬裁切且保底 CJK 行高），升级 `_FocusOverlay`（居中展开底轨、内收四角光学卡标、扫掠流光角标），柔和浅色模式滚动条至 `#94A3B8`，并修复弹窗打开时首个 `HelpBadge` 被动实心高亮。
-    - 主界面、Chroma、Mixer、Spectrum 与弹窗精修（[`ui/main_window.py`](../ui/main_window.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)、[`ui/appearance.py`](../ui/appearance.py)）：消除 Chroma 卡片 `节拍 · 音高 · CPU 节拍器` 顶裁与 `主音高` 截断并释放 ~55px 图表高度；为分轨混音空白左侧槽位增加 `STEM BAY // STANDBY` 工业空态引导卡；为 Spectrum 指标卡补齐准星与 2×2 棋盘格叠加层；统一 `AppearanceDialog` 的「保存」主按钮样式。
-    - 预设品牌合规与四语零泄漏补强（[`core/appearance.py`](../core/appearance.py)、[`core/i18n.py`](../core/i18n.py)、[`core/i18n_catalog.py`](../core/i18n_catalog.py)）：将原两档带第三方名称的主题预设更名为原创配色 `石墨靛紫`（`graphite`）与 `暖砂琥珀`（`terracotta`）并通过 `_PRESET_ALIASES` 静默兼容旧配置；修复英文模式 `Chords && Rhythm` 转义及实时捕获态/缓冲时长/调性关系动态短语翻译。
-  - **仍须 Windows 11 真机确认**（RTX 5060 Ti 8GB VRAM · 16GB RAM · HiDPI）：Microsoft YaHei UI 与 125%/150% DPI 下 `WindowGlyphButton` 矢量细线、`AcidTabBar` 滑动轨与 `WorkspaceRailHandle` 拖拽手感、系统托盘/任务栏图标及真实 WASAPI/GPU 流畅度。
+    - **第一轮基础质感与动效**（[`ui/acid_style.py`](../ui/acid_style.py)、[`ui/help_badge.py`](../ui/help_badge.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)、[`core/appearance.py`](../core/appearance.py)、[`core/i18n.py`](../core/i18n.py)）：新增 `AcidTabBar`（`220 ms OutCubic` 滑动信标锁定轨）、`AcidSplitter` 与 `WorkspaceRailHandle`（左右/上下点阵拖拽轨，双击复原）、`WindowGlyphButton`、`SignalLockDot`、`ElidedLabel`；升级 `_FocusOverlay` 光学落锁微动效并修复弹窗初开误高亮首个 `[?]`；消除 Chroma 卡片顶裁与主音高截断；新增分轨空白页 `STEM BAY // STANDBY` 槽位卡；原两档预设更名为原创配色 `石墨靛紫`（`graphite`）与 `暖砂琥珀`（`terracotta`）并静默兼容旧配置。
+    - **第二轮细节精修**（[`ui/acid_style.py`](../ui/acid_style.py)、[`ui/main_window.py`](../ui/main_window.py)、[`ui/resource_widget.py`](../ui/resource_widget.py)、[`ui/settings_dialog.py`](../ui/settings_dialog.py)、[`ui/appearance.py`](../ui/appearance.py)、[`ui/chord_practice.py`](../ui/chord_practice.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)、`ui/assets/`）：
+      - **弹窗全无边框圆角化**：新增可复用 `FramelessDialogChrome`（`QFrame#dialogShellFrame[frameless="true"]` 10px 圆角边框、Win11 DWM 原生圆角 / `QRegion` 兜底、标题区拖拽移动、8 边缩放与嵌入 `TelemetryHeader` 右侧对齐的矢量 `[×]` 按钮），覆盖 `SettingsDialog`、`AppearanceDialog`、`ChordPracticeDialog` 并随「无边框圆角窗口」开关实时联动（构造期零多余顶层闪现，保留 `SettingsDialog` 窄窗 `560×500` 缩放兼容）。
+      - **顶栏排版与硬件遥测胶囊重构**：品牌副标题改用 `#brandEyebrow` CJK 字体栈与精炼文案（`LISTENSCOPE · 实时频谱 / 120s 分轨`），配合竖向分割线 `#topbarVDivider` 与下沉式青色导轨硬件遥测胶囊 `ResourceMonitorBar`（`#resourceCapsule`），即便在 `1280×800` + 满 `VRAM 5890/8151M` 下也 100% 不截断。
+      - **复选框呼吸间距**：全应用 `QCheckBox` 统一升级至 `15×15` 居中对勾（含非酸性主题补齐矢量对勾图标）、`spacing: 8px` 与 `padding: 2px 8px 2px 2px`，并同步拉宽设置/外观/混音/Chroma/底部 A/B 栏复选框相邻间距。
+      - **图标体系精修与静音动态翻译补漏**：重绘双切角碳黑五柱声学主图标 `listenscope.svg` / `listenscope.ico`（16–256px）、与主图标一致的新版顶栏 `ChamferBadge`、方端直角工业风 `ui/assets/settings/*.svg` 与 14×14 居中 `acid_check_*.svg`；同步修复 `SpectrumAnalysisWidget` 静音帧 `"等待有效音高"` 在英文/韩文模式下的动态翻译。
+  - **仍须 Windows 11 真机确认**（RTX 5060 Ti 8GB VRAM · 16GB RAM · HiDPI）：Win11 原生 DWM 圆角在主窗及三大无边框弹窗上的边缘观感与拖拽/8 边缩放手感、125%/150% DPI + Microsoft YaHei UI 下的顶栏/复选框排版、新版 `listenscope.ico` 任务栏/托盘清晰度、以及真实 WASAPI/GPU 流畅度。
 
 - **`v0.2.5` 发布验证基线（PR #29 `f3e6c2d`，基于 `main` `72e5700` · Tag `v0.2.5`）**：
   - 双端 CI / 非硬件校验：
