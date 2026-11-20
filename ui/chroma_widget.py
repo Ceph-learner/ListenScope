@@ -451,9 +451,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         )
 
         met_row2 = QtWidgets.QHBoxLayout()
-        met_row2.setSpacing(6)
+        met_row2.setSpacing(10)
         met_row2.addWidget(self.metronome_overlay_chk)
         met_row2.addWidget(self.metronome_count_in_chk)
+        met_row2.addSpacing(4)
         met_row2.addWidget(self.metronome_standalone_btn)
         met_row2.addWidget(self.metronome_vol_slider)
         met_row2.addWidget(self.metronome_vol_lbl)
@@ -518,7 +519,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         root.addLayout(prog_bar)
 
         tools_bar = QtWidgets.QHBoxLayout()
-        tools_bar.setSpacing(8)
+        tools_bar.setSpacing(10)
         tools_bar.addWidget(QtWidgets.QLabel("移调/Capo:"))
         tools_bar.addWidget(self.transpose_combo)
         tools_bar.addWidget(
@@ -527,6 +528,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 "Capo/移调仅改变和弦、调性与记谱提示的指型展示，底层检测始终锚定实音与实际 MIDI 音高，避免转调后错位；遇到转调歌曲时「调性推测」卡片会亮出 [可能转调] 警告。",
             )
         )
+        tools_bar.addSpacing(4)
         tools_bar.addWidget(self.auto_reset_chk)
         tools_bar.addWidget(
             HelpBadge(
@@ -534,6 +536,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 "仅当 Windows 媒体会话 (SMTC) 连续两次确认目标播放器切换了新曲目时，才自动清空和弦轨迹、调性窗口与 BPM，暂停/拖动进度条不会误重置。",
             )
         )
+        tools_bar.addSpacing(4)
         tools_bar.addWidget(self.reset_harmony_btn)
 
         self.track_status_lbl = MarqueeLabel("曲目会话监测 (SMTC): 待启动按进程捕获（也可随时手动点击「换歌重置」）")

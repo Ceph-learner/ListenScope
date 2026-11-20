@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ctypes
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import sys
 from typing import Optional
 
 import numpy as np
@@ -267,68 +269,125 @@ def acid_colormap_lut(kind: str, variant: str = "dark") -> np.ndarray:
 
 
 class ChamferBadge(QtWidgets.QWidget):
-    """45-degree chamfered telemetry emblem with precision crosshair & pulse trace (zero QGraphicsEffect)."""
+    """Dual-chamfered acoustic scope emblem cohesive with listenscope.svg (pure QPainter, zero QGraphicsEffect)."""
 
     def __init__(
         self,
         text: str = "LS",
         parent: QtWidgets.QWidget | None = None,
         *,
-        size: QtCore.QSize = QtCore.QSize(36, 30),
+        size: QtCore.QSize = QtCore.QSize(36, 34),
         chamfer: int = 7,
     ) -> None:
         super().__init__(parent)
         self._text = text
         self._chamfer = max(4, int(chamfer))
         self._fill = QtGui.QColor("#00A878")
-        self._border = QtGui.QColor("#008F66")
+        self._border = QtGui.QColor("#00A878")
         self._fg = QtGui.QColor("#FFFFFF")
+        self._secondary = QtGui.QColor("#77DCE4")
+        self._peak = QtGui.QColor("#CEFF18")
+        self._chassis = QtGui.QColor("#0B0D0F")
         self.setFixedSize(size)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-    def set_palette_colors(self, *, fill: str, border: str, fg: str = "#FFFFFF") -> None:
+    def set_palette_colors(
+        self,
+        *,
+        fill: str,
+        border: str,
+        fg: str = "#FFFFFF",
+        secondary: str = "#77DCE4",
+        peak: str = "#CEFF18",
+        chassis: str = "#0B0D0F",
+    ) -> None:
         self._fill = QtGui.QColor(fill)
         self._border = QtGui.QColor(border)
         self._fg = QtGui.QColor(fg)
+        self._secondary = QtGui.QColor(secondary)
+        self._peak = QtGui.QColor(peak)
+        self._chassis = QtGui.QColor(chassis)
         self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
         super().paintEvent(event)
         w = float(self.width())
         h = float(self.height())
-        c = min(float(self._chamfer), w * 0.35, h * 0.35)
-        if w <= 4 or h <= 4:
+        c = min(float(self._chamfer), w * 0.32, h * 0.32)
+        if w <= 8 or h <= 8:
             return
 
-        # Dual-chamfered industrial plate (top-right + bottom-left cut)
-        path = QtGui.QPainterPath()
-        path.moveTo(0.5, 0.5)
-        path.lineTo(w - c, 0.5)
-        path.lineTo(w - 0.5, c)
-        path.lineTo(w - 0.5, h - 0.5)
-        path.lineTo(c * 0.65, h - 0.5)
-        path.lineTo(0.5, h - c * 0.65)
-        path.closeSubpath()
+        # Outer dual-chamfered carbon chassis (top-right + bottom-left bevel)
+        outer = QtGui.QPainterPath()
+        outer.moveTo(0.75, 0.75)
+        outer.lineTo(w - c, 0.75)
+        outer.lineTo(w - 0.75, c)
+        outer.lineTo(w - 0.75, h - 0.75)
+        outer.lineTo(c * 0.72, h - 0.75)
+        outer.lineTo(0.75, h - c * 0.72)
+        outer.closeSubpath()
 
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-        painter.fillPath(path, self._fill)
-        painter.setPen(QtGui.QPen(self._border, 1.2))
-        painter.drawPath(path)
+        painter.fillPath(outer, self._chassis)
 
-        # Top-left micro registration pip + bottom-right spectrum bar accent
-        sub_fg = QtGui.QColor(self._fg)
-        sub_fg.setAlpha(185)
-        painter.fillRect(QtCore.QRectF(3.0, 3.0, 2.5, 2.5), sub_fg)
-        painter.fillRect(QtCore.QRectF(w - 6.0, h - 6.5, 2.5, 3.5), sub_fg)
+        # Recessed telemetry instrument deck
+        inset = 2.6
+        ic = max(2.0, c - 1.4)
+        inner = QtGui.QPainterPath()
+        inner.moveTo(inset, inset)
+        inner.lineTo(w - ic - 1.2, inset)
+        inner.lineTo(w - inset, ic + 1.2)
+        inner.lineTo(w - inset, h - inset)
+        inner.lineTo(ic * 0.72 + 1.2, h - inset)
+        inner.lineTo(inset, h - ic * 0.72 - 1.2)
+        inner.closeSubpath()
+        deck_col = QtGui.QColor(self._chassis).lighter(145)
+        if deck_col == self._chassis:
+            deck_col = QtGui.QColor("#141920")
+        painter.fillPath(inner, deck_col)
 
-        font = QtGui.QFont("Consolas")
-        font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
-        font.setBold(True)
-        font.setPixelSize(max(10, min(13, round(h * 0.42))))
-        painter.setFont(font)
-        painter.setPen(self._fg)
-        painter.drawText(QtCore.QRectF(0, -1, w - 1, h), QtCore.Qt.AlignmentFlag.AlignCenter, self._text)
+        # Subtle oscilloscope baseline
+        cy = h * 0.52
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#26323B"), 1.0))
+        painter.drawLine(QtCore.QPointF(5.0, cy), QtCore.QPointF(w - 5.0, cy))
+
+        # Top-left micro registration crosshair pip & bottom-left checkerboard hint
+        pip = QtGui.QColor(self._secondary)
+        pip.setAlpha(215)
+        painter.fillRect(QtCore.QRectF(4.0, 4.0, 2.0, 2.0), pip)
+        painter.fillRect(QtCore.QRectF(w - 6.0, h - 6.0, 2.0, 2.0), pip)
+
+        # 5-bar sculpted acoustic frequency crest matching listenscope.svg
+        ratios = (0.30, 0.58, 0.78, 0.50, 0.28)
+        colors = (self._fill, self._fill, self._peak, self._secondary, self._fill)
+        n_bars = len(ratios)
+        pad_x = 5.5
+        avail_w = max(10.0, w - 2.0 * pad_x)
+        gap = 2.0
+        bar_w = max(2.0, (avail_w - gap * (n_bars - 1)) / n_bars)
+        total_w = bar_w * n_bars + gap * (n_bars - 1)
+        start_x = (w - total_w) * 0.5
+        max_bar_h = max(6.0, h - 13.0)
+
+        for idx, (ratio, col) in enumerate(zip(ratios, colors)):
+            bx = round(start_x + idx * (bar_w + gap))
+            bh = max(3.0, round(max_bar_h * ratio))
+            by = round(cy - bh * 0.5)
+            painter.fillRect(QtCore.QRectF(bx, by, bar_w, bh), col)
+            if idx == 2:
+                # Crisp white scan-head peak cap above center frequency crest
+                cap_y = max(4.0, by - 3.0)
+                painter.fillRect(QtCore.QRectF(bx, cap_y, bar_w, 1.8), QtGui.QColor("#FFFFFF"))
+
+        # Crisp outer contour stroke drawn last so bevel stays razor sharp
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        pen = QtGui.QPen(self._border, 1.35)
+        pen.setJoinStyle(QtCore.Qt.PenJoinStyle.MiterJoin)
+        painter.setPen(pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawPath(outer)
         painter.end()
 
 
@@ -1541,6 +1600,319 @@ class WindowGlyphButton(QtWidgets.QPushButton):
         sp.end()
 
 
+class FramelessDialogChrome(QtCore.QObject):
+    """Reusable frameless rounded shell controller for QDialogs (Settings / Appearance / ChordPractice).
+
+    Mirrors ListenScopeMainWindow's frameless behavior without causing stray Show events during __init__:
+    - Applies FramelessWindowHint + 10px rounded shell border when `frameless=True`
+    - Uses native Windows 11 DWM rounded corners (DWMWCP_ROUND=2) when available, with QRegion mask fallback
+    - Supports dragging via `drag_header` and optional 8-edge resize via `shell_frame`
+    - Owns a crisp vector `WindowGlyphButton("close", "×")` synced to theme colors
+    """
+
+    def __init__(
+        self,
+        dialog: QtWidgets.QDialog,
+        shell_frame: QtWidgets.QFrame,
+        drag_header: QtWidgets.QWidget,
+        *,
+        resizable: bool = True,
+    ) -> None:
+        super().__init__(dialog)
+        self._dialog = dialog
+        self._shell = shell_frame
+        self._drag_header = drag_header
+        self._resizable = bool(resizable)
+        self._frameless_applied: Optional[bool] = None
+        self._win11_dwm_rounded = False
+        self._torn_down = False
+        self._drag_offset: Optional[QtCore.QPoint] = None
+        self._resize_edges = QtCore.Qt.Edge(0)
+        self._resize_start_global: Optional[QtCore.QPoint] = None
+        self._resize_start_geom: Optional[QtCore.QRect] = None
+
+        self._shell.setObjectName("dialogShellFrame")
+        self._shell.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        if self._resizable:
+            self._shell.setMouseTracking(True)
+            self._shell.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
+
+        self.close_btn = WindowGlyphButton("close", "×", drag_header)
+        self.close_btn.setObjectName("windowCloseBtn")
+        self.close_btn.setAccessibleName("关闭窗口")
+        self.close_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.close_btn.setAutoDefault(False)
+        self.close_btn.setDefault(False)
+        self.close_btn.clicked.connect(dialog.reject)
+
+        self._dialog.installEventFilter(self)
+        self._shell.installEventFilter(self)
+        if self._drag_header is not self._shell:
+            self._drag_header.installEventFilter(self)
+
+    @property
+    def is_frameless(self) -> bool:
+        return bool(self._frameless_applied)
+
+    def sync_colors(self, idle: str, hover: str = "#FFFFFF") -> None:
+        if _is_qt_valid(self.close_btn):
+            self.close_btn.set_glyph_colors(idle, hover)
+
+    def apply_frameless(self, frameless: bool) -> None:
+        if self._torn_down or not _is_qt_valid(self._dialog) or not _is_qt_valid(self._shell):
+            return
+        want = bool(frameless)
+        self._shell.setProperty("frameless", want)
+        style = self._shell.style()
+        if style is not None:
+            style.unpolish(self._shell)
+            style.polish(self._shell)
+        self._shell.update()
+        if _is_qt_valid(self.close_btn):
+            self.close_btn.setVisible(want)
+
+        if self._frameless_applied == want:
+            if self._dialog.isVisible():
+                self._update_rounded_mask()
+            return
+
+        was_visible = self._dialog.isVisible()
+        saved_geom = QtCore.QRect(self._dialog.geometry()) if was_visible else None
+        self._frameless_applied = want
+        self._win11_dwm_rounded = False
+
+        flags = (
+            QtCore.Qt.WindowType.Dialog
+            | QtCore.Qt.WindowType.WindowSystemMenuHint
+            | QtCore.Qt.WindowType.WindowCloseButtonHint
+        )
+        if want:
+            flags |= QtCore.Qt.WindowType.FramelessWindowHint
+        self._dialog.setWindowFlags(flags)
+
+        # Only re-show if dialog was already visible (prevents stray top-level Show events during __init__)
+        if was_visible:
+            self._dialog.show()
+            if saved_geom is not None and saved_geom.isValid():
+                self._dialog.setGeometry(saved_geom)
+            self._apply_win11_dwm_rounding()
+            self._update_rounded_mask()
+
+    def _apply_win11_dwm_rounding(self) -> None:
+        if sys.platform != "win32" or not self._frameless_applied or not _is_qt_valid(self._dialog):
+            return
+        if not self._dialog.isVisible():
+            return
+        try:
+            win_ver = sys.getwindowsversion()
+            if getattr(win_ver, "build", 0) >= 22000:
+                hwnd = int(self._dialog.winId())
+                if hwnd:
+                    dwmapi = ctypes.windll.dwmapi
+                    pref = ctypes.c_int(2)
+                    hr = dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+                    if hr == 0:
+                        self._win11_dwm_rounded = True
+                        self._dialog.clearMask()
+        except Exception:
+            pass
+
+    def _update_rounded_mask(self) -> None:
+        if not _is_qt_valid(self._dialog):
+            return
+        if not self._frameless_applied or self._win11_dwm_rounded or self._dialog.isMaximized():
+            self._dialog.clearMask()
+            return
+        w, h = self._dialog.width(), self._dialog.height()
+        if w <= 0 or h <= 0:
+            return
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(QtCore.QRectF(0, 0, w, h), 10.0, 10.0)
+        self._dialog.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
+
+    def _hit_test_edges(self, local_pos: QtCore.QPoint) -> QtCore.Qt.Edge:
+        if not self._frameless_applied or not self._resizable or not _is_qt_valid(self._dialog):
+            return QtCore.Qt.Edge(0)
+        m = 7
+        w, h = self._dialog.width(), self._dialog.height()
+        if w <= m * 2 or h <= m * 2:
+            return QtCore.Qt.Edge(0)
+        x, y = local_pos.x(), local_pos.y()
+        edges = QtCore.Qt.Edge(0)
+        if 0 <= x < m:
+            edges |= QtCore.Qt.Edge.LeftEdge
+        elif w - m <= x <= w:
+            edges |= QtCore.Qt.Edge.RightEdge
+        if 0 <= y < m:
+            edges |= QtCore.Qt.Edge.TopEdge
+        elif h - m <= y <= h:
+            edges |= QtCore.Qt.Edge.BottomEdge
+        return edges
+
+    @staticmethod
+    def _cursor_for_edges(edges: QtCore.Qt.Edge) -> Optional[QtCore.Qt.CursorShape]:
+        left = bool(edges & QtCore.Qt.Edge.LeftEdge)
+        right = bool(edges & QtCore.Qt.Edge.RightEdge)
+        top = bool(edges & QtCore.Qt.Edge.TopEdge)
+        bottom = bool(edges & QtCore.Qt.Edge.BottomEdge)
+        if (left and top) or (right and bottom):
+            return QtCore.Qt.CursorShape.SizeFDiagCursor
+        if (right and top) or (left and bottom):
+            return QtCore.Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return QtCore.Qt.CursorShape.SizeHorCursor
+        if top or bottom:
+            return QtCore.Qt.CursorShape.SizeVerCursor
+        return None
+
+    def _apply_software_resize(self, global_pos: QtCore.QPoint) -> None:
+        if not self._resize_edges or self._resize_start_global is None or self._resize_start_geom is None:
+            return
+        delta = global_pos - self._resize_start_global
+        geom = QtCore.QRect(self._resize_start_geom)
+        min_w = max(460, self._dialog.minimumWidth())
+        min_h = max(360, self._dialog.minimumHeight())
+        if self._resize_edges & QtCore.Qt.Edge.LeftEdge:
+            geom.setLeft(min(geom.right() - min_w + 1, geom.left() + delta.x()))
+        if self._resize_edges & QtCore.Qt.Edge.RightEdge:
+            geom.setRight(max(geom.left() + min_w - 1, geom.right() + delta.x()))
+        if self._resize_edges & QtCore.Qt.Edge.TopEdge:
+            geom.setTop(min(geom.bottom() - min_h + 1, geom.top() + delta.y()))
+        if self._resize_edges & QtCore.Qt.Edge.BottomEdge:
+            geom.setBottom(max(geom.top() + min_h - 1, geom.bottom() + delta.y()))
+        self._dialog.setGeometry(geom)
+
+    def _is_interactive_child(self, child: Optional[QtWidgets.QWidget]) -> bool:
+        cur = child
+        while cur is not None and cur is not self._drag_header:
+            if isinstance(
+                cur,
+                (
+                    QtWidgets.QAbstractButton,
+                    QtWidgets.QComboBox,
+                    QtWidgets.QLineEdit,
+                    QtWidgets.QAbstractSpinBox,
+                    QtWidgets.QSlider,
+                ),
+            ):
+                return True
+            cur = cur.parentWidget()
+        return False
+
+    def teardown(self) -> None:
+        if self._torn_down:
+            return
+        self._torn_down = True
+        for obj in (self._dialog, self._shell, self._drag_header):
+            if _is_qt_valid(obj):
+                try:
+                    obj.removeEventFilter(self)
+                except RuntimeError:
+                    pass
+
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if self._torn_down or not _is_qt_valid(self) or not _is_qt_valid(watched) or not _is_qt_valid(self._dialog):
+            return False
+        etype = event.type()
+        if etype == QtCore.QEvent.Type.Destroy:
+            return False
+
+        if watched is self._dialog:
+            if etype == QtCore.QEvent.Type.Show:
+                self._apply_win11_dwm_rounding()
+                self._update_rounded_mask()
+            elif etype == QtCore.QEvent.Type.Resize:
+                self._update_rounded_mask()
+            return False
+
+        if not self._frameless_applied:
+            return False
+
+        if watched is self._shell and self._resizable:
+            if etype == QtCore.QEvent.Type.HoverMove and not self._resize_edges:
+                hev = event  # type: ignore[assignment]
+                local = (
+                    self._dialog.mapFromGlobal(hev.globalPosition().toPoint())
+                    if hasattr(hev, "globalPosition")
+                    else hev.position().toPoint()
+                )
+                cur = self._cursor_for_edges(self._hit_test_edges(local))
+                if cur is not None:
+                    self._dialog.setCursor(cur)
+                else:
+                    self._dialog.unsetCursor()
+            elif etype == QtCore.QEvent.Type.MouseButtonPress:
+                if isinstance(event, QtGui.QMouseEvent) and event.button() == QtCore.Qt.MouseButton.LeftButton:
+                    local = self._dialog.mapFromGlobal(event.globalPosition().toPoint())
+                    edges = self._hit_test_edges(local)
+                    if edges:
+                        wh = self._dialog.windowHandle()
+                        if wh is not None and hasattr(wh, "startSystemResize"):
+                            try:
+                                if wh.startSystemResize(edges):
+                                    return True
+                            except Exception:
+                                pass
+                        self._resize_edges = edges
+                        self._resize_start_global = event.globalPosition().toPoint()
+                        self._resize_start_geom = QtCore.QRect(self._dialog.geometry())
+                        return True
+            elif etype == QtCore.QEvent.Type.MouseMove:
+                if isinstance(event, QtGui.QMouseEvent):
+                    if self._resize_edges and (event.buttons() & QtCore.Qt.MouseButton.LeftButton):
+                        self._apply_software_resize(event.globalPosition().toPoint())
+                        return True
+                    if not (event.buttons() & QtCore.Qt.MouseButton.LeftButton):
+                        local = self._dialog.mapFromGlobal(event.globalPosition().toPoint())
+                        cur = self._cursor_for_edges(self._hit_test_edges(local))
+                        if cur is not None:
+                            self._dialog.setCursor(cur)
+                        else:
+                            self._dialog.unsetCursor()
+            elif etype == QtCore.QEvent.Type.MouseButtonRelease:
+                self._resize_edges = QtCore.Qt.Edge(0)
+                self._resize_start_global = None
+                self._resize_start_geom = None
+                self._dialog.unsetCursor()
+
+        if watched is self._drag_header:
+            if etype == QtCore.QEvent.Type.MouseButtonPress:
+                if isinstance(event, QtGui.QMouseEvent) and event.button() == QtCore.Qt.MouseButton.LeftButton:
+                    local_dlg = self._dialog.mapFromGlobal(event.globalPosition().toPoint())
+                    edges = self._hit_test_edges(local_dlg)
+                    if edges:
+                        self._resize_edges = edges
+                        self._resize_start_global = event.globalPosition().toPoint()
+                        self._resize_start_geom = QtCore.QRect(self._dialog.geometry())
+                        return True
+                    child = self._drag_header.childAt(event.position().toPoint())
+                    if not self._is_interactive_child(child):
+                        wh = self._dialog.windowHandle()
+                        if wh is not None and hasattr(wh, "startSystemMove"):
+                            try:
+                                if wh.startSystemMove():
+                                    return True
+                            except Exception:
+                                pass
+                        self._drag_offset = event.globalPosition().toPoint() - self._dialog.frameGeometry().topLeft()
+                        return True
+            elif etype == QtCore.QEvent.Type.MouseMove:
+                if isinstance(event, QtGui.QMouseEvent):
+                    if self._resize_edges and (event.buttons() & QtCore.Qt.MouseButton.LeftButton):
+                        self._apply_software_resize(event.globalPosition().toPoint())
+                        return True
+                    if self._drag_offset is not None and (event.buttons() & QtCore.Qt.MouseButton.LeftButton):
+                        self._dialog.move(event.globalPosition().toPoint() - self._drag_offset)
+                        return True
+            elif etype == QtCore.QEvent.Type.MouseButtonRelease:
+                self._drag_offset = None
+                self._resize_edges = QtCore.Qt.Edge(0)
+                self._resize_start_global = None
+                self._resize_start_geom = None
+
+        return False
+
+
 class SignalLockDot(QtWidgets.QWidget):
     """Capture 'signal lock' indicator: hollow when idle, solid + breathing ring when listening.
 
@@ -1822,7 +2194,7 @@ QPushButton#acidPillBtn {{
     color: {p.text_secondary};
     border: none;
     border-radius: 0px;
-    padding: 3px 9px;
+    padding: 3px 7px;
     min-height: 18px;
     font-family: {cjk_family};
     font-size: {max(10, base_px - 2)}px;
@@ -1929,7 +2301,7 @@ QPushButton#emergencyStopBtn {{
     border-bottom: 2px solid #9A0E22;
     border-radius: 0px;
     min-height: 20px;
-    padding: 4px 12px;
+    padding: 4px 10px;
     font-family: {cjk_family};
     font-size: {btn_px}px;
     font-weight: 800;
@@ -2007,14 +2379,15 @@ QToolButton#helpBadge:hover {{
 
 /* Flat Checkboxes, Radios & Caliper Sliders */
 QCheckBox, QRadioButton {{
-    spacing: 6px;
+    spacing: 8px;
+    padding: 2px 8px 2px 2px;
     color: {p.text_primary};
     background-color: transparent;
     outline: none;
 }}
 QCheckBox::indicator {{
-    width: 13px;
-    height: 13px;
+    width: 15px;
+    height: 15px;
     border: 1px solid {p.border_strong};
     border-radius: 0px;
     background-color: {p.bg_code};
@@ -2036,8 +2409,8 @@ QCheckBox::indicator:checked:disabled {{
     image: url("{chk_svg}");
 }}
 QRadioButton::indicator {{
-    width: 12px;
-    height: 12px;
+    width: 13px;
+    height: 13px;
     border-radius: 0px;
     border: 1px solid {p.border_strong};
     background-color: {p.bg_code};
@@ -2283,8 +2656,12 @@ QGroupBox#historyPaperDock QDoubleSpinBox::down-arrow {{
 QGroupBox#historyPaperDock QCheckBox {{
     color: {p.dock_ink};
     background-color: transparent;
+    spacing: 8px;
+    padding: 2px 8px 2px 2px;
 }}
 QGroupBox#historyPaperDock QCheckBox::indicator {{
+    width: 15px;
+    height: 15px;
     background-color: {p.dock_card};
     border: 1px solid {p.dock_ink};
 }}
@@ -2487,7 +2864,12 @@ def acid_stylesheet(appearance: Appearance, variant: str = "dark") -> str:
 QMainWindow, QDialog {{
     background-color: {p.bg_base};
 }}
-QWidget#mainShellFrame[frameless="true"] {{
+QFrame#dialogShellFrame {{
+    background-color: {p.bg_base};
+    border: none;
+}}
+QWidget#mainShellFrame[frameless="true"],
+QFrame#dialogShellFrame[frameless="true"] {{
     background-color: {p.bg_base};
     border: 1px solid {p.border_strong};
     border-radius: 10px;
@@ -2583,22 +2965,38 @@ QFrame#acidDivider {{
     min-height: 1px;
     border: none;
 }}
+QFrame#topbarVDivider {{
+    background-color: {p.border};
+    min-width: 1px;
+    max-width: 1px;
+    border: none;
+}}
+QFrame#resourceCapsule {{
+    background-color: {p.bg_code};
+    border: 1px solid {p.border};
+    border-left: 3px solid {p.accent_secondary};
+    border-radius: 0px;
+}}
+QFrame#resourceCapsule QLabel#monoTelemetry {{
+    background-color: transparent;
+    font-size: {max(10, base_px - 1)}px;
+}}
 QLabel#acidHeroTitle {{
     color: {p.ribbon_ink};
     background-color: {p.ribbon_bg};
     font-family: {display_family};
-    font-size: {base_px + 3}px;
+    font-size: {base_px + 2}px;
     font-weight: 700;
-    padding: 2px 8px;
+    padding: 1px 8px;
     border: 1px solid {p.ribbon_bg};
 }}
 QLabel#acidEchoTitle {{
     color: {p.text_muted};
     background-color: transparent;
     font-family: {display_family};
-    font-size: {base_px + 3}px;
+    font-size: {base_px + 2}px;
     font-weight: 700;
-    padding: 2px 4px;
+    padding: 1px 4px;
 }}
 QLabel#acidHeroSub {{
     color: {p.text_secondary};
@@ -2611,6 +3009,13 @@ QFrame#telemetryHeader {{
 }}
 QFrame#telemetryHeader[divider="true"] {{
     border-bottom: 1px solid {p.border};
+}}
+QLabel#brandEyebrow {{
+    color: {p.text_secondary};
+    font-family: {cjk_family};
+    font-size: {max(10, base_px - 2)}px;
+    font-weight: 700;
+    letter-spacing: 0.25px;
 }}
 QLabel#telemetryEyebrow {{
     color: {p.text_secondary};

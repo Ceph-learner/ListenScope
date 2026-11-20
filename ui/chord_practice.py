@@ -27,8 +27,8 @@ from core.appearance import Appearance
 from core.i18n import get_current_language, translate_widget_tree
 from core.models import KeyEstimate
 from core.paths import default_export_dir
-from ui.acid_style import TelemetryHeader, acid_stylesheet
-from ui.appearance import set_widget_tone
+from ui.acid_style import FramelessDialogChrome, TelemetryHeader, acid_stylesheet, get_acid_palette
+from ui.appearance import detect_system_is_dark, set_widget_tone
 from ui.help_badge import HelpBadge, install_focus_animations
 
 
@@ -59,13 +59,24 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         preview_player: DrumPreviewPlayer | None = None,
         before_play: Callable[[], str | None] | None = None,
         acid_variant: Optional[str] = None,
+        frameless: Optional[bool] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("练习和弦 // CHORD PRACTICE")
         self.resize(760, 530)
         self.setMinimumSize(640, 440)
+        parent_app: Optional[Appearance] = None
+        if parent is not None:
+            win = parent.window()
+            if hasattr(win, "appearance") and isinstance(getattr(win, "appearance"), Appearance):
+                parent_app = getattr(win, "appearance")
+        want_frameless = (
+            bool(frameless)
+            if frameless is not None
+            else (bool(parent_app.frameless) if parent_app is not None else True)
+        )
         if parent is None and acid_variant in ("light", "dark"):
-            self.setStyleSheet(acid_stylesheet(Appearance(), acid_variant))
+            self.setStyleSheet(acid_stylesheet(Appearance(frameless=want_frameless), acid_variant))
 
         self._raw_recent = tuple(recent)
         self._transpose = int(transpose)
@@ -85,7 +96,13 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         self._preview_timer.setInterval(50)
         self._preview_timer.timeout.connect(self._on_preview_tick)
 
-        root = QtWidgets.QVBoxLayout(self)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._shell_frame = QtWidgets.QFrame(self)
+        outer.addWidget(self._shell_frame)
+
+        root = QtWidgets.QVBoxLayout(self._shell_frame)
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
 
@@ -102,6 +119,17 @@ class ChordPracticeDialog(QtWidgets.QDialog):
             "原曲快照参考",
             badge_text=capo_badge,
         )
+        self._chrome = FramelessDialogChrome(self, self._shell_frame, self._snap_header, resizable=True)
+        if acid_variant in ("light", "dark"):
+            pal = get_acid_palette(acid_variant)
+            self._chrome.sync_colors(pal.text_secondary, "#FFFFFF")
+        elif parent_app is not None:
+            _, fg, _ = parent_app.effective_colors(system_is_dark=detect_system_is_dark())
+            self._chrome.sync_colors(fg, "#FFFFFF")
+        else:
+            self._chrome.sync_colors("#334155", "#FFFFFF")
+        self._chrome.apply_frameless(want_frameless)
+
         snap_note = QtWidgets.QLabel("SNAPSHOT_ONLY")
         snap_note.setObjectName("chromaCaption")
         self._snap_header.add_right_widget(snap_note)
@@ -116,6 +144,7 @@ class ChordPracticeDialog(QtWidgets.QDialog):
                 "  4. <b>导出 Cubase 标准 MIDI</b>：点击「导出进行 MIDI」可将真实发声和弦导出为 <code>.mid</code> 文件拖入宿主编曲。",
             )
         )
+        self._snap_header.add_right_widget(self._chrome.close_btn)
         snap_layout.addWidget(self._snap_header)
 
         key_text = (
@@ -471,8 +500,12 @@ class ChordPracticeDialog(QtWidgets.QDialog):
 
     def done(self, result: int) -> None:  # type: ignore[override]
         self.stop_preview()
+        if hasattr(self, "_chrome"):
+            self._chrome.teardown()
         super().done(result)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.stop_preview()
+        if hasattr(self, "_chrome"):
+            self._chrome.teardown()
         super().closeEvent(event)

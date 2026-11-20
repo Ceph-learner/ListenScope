@@ -135,10 +135,10 @@ QPushButton:disabled {
     color: #6B7480;
     background-color: #1B1E24;
 }
-QCheckBox { spacing: 6px; }
+QCheckBox { spacing: 8px; padding: 2px 8px 2px 2px; }
 QCheckBox::indicator {
-    width: 13px;
-    height: 13px;
+    width: 15px;
+    height: 15px;
     border: 1px solid #B4BECB;
     border-radius: 3px;
     background: #1A1E24;
@@ -567,33 +567,33 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         topbar_frame.setObjectName("acidTopbar")
         topbar_frame.installEventFilter(self)
         topbar_v = QtWidgets.QVBoxLayout(topbar_frame)
-        topbar_v.setContentsMargins(10, 4, 10, 4)
-        topbar_v.setSpacing(4)
+        topbar_v.setContentsMargins(10, 6, 10, 5)
+        topbar_v.setSpacing(5)
 
         row_cmd = QtWidgets.QHBoxLayout()
         row_cmd.setContentsMargins(0, 0, 0, 0)
-        row_cmd.setSpacing(8)
+        row_cmd.setSpacing(5)
 
-        self._brand_badge = ChamferBadge("LS", size=QtCore.QSize(34, 28), chamfer=6)
+        self._brand_badge = ChamferBadge("LS", size=QtCore.QSize(36, 34), chamfer=7)
         brand_txt = QtWidgets.QVBoxLayout()
-        brand_txt.setContentsMargins(0, 0, 0, 0)
-        brand_txt.setSpacing(0)
+        brand_txt.setContentsMargins(1, 0, 4, 0)
+        brand_txt.setSpacing(3)
         self._brand_eye = ElidedLabel("LISTENSCOPE // AUDIO TELEMETRY")
-        self._brand_eye.setObjectName("telemetryEyebrow")
+        self._brand_eye.setObjectName("brandEyebrow")
         self._brand_eye.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
         brand_title_row = QtWidgets.QHBoxLayout()
         brand_title_row.setContentsMargins(0, 0, 0, 0)
-        brand_title_row.setSpacing(6)
+        brand_title_row.setSpacing(7)
         self._brand_title = QtWidgets.QLabel("实时音频分析与吉他扒谱工作台")
         self._brand_title.setObjectName("telemetryTitle")
         self._brand_title.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Preferred,
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
-        self._header_pulse = TelemetryPulseStrip(bar_count=8)
+        self._header_pulse = TelemetryPulseStrip(bar_count=6)
         self._acid_hero_echo_lbl = QtWidgets.QLabel("WORKBENCH")
         self._acid_hero_echo_lbl.setObjectName("acidEchoTitle")
         self._acid_hero_echo_lbl.setVisible(False)
@@ -608,6 +608,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         row_cmd.addWidget(self._brand_badge)
         row_cmd.addLayout(brand_txt, 1)
+
+        self._topbar_vdiv = QtWidgets.QFrame()
+        self._topbar_vdiv.setObjectName("topbarVDivider")
+        self._topbar_vdiv.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+        self._topbar_vdiv.setFixedHeight(30)
+        row_cmd.addWidget(self._topbar_vdiv)
 
         self.resource_bar = ResourceMonitorBar()
         self.ai_status_badge = QtWidgets.QLabel("AI: Idle")
@@ -818,6 +824,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_b_fwd_btn.clicked.connect(lambda: self._nudge_ab("b", +1.0))
 
         row_a_transport = QtWidgets.QHBoxLayout()
+        row_a_transport.setSpacing(8)
         self.ab_play_btn = QtWidgets.QPushButton("A/B 播放")
         self.ab_play_btn.setObjectName("acidPrimaryBtn")
         self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
@@ -872,7 +879,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 "• 不变调倍速 (0.5x–1.25x)：基于纯 CPU WSOLA 时域拉伸算法，放慢听清快速贝斯/吉他十六分音符跑动而不改变音高。",
             )
         )
+        row_a_transport.addSpacing(4)
         row_a_transport.addWidget(self.ab_loop_chk)
+        row_a_transport.addSpacing(4)
         row_a_transport.addWidget(self.ab_speed_combo)
         row_a_transport.addWidget(self.ab_export_wav_btn)
         row_a_transport.addWidget(self.import_audio_btn)
@@ -968,6 +977,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         bottom_l.addLayout(bookmark_row)
 
         row_b = QtWidgets.QHBoxLayout()
+        row_b.setSpacing(8)
         self.ai_2stem_combo = MarqueeComboBox()
         self.ai_2stem_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -993,6 +1003,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_b.addWidget(QtWidgets.QLabel("2-Stem 模型:"))
         row_b.addWidget(self.ai_2stem_combo)
         row_b.addWidget(self.segment_spin)
+        row_b.addSpacing(4)
         row_b.addWidget(self.ai_gpu_chk)
         row_b.addWidget(
             HelpBadge(
@@ -1521,14 +1532,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         is_active = bool(is_acid and variant in ("light", "dark"))
         lang = getattr(getattr(self, "appearance", Appearance()), "language", "zh")
         if is_active:
-            sub_txt = {
-                "zh": "实时频谱 · 120s 分轨终端",
-                "en": "REALTIME SPECTRUM · 120S STEM TERMINAL",
-                "ko": "실시간 스펙트럼 · 120s 분리 터미널",
-                "ja": "リアルタイムスペクトル · 120s 分離端末",
-            }.get(lang, "实时频谱 · 120s 分轨终端")
-            skin_lbl = "CLINICAL" if variant == "light" else "ACID_VOID"
-            self._brand_eye.setText(f"LISTENSCOPE // {skin_lbl} · {sub_txt}")
+            eye_txt = {
+                "zh": "LISTENSCOPE · 实时频谱 / 120s 分轨",
+                "en": "LISTENSCOPE · SPECTRUM / 120S STEMS",
+                "ko": "LISTENSCOPE · 실시간 스펙트럼 / 120s",
+                "ja": "LISTENSCOPE · スペクトル / 120s 分離",
+            }.get(lang, "LISTENSCOPE · 实时频谱 / 120s 分轨")
+            self._brand_eye.setText(eye_txt)
             self._brand_title.setText("SIGNAL_GRID")
             self._brand_title.setObjectName("acidHeroTitle")
             self._acid_hero_echo_lbl.setVisible(False)
@@ -1696,7 +1706,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._skin_badge.setText(
                 "ACID // CLINICAL_LIGHT" if variant == "light" else "ACID // VOID_V2"
             )
-            self._brand_badge.set_palette_colors(fill=p.accent, border=p.accent_strong, fg=p.text_inverse)
+            self._brand_badge.set_palette_colors(
+                fill=p.accent,
+                border=p.accent_strong if variant == "light" else p.accent,
+                fg=p.text_inverse,
+                secondary="#77DCE4" if variant == "dark" else "#38BDF8",
+                peak="#CEFF18",
+                chassis="#0B0D0F",
+            )
             self._sync_acid_chrome(True, variant)
             self.setStyleSheet(acid_stylesheet(appearance, variant))
             for plot in self.findChildren(pg.PlotWidget):
@@ -1741,7 +1758,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             acc_c = QtGui.QColor(accent)
             luma = (0.299 * acc_c.red() + 0.587 * acc_c.green() + 0.114 * acc_c.blue()) / 255.0
             badge_fg = "#FFFFFF" if luma < 0.55 else "#14161A"
-            self._brand_badge.set_palette_colors(fill=accent, border=accent, fg=badge_fg)
+            self._brand_badge.set_palette_colors(
+                fill=accent,
+                border=accent,
+                fg=badge_fg,
+                secondary=acc_c.lighter(135).name(),
+                peak="#FFFFFF",
+                chassis="#14181F" if mode == "dark" else "#1E293B",
+            )
             self.setStyleSheet(
                 appearance_stylesheet(DARK_STYLESHEET, appearance, system_is_dark=self._system_is_dark)
             )
@@ -1860,12 +1884,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         for child in self.findChildren(QtWidgets.QDialog):
             if _is_qt_valid(child):
-                child_anim = getattr(child, "_focus_ring_animator", None)
-                if child_anim is not None and hasattr(child_anim, "teardown"):
-                    try:
-                        child_anim.teardown()
-                    except Exception:
-                        pass
+                for helper_attr in ("_focus_ring_animator", "_chrome"):
+                    helper = getattr(child, helper_attr, None)
+                    if helper is not None and hasattr(helper, "teardown"):
+                        try:
+                            helper.teardown()
+                        except Exception:
+                            pass
                 try:
                     if hasattr(child, "stop_preview"):
                         child.stop_preview()

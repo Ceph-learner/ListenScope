@@ -10,6 +10,7 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.appearance import ANALYSIS_LAYOUTS, Appearance
+from core.i18n import get_current_language, translate_text
 from core.models import AnalysisSnapshot
 from ui.appearance import apply_plot_appearance
 from ui.help_badge import HelpBadge
@@ -359,9 +360,13 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         return card
 
     def _set_text_cached(self, key: str, lbl: QtWidgets.QLabel, text: str) -> None:
-        if self._cached_texts.get(key) != text:
-            self._cached_texts[key] = text
-            lbl.setText(text)
+        lang = get_current_language()
+        rendered = translate_text(text, lang) if text else text
+        cache_val = f"{lang}:{rendered}"
+        if self._cached_texts.get(key) != cache_val:
+            self._cached_texts[key] = cache_val
+            lbl.setProperty("_ls_orig_text", text)
+            lbl.setText(rendered)
 
     def update_analysis(self, snap: AnalysisSnapshot, spectrogram: np.ndarray | None = None) -> None:
         self._set_text_cached("rms", self.rms_label, f"{snap.rms_dbfs:.1f} dBFS")

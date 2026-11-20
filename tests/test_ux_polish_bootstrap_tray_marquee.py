@@ -567,3 +567,124 @@ def test_ui_rails_tabbar_elided_standby_bay_and_preset_brand_hygiene(tmp_path: P
         win.deleteLater()
         app.processEvents()
 
+
+def test_frameless_dialogs_topbar_no_clip_and_checkbox_spacing():
+    """Verify Round-2 UI polish: frameless Settings/Appearance/Practice dialogs, topbar fit at 1280px with VRAM, and checkbox spacing."""
+    from core.config import AIConfig, ResourceLimits
+    from core.models import ResourceSnapshot, ResourceStatus
+    from core.system_probe import probe_system
+    from ui.acid_style import WindowGlyphButton, acid_stylesheet
+    from ui.appearance import AppearanceDialog, appearance_stylesheet
+    from ui.chord_practice import ChordPracticeDialog
+    from ui.main_window import DARK_STYLESHEET, ListenScopeMainWindow
+    from ui.settings_dialog import SettingsDialog
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    # 1. Checkbox QSS breathing room in both Acid and non-Acid stylesheets
+    for qss in (
+        acid_stylesheet(Appearance(preset="acid_telemetry", theme_mode="light"), "light"),
+        acid_stylesheet(Appearance(preset="acid_telemetry", theme_mode="dark"), "dark"),
+        appearance_stylesheet(DARK_STYLESHEET, Appearance(preset="classic", theme_mode="dark"), system_is_dark=True),
+    ):
+        assert "spacing: 8px;" in qss
+        assert "padding: 2px 8px 2px 2px;" in qss
+        assert "QFrame#dialogShellFrame[frameless=\"true\"]" in qss
+
+    # 2. Topbar brand eyebrow fits without clipping at 1280x820 even with realistic 8GB VRAM numbers
+    report = probe_system()
+    win = ListenScopeMainWindow(
+        hardware_report=report,
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=StemMixerEngine(sample_rate=44100, channels=2),
+        appearance=Appearance(preset="acid_telemetry", theme_mode="light", frameless=True),
+    )
+    try:
+        win.resize(1280, 820)
+        win.show()
+        snap = ResourceSnapshot(
+            timestamp=1700000000.0,
+            main_ram_mb=210.0,
+            ai_worker_ram_mb=0.0,
+            system_ram_total_mb=16384.0,
+            system_ram_available_mb=10420.0,
+            gpu_name="RTX 5060 Ti",
+            vram_total_mb=8151.0,
+            vram_used_mb=2261.0,
+            vram_free_mb=5890.0,
+            gpu_utilization_pct=12.0,
+            active_ai_jobs=0,
+            loaded_models=0,
+            current_model=None,
+            current_task=None,
+            audio_queue_size=0,
+            audio_queue_maxsize=64,
+            ai_buffer_seconds=0.0,
+            status=ResourceStatus.NORMAL,
+        )
+        win.resource_bar.update_snapshot(snap)
+        app.processEvents()
+
+        eye_text = win._brand_eye.text()
+        assert "实时频谱" in eye_text
+        needed_w = win._brand_eye.fontMetrics().horizontalAdvance(eye_text)
+        avail_w = win._brand_eye.contentsRect().width()
+        assert avail_w >= needed_w, f"Topbar brand eyebrow clipped at 1280px: avail={avail_w}px < needed={needed_w}px ({eye_text!r})"
+        assert win.resource_bar.objectName() == "resourceCapsule"
+
+        # 3. SettingsDialog, AppearanceDialog, and ChordPracticeDialog adopt frameless shell + vector close button
+        settings_dlg = SettingsDialog(
+            report,
+            ResourceLimits(),
+            AIConfig(),
+            appearance=Appearance(preset="acid_telemetry", theme_mode="light", frameless=True),
+            acid_variant="light",
+            parent=win,
+        )
+        try:
+            assert bool(settings_dlg.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint)
+            assert settings_dlg._shell_frame.objectName() == "dialogShellFrame"
+            assert settings_dlg._shell_frame.property("frameless") is True
+            assert isinstance(settings_dlg._chrome.close_btn, WindowGlyphButton)
+            assert settings_dlg._chrome.close_btn.isHidden() is False
+            settings_dlg.frameless_chk.setChecked(False)
+            app.processEvents()
+            assert not bool(settings_dlg.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint)
+            assert settings_dlg._chrome.close_btn.isHidden() is True
+        finally:
+            settings_dlg.close()
+            settings_dlg.deleteLater()
+
+        app_dlg = AppearanceDialog(
+            Appearance(preset="acid_telemetry", theme_mode="dark", frameless=True),
+            DARK_STYLESHEET,
+            parent=win,
+            system_is_dark=True,
+        )
+        try:
+            assert bool(app_dlg.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint)
+            assert app_dlg._shell_frame.objectName() == "dialogShellFrame"
+            assert isinstance(app_dlg._chrome.close_btn, WindowGlyphButton)
+            app_dlg._frameless_chk.setChecked(False)
+            app.processEvents()
+            assert not bool(app_dlg.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint)
+        finally:
+            app_dlg.close()
+            app_dlg.deleteLater()
+
+        prac_dlg = ChordPracticeDialog(["C", "G", "Am", "F"], None, 0, parent=win, acid_variant="light")
+        try:
+            assert bool(prac_dlg.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint)
+            assert prac_dlg._shell_frame.objectName() == "dialogShellFrame"
+            assert isinstance(prac_dlg._chrome.close_btn, WindowGlyphButton)
+        finally:
+            prac_dlg.close()
+            prac_dlg.deleteLater()
+    finally:
+        win.prepare_for_shutdown()
+        win.force_quit()
+        win.deleteLater()
+        app.processEvents()
+
+

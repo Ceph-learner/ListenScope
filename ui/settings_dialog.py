@@ -56,6 +56,7 @@ from core.system_probe import (
 from ui.appearance import detect_system_is_dark, set_widget_tone
 from ui.help_badge import HelpBadge, install_focus_animations, set_focus_ring_style, wrap_with_help
 from ui.acid_style import (
+    FramelessDialogChrome,
     SegmentedBatteryProgressBar,
     TelemetryHeader,
     acid_stylesheet,
@@ -139,7 +140,7 @@ class SettingsDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope 设置")
-        self.resize(860, 740)
+        self.resize(920, 750)
 
         if acid_variant is not None:
             resolved_variant: Optional[str] = acid_variant or None
@@ -170,17 +171,24 @@ class SettingsDialog(QtWidgets.QDialog):
         self._bootstrap_mgr.completed.connect(self._on_bootstrap_finished)
         self._bootstrap_signals_connected = True
 
-        root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 14)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._shell_frame = QtWidgets.QFrame(self)
+        outer.addWidget(self._shell_frame)
+
+        root = QtWidgets.QVBoxLayout(self._shell_frame)
+        root.setContentsMargins(20, 14, 20, 14)
         root.setSpacing(12)
-        header_row = QtWidgets.QHBoxLayout()
+
         self._header = TelemetryHeader(
             "SYSTEM PREFERENCES // TELEMETRY CONFIG",
             "系统设置与运行环境管理",
             badge_text="PORTABLE // LOCAL",
         )
-        header_row.addWidget(self._header, 1)
-        header_row.addWidget(
+        self._drag_header = self._header
+        self._chrome = FramelessDialogChrome(self, self._shell_frame, self._header, resizable=True)
+        self._header.add_right_widget(
             HelpBadge(
                 "系统设置总览",
                 "• 外观与布局：切换默认酸性遥测浅色白天主题、中/英/韩/日四语、无边框圆角窗口、自定义背景图（非酸性主题）及同级存储目录。\n"
@@ -189,7 +197,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 "• 系统诊断：查看真实 GPU、CUDA sm_120、ONNX Runtime 与 WASAPI 捕获能力。",
             )
         )
-        root.addLayout(header_row)
+        self._header.add_right_widget(self._chrome.close_btn)
+        root.addWidget(self._header)
 
         body = QtWidgets.QHBoxLayout()
         body.setSpacing(16)
@@ -253,12 +262,13 @@ class SettingsDialog(QtWidgets.QDialog):
         # Page 1: Appearance, Portable Storage & Open-Source Feedback
         appearance_page = QtWidgets.QWidget()
         appearance_layout = QtWidgets.QVBoxLayout(appearance_page)
-        appearance_layout.setContentsMargins(0, 4, 0, 0)
+        appearance_layout.setContentsMargins(0, 4, 6, 0)
         appearance_layout.setSpacing(12)
 
         appearance_box = QtWidgets.QGroupBox("APPEARANCE // 当前外观、多语言与壳体配置")
         appearance_form = QtWidgets.QFormLayout(appearance_box)
-        appearance_form.setVerticalSpacing(10)
+        appearance_form.setHorizontalSpacing(14)
+        appearance_form.setVerticalSpacing(11)
         self._theme_summary = QtWidgets.QLabel()
         self._layout_summary = QtWidgets.QLabel()
         self._font_summary = QtWidgets.QLabel()
@@ -267,6 +277,7 @@ class SettingsDialog(QtWidgets.QDialog):
         appearance_form.addRow("字体与字号", self._font_summary)
 
         quick_lang_row = QtWidgets.QHBoxLayout()
+        quick_lang_row.setSpacing(10)
         self.language_combo = QtWidgets.QComboBox()
         self.language_combo.setProperty("lsKeepItems", True)
         self.language_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
@@ -292,7 +303,7 @@ class SettingsDialog(QtWidgets.QDialog):
         appearance_form.addRow("界面语言与壳体:", quick_lang_row)
 
         assist_row = QtWidgets.QHBoxLayout()
-        assist_row.setSpacing(8)
+        assist_row.setSpacing(10)
         self.help_mode_chk = QtWidgets.QCheckBox("说明模式 (显示 [?] 悬浮说明)")
         self.help_mode_chk.setChecked(bool(appearance.help_mode))
         self.help_mode_chk.toggled.connect(self._on_quick_appearance_changed)
@@ -319,7 +330,7 @@ class SettingsDialog(QtWidgets.QDialog):
         appearance_form.addRow("交互与聚焦:", assist_row)
 
         surface_row = QtWidgets.QHBoxLayout()
-        surface_row.setSpacing(8)
+        surface_row.setSpacing(10)
         self.surface_style_combo = QtWidgets.QComboBox()
         for skey, slabel in UI_SURFACE_STYLES.items():
             self.surface_style_combo.addItem(slabel, skey)
@@ -333,7 +344,7 @@ class SettingsDialog(QtWidgets.QDialog):
         appearance_form.addRow("质感与托盘:", surface_row)
 
         telem_row = QtWidgets.QHBoxLayout()
-        telem_row.setSpacing(8)
+        telem_row.setSpacing(10)
         self.telemetry_strength_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.telemetry_strength_slider.setRange(0, 100)
         self.telemetry_strength_slider.setValue(int(appearance.telemetry_animation_strength))
@@ -654,7 +665,7 @@ class SettingsDialog(QtWidgets.QDialog):
         hybrid_form.setVerticalSpacing(10)
 
         plan_a_row = QtWidgets.QHBoxLayout()
-        plan_a_row.setSpacing(8)
+        plan_a_row.setSpacing(12)
         self.igpu_dml_chk = QtWidgets.QCheckBox("启用方案 A：核显 DirectML 接管轻量 2-Stem ONNX 分离")
         self.igpu_dml_chk.setChecked(bool(ai_config.igpu_directml_2stem))
         self.igpu_dml_id_spin = QtWidgets.QSpinBox()
@@ -676,7 +687,7 @@ class SettingsDialog(QtWidgets.QDialog):
         hybrid_form.addRow("方案 A (异构计算):", plan_a_row)
 
         plan_b_row = QtWidgets.QHBoxLayout()
-        plan_b_row.setSpacing(8)
+        plan_b_row.setSpacing(12)
         self.gui_offload_chk = QtWidgets.QCheckBox("启用方案 B：GUI 渲染卸载核显 + AI 子进程锁定独显 (CUDA_VISIBLE_DEVICES=0)")
         self.gui_offload_chk.setChecked(bool(ai_config.offload_gui_to_igpu))
         self.open_win_graphics_btn = QtWidgets.QPushButton("Windows 图形设置")
@@ -967,6 +978,14 @@ class SettingsDialog(QtWidgets.QDialog):
                     text_fg=fg,
                     is_acid=False,
                 )
+        if hasattr(self, "_chrome"):
+            if self._acid_variant in ("light", "dark"):
+                p = get_acid_palette(self._acid_variant)
+                self._chrome.sync_colors(p.text_secondary, "#FFFFFF")
+            else:
+                _, fg, _ = appearance.effective_colors(system_is_dark=detect_system_is_dark())
+                self._chrome.sync_colors(fg, "#FFFFFF")
+            self._chrome.apply_frameless(bool(appearance.frameless))
         if self.parent() is None:
             if self._acid_variant in ("light", "dark"):
                 self.setStyleSheet(acid_stylesheet(appearance, self._acid_variant))
@@ -1097,6 +1116,8 @@ class SettingsDialog(QtWidgets.QDialog):
             music_reactive_animations=music_reactive,
         )
         self.update_appearance_summary(updated)
+        if hasattr(self, "_chrome"):
+            self._chrome.apply_frameless(frameless)
         self.appearance_changed.emit(updated)
 
     def _copy_github_url(self) -> None:
@@ -1141,11 +1162,15 @@ class SettingsDialog(QtWidgets.QDialog):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._dialog_closed = True
         self._disconnect_bootstrap_signals()
+        if hasattr(self, "_chrome"):
+            self._chrome.teardown()
         super().closeEvent(event)
 
     def done(self, result: int) -> None:  # type: ignore[override]
         self._dialog_closed = True
         self._disconnect_bootstrap_signals()
+        if hasattr(self, "_chrome"):
+            self._chrome.teardown()
         super().done(result)
 
     def _refresh_status_alert(self, r: SystemHardwareReport) -> None:

@@ -29,7 +29,9 @@ from ui.help_badge import (
     set_help_theme,
 )
 from ui.acid_style import (
+    FramelessDialogChrome,
     TelemetryHeader,
+    _acid_asset_url,
     acid_stylesheet,
     get_acid_palette,
     is_acid_eligible,
@@ -174,15 +176,62 @@ def appearance_stylesheet(
     card_bg = f"rgba({QtGui.QColor(surface).red()}, {QtGui.QColor(surface).green()}, {QtGui.QColor(surface).blue()}, 212)" if has_bg_image else surface
     shell_bg = "transparent" if has_bg_image else background
 
+    chk_svg = _acid_asset_url("acid_check_light.svg" if is_light else "acid_check_dark.svg")
     btn_checked_fg = foreground if is_light else foreground
     qss += f"""
 QWidget#mainShellFrame {{
     background-color: {shell_bg};
     color: {foreground};
 }}
-QWidget#mainShellFrame[frameless="true"] {{
+QFrame#dialogShellFrame {{
+    background-color: {background};
+    color: {foreground};
+    border: none;
+}}
+QWidget#mainShellFrame[frameless="true"],
+QFrame#dialogShellFrame[frameless="true"] {{
+    background-color: {shell_bg};
     border: 1px solid {rim};
     border-radius: 10px;
+}}
+QFrame#dialogShellFrame[frameless="true"] {{
+    background-color: {background};
+}}
+QCheckBox, QRadioButton {{
+    spacing: 8px;
+    padding: 2px 8px 2px 2px;
+    background-color: transparent;
+}}
+QCheckBox::indicator {{
+    width: 15px;
+    height: 15px;
+}}
+QCheckBox::indicator:checked {{
+    image: url("{chk_svg}");
+}}
+QCheckBox::indicator:checked:disabled {{
+    image: url("{chk_svg}");
+}}
+QFrame#topbarVDivider {{
+    background-color: {rim};
+    min-width: 1px;
+    max-width: 1px;
+    border: none;
+}}
+QFrame#resourceCapsule {{
+    background-color: {sunk};
+    border: 1px solid {rim};
+    border-left: 3px solid {accent};
+    border-radius: 5px;
+}}
+QFrame#resourceCapsule QLabel#monoTelemetry {{
+    background: transparent;
+}}
+QLabel#brandEyebrow {{
+    color: {accent};
+    font-size: {max(10, appearance.font_size - 2)}px;
+    font-weight: 700;
+    letter-spacing: 0.25px;
 }}
 QPushButton#windowCtrlBtn {{
     background: transparent;
@@ -656,11 +705,21 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._on_preview = on_preview
         self._system_is_dark = system_is_dark
 
-        root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 12)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._shell_frame = QtWidgets.QFrame(self)
+        outer.addWidget(self._shell_frame)
+
+        root = QtWidgets.QVBoxLayout(self._shell_frame)
+        root.setContentsMargins(16, 12, 16, 12)
         root.setSpacing(10)
 
-        root.addWidget(TelemetryHeader("APPEARANCE // THEME & TYPOGRAPHY", "主题风格 · 字体字号 · 多语言与交互"))
+        self._header = TelemetryHeader("APPEARANCE // THEME & TYPOGRAPHY", "主题风格 · 字体字号 · 多语言与交互")
+        self._drag_header = self._header
+        self._chrome = FramelessDialogChrome(self, self._shell_frame, self._header, resizable=True)
+        self._header.add_right_widget(self._chrome.close_btn)
+        root.addWidget(self._header)
 
         presets = QtWidgets.QHBoxLayout()
         self._presets = QtWidgets.QButtonGroup(self)
@@ -682,7 +741,8 @@ class AppearanceDialog(QtWidgets.QDialog):
         root.addWidget(self._acid_lock_banner)
 
         form = QtWidgets.QFormLayout()
-        form.setVerticalSpacing(8)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(9)
 
         # Theme mode: Dark / Light / Follow System
         mode_row = QtWidgets.QHBoxLayout()
@@ -707,7 +767,7 @@ class AppearanceDialog(QtWidgets.QDialog):
 
         # Language + Frameless window row
         lang_row = QtWidgets.QHBoxLayout()
-        lang_row.setSpacing(8)
+        lang_row.setSpacing(10)
         self._language_combo = QtWidgets.QComboBox()
         self._language_combo.setProperty("lsKeepItems", True)
         self._language_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
@@ -729,7 +789,7 @@ class AppearanceDialog(QtWidgets.QDialog):
 
         # Help mode + Focus hover animation + style
         assist_row = QtWidgets.QHBoxLayout()
-        assist_row.setSpacing(8)
+        assist_row.setSpacing(10)
         self._help_mode_chk = QtWidgets.QCheckBox("说明模式 (显示 [?] 悬浮说明)")
         self._help_mode_chk.toggled.connect(self._on_control_changed)
         self._focus_anim_chk = QtWidgets.QCheckBox("交互聚焦动画")
@@ -753,7 +813,7 @@ class AppearanceDialog(QtWidgets.QDialog):
 
         # Button/card surface edge style + close-to-tray toggle
         surface_row = QtWidgets.QHBoxLayout()
-        surface_row.setSpacing(8)
+        surface_row.setSpacing(10)
         self._surface_style_combo = QtWidgets.QComboBox()
         for skey, slabel in UI_SURFACE_STYLES.items():
             self._surface_style_combo.addItem(slabel, skey)
@@ -773,7 +833,7 @@ class AppearanceDialog(QtWidgets.QDialog):
 
         # Telemetry micro-animations intensity + music-reactive toggle
         telem_row = QtWidgets.QHBoxLayout()
-        telem_row.setSpacing(8)
+        telem_row.setSpacing(10)
         self._telemetry_strength_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self._telemetry_strength_slider.setRange(0, 100)
         self._telemetry_strength_slider.valueChanged.connect(self._on_control_changed)
@@ -895,6 +955,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         root.addWidget(self._glass_group)
 
         hint_row = QtWidgets.QHBoxLayout()
+        hint_row.setSpacing(10)
         hint = QtWidgets.QLabel("玻璃材质使用渐变模拟，不采样背景像素。")
         hint.setWordWrap(True)
         hint.setObjectName("mutedCaption")
@@ -935,7 +996,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         footer.addWidget(self._buttons)
         root.addLayout(footer)
 
-        self.setMinimumWidth(590)
+        self.setMinimumWidth(660)
         install_focus_animations(self)
         self._show_values(appearance, emit_preview=False)
 
@@ -1087,6 +1148,7 @@ class AppearanceDialog(QtWidgets.QDialog):
             variant = resolve_acid_variant(appearance, system_is_dark=self._system_is_dark) or "light"
             sample_qss = acid_stylesheet(appearance, variant)
             pal = get_acid_palette(variant)
+            self._chrome.sync_colors(pal.text_secondary, "#FFFFFF")
             set_help_theme(
                 bg=pal.bg_panel,
                 fg=pal.text_primary,
@@ -1102,6 +1164,7 @@ class AppearanceDialog(QtWidgets.QDialog):
             )
             bg, fg, accent = appearance.effective_colors(system_is_dark=self._system_is_dark)
             mode = appearance.resolve_theme_mode(system_is_dark=self._system_is_dark)
+            self._chrome.sync_colors(fg, "#FFFFFF")
             set_help_theme(
                 bg=bg,
                 fg=fg,
@@ -1111,6 +1174,7 @@ class AppearanceDialog(QtWidgets.QDialog):
                 is_dark=(mode == "dark"),
                 is_acid=False,
             )
+        self._chrome.apply_frameless(bool(appearance.frameless))
         # Theme the entire AppearanceDialog consistently with the selected preset & mode
         self.setStyleSheet(sample_qss)
         self._sample.setStyleSheet(sample_qss)
@@ -1144,7 +1208,14 @@ class AppearanceDialog(QtWidgets.QDialog):
         if path:
             self._bg_image_edit.setText(path)
 
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if hasattr(self, "_chrome"):
+            self._chrome.teardown()
+        super().closeEvent(event)
+
     def done(self, result: int) -> None:  # type: ignore[override]
+        if hasattr(self, "_chrome"):
+            self._chrome.teardown()
         if result != QtWidgets.QDialog.DialogCode.Accepted:
             set_help_mode_enabled(self._initial_appearance.help_mode)
             set_focus_animations_enabled(self._initial_appearance.focus_animations)

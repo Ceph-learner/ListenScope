@@ -266,6 +266,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         # Transport, Presets & Deep Analysis bar
         ctrl_bar = QtWidgets.QHBoxLayout()
+        ctrl_bar.setSpacing(8)
         self.play_btn = QtWidgets.QPushButton("播放分轨")
         self.pause_btn = QtWidgets.QPushButton("暂停")
         self.stop_btn = QtWidgets.QPushButton("停止")
@@ -293,7 +294,9 @@ class StemMixerWidget(QtWidgets.QWidget):
         ctrl_bar.addWidget(self.play_btn)
         ctrl_bar.addWidget(self.pause_btn)
         ctrl_bar.addWidget(self.stop_btn)
+        ctrl_bar.addSpacing(4)
         ctrl_bar.addWidget(self.loop_chk)
+        ctrl_bar.addSpacing(4)
         ctrl_bar.addWidget(self.export_btn)
         ctrl_bar.addStretch(1)
         self.clear_results_btn = QtWidgets.QPushButton("清除分轨结果")
@@ -303,7 +306,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         root.addLayout(ctrl_bar)
 
         monitor_bar = QtWidgets.QHBoxLayout()
-        monitor_bar.setSpacing(6)
+        monitor_bar.setSpacing(8)
         self._monitor_lbl = QtWidgets.QLabel("监听")
         monitor_bar.addWidget(self._monitor_lbl)
 
@@ -327,6 +330,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.bass_monitor_boost_chk = QtWidgets.QCheckBox(f"贝斯独听 +{BASS_MONITOR_BOOST_DB} dB")
         self.bass_monitor_boost_chk.setChecked(True)
         self.bass_monitor_boost_chk.toggled.connect(self._on_bass_boost_toggled)
+        monitor_bar.addSpacing(6)
         monitor_bar.addWidget(self.bass_monitor_boost_chk)
 
         self.bass_boost_db_spin = QtWidgets.QDoubleSpinBox()
@@ -348,6 +352,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.bass_boost_export_chk = QtWidgets.QCheckBox("导出含独听增益")
         self.bass_boost_export_chk.setChecked(False)
         self.bass_boost_export_chk.toggled.connect(self.mixer_engine.set_apply_bass_boost_on_export)
+        monitor_bar.addSpacing(4)
         monitor_bar.addWidget(self.bass_boost_export_chk)
 
         monitor_bar.addWidget(
@@ -365,6 +370,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         # Practice toolbar: pitch-preserving speed, sub-region chord loop & live chord HUD
         practice_bar = QtWidgets.QHBoxLayout()
+        practice_bar.setSpacing(8)
         practice_bar.addWidget(QtWidgets.QLabel("不变调倍速:"))
         self.speed_combo = QtWidgets.QComboBox()
         self.speed_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
@@ -407,7 +413,9 @@ class StemMixerWidget(QtWidgets.QWidget):
         )
         practice_bar.addWidget(self.loop_chord_btn)
         practice_bar.addWidget(self.clear_subloop_btn)
+        practice_bar.addSpacing(4)
         practice_bar.addWidget(self.metronome_chk)
+        practice_bar.addSpacing(4)
         practice_bar.addWidget(self.subloop_badge_lbl)
         practice_bar.addWidget(self.live_chord_hud_lbl, 1)
         root.addLayout(practice_bar)
@@ -475,8 +483,10 @@ class StemMixerWidget(QtWidgets.QWidget):
         deep_l.setContentsMargins(6, 3, 6, 2)
         deep_l.setSpacing(3)
         analysis_actions = QtWidgets.QHBoxLayout()
-        for control in (self.deep_analyze_btn, self.sevenths_chk):
-            analysis_actions.addWidget(control)
+        analysis_actions.setSpacing(8)
+        analysis_actions.addWidget(self.deep_analyze_btn)
+        analysis_actions.addSpacing(4)
+        analysis_actions.addWidget(self.sevenths_chk)
         analysis_actions.addWidget(
             HelpBadge(
                 "离线深度和弦、贝斯与鼓点分析",

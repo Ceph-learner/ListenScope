@@ -23,18 +23,22 @@ def _status_to_tone(status: ResourceStatus) -> str:
     return "error"
 
 
-class ResourceMonitorBar(QtWidgets.QWidget):
-    """Compact top-bar resource health strip."""
+class ResourceMonitorBar(QtWidgets.QFrame):
+    """Compact top-bar resource health capsule."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("resourceCapsule")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self._cached_texts: dict[str, str] = {}
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 2, 4, 2)
+        layout.setSpacing(5)
 
         self.ram_label = QtWidgets.QLabel("RAM: -")
         self.ram_label.setObjectName("monoTelemetry")
+        self._sep_lbl = QtWidgets.QLabel("·")
+        self._sep_lbl.setObjectName("mutedCaption")
         self.vram_label = QtWidgets.QLabel("VRAM: -")
         self.vram_label.setObjectName("monoTelemetry")
         self.status_badge = QtWidgets.QLabel("Normal")
@@ -44,7 +48,9 @@ class ResourceMonitorBar(QtWidgets.QWidget):
             w.setSizePolicy(QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Preferred)
 
         layout.addWidget(self.ram_label)
+        layout.addWidget(self._sep_lbl)
         layout.addWidget(self.vram_label)
+        layout.addSpacing(2)
         layout.addWidget(self.status_badge)
 
     def _set_text_if_changed(self, key: str, lbl: QtWidgets.QLabel, text: str) -> None:
