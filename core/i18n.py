@@ -538,6 +538,11 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "준비됨: 로컬 PyTorch 환경을 스캔하거나 '원클릭 AI + MIDI 설정'으로 앱 폴더에 자동 구성하세요(페이지 이동 시에도 중단되지 않음).",
         "ja": "準備完了: 「ローカル PyTorch 検出」または「AI + MIDI 一括構築」でアプリ同階層へ自動構築します（画面切替でも中断されません）。",
     },
+    "准备就绪：点击「扫描本机 PyTorch 环境」自动查找电脑已安装的 PyTorch；若未安装可点击「一键自动配置 AI + MIDI」在同级目录自动下载配置（切换页面不会中断）。": {
+        "en": "Ready: Scan local PyTorch installations or click 'One-Click AI + MIDI Setup' to auto-download & configure beside the app (continues safely if you switch pages).",
+        "ko": "준비됨: 로컬 PyTorch 환경을 스캔하거나 '원클릭 AI + MIDI 설정'으로 앱 폴더에 자동 다운로드 및 구성하세요(페이지 이동 시에도 중단되지 않음).",
+        "ja": "準備完了: 「ローカル PyTorch 検出」または「AI + MIDI 一括構築」でアプリ同階層へ自動ダウンロード・構築します（画面切替でも中断されません）。",
+    },
     "一键环境初始化进度与镜像切换日志将显示在这里...": {
         "en": "Turnkey setup progress and mirror-switch logs will appear here...",
         "ko": "원클릭 환경 구성 진행 상황 및 미러 전환 로그가 여기에 표시됩니다...",
