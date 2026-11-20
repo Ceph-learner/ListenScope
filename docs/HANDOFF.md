@@ -1,6 +1,43 @@
 # 最新交接
 
-## `v0.2.5` 发布交接：合并 PR #29、双端 CI 全绿、Windows 冻结包冒烟与 Release 发布（分支 `main` · 证据基线 `f3e6c2d45209e8f4c6e0f6ac8d0c01a84c11abf7` · Tag `v0.2.5`）
+## 前端 UI 深度打磨与预设命名合规（分支 `feature/ui-polish-v026` · 代码证据基线 `c42ed88b5e16fe651ab4c9d0a92b87d072ecc269` · 基于 `main` `7e4878d`）
+
+- **目标与结果**：对 ListenScope 前端桌面 UI 进行系统级质感、动效、聚焦、上下/左右轨布局与细节打磨，并将外观预设中的原第三方工具名称更名为原创配色「石墨靛紫 (`graphite`)」与「暖砂琥珀 (`terracotta`)」（旧配置经 `_PRESET_ALIASES` 静默迁移，保持 `schema_version == 2` 向后兼容）；同时修复了设置弹窗首次打开时 `BootstrapManager` 默认提示文案的四语缺漏。未触碰 `main`、`backup/*` 分支及 `*-backup` 标签，未创建 Release / Tag。
+- **关键改动文件**：
+  - 工业视觉与自绘组件：[`ui/acid_style.py`](../ui/acid_style.py)（新增 `ElidedLabel`、`AcidTabBar`、`AcidSplitter`、`WorkspaceRailHandle`、`WindowGlyphButton`、`SignalLockDot`；升级 `TelemetryHeader` 防纵裁；柔和浅色滚动条为 `#94A3B8`；增加 `#stemTrackScroll` / `#emptyStemBay` 样式）
+  - 聚焦与助记交互：[`ui/help_badge.py`](../ui/help_badge.py)（`_FocusOverlay` 三态光学落锁微动效；修复对话框打开时首个 `HelpBadge` 被动实心高亮）
+  - 主壳体与工作区：[`ui/main_window.py`](../ui/main_window.py)、[`ui/chroma_widget.py`](../ui/chroma_widget.py)、[`ui/mixer_widget.py`](../ui/mixer_widget.py)、[`ui/spectrum_widget.py`](../ui/spectrum_widget.py)
+  - 外观预设、弹窗与四语本地化：[`core/appearance.py`](../core/appearance.py)、[`ui/appearance.py`](../ui/appearance.py)、[`core/i18n.py`](../core/i18n.py)、[`core/i18n_catalog.py`](../core/i18n_catalog.py)
+  - 回归测试与说明文档：[`tests/test_ux_polish_bootstrap_tray_marquee.py`](../tests/test_ux_polish_bootstrap_tray_marquee.py)、[`README.md`](../README.md)、[`DESIGN.md`](../DESIGN.md)、[`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
+- **分支与工作区状态**：当前检出特性分支 `feature/ui-polish-v026`（基于 `main` `7e4878d`），推送后创建 PR 至 `main`；未修改 `packaging/listenscope_core.spec`（无需新增二进制/SVG 资产，全程纯 `QPainter` 零 `QGraphicsEffect`）。
+- **已验证命令与实测结果（Linux / offscreen 环境，不代表 Windows 真机已验）**：
+  - Debian 12 · Python 3.11.2 · PySide6 6.9.3 · `QT_QPA_PLATFORM=offscreen`：
+    - `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python -m pytest -q --tb=short` → **`206 passed, 6 skipped in 78.31s`**（6 项为 Windows 专属 PowerShell/WinRT 跳过）；
+    - `QT_QPA_PLATFORM=offscreen /home/antigravity/.venv_test/bin/python main.py --simulate --headless-smoke` → **exit 0**；
+    - `/home/antigravity/.venv_test/bin/python scripts/check_env.py --no-write` & `scripts/probe_media_session.py --self-test-mock --json` → **exit 0**；
+    - 离屏截图审查：已实际渲染并逐张目检 `1360×860` 下临床浅色 / 暗夜双模 5 个主 Tab、`SettingsDialog`、`AppearanceDialog`、`ChordPracticeDialog` 以及英文暗夜工作区截图，确认无 CJK 裁切、EN 零中文泄漏、无 `&` 误下划线、滚动条与主按钮视觉统一。
+- **未在云端验证的项目（须 Windows 11 + RTX 5060 Ti 8GB VRAM / 16GB RAM 真机复测）**：
+  - Windows 11 高 DPI（125%/150%）及 Microsoft YaHei UI 下 `WindowGlyphButton` 1px 矢量三键、`AcidTabBar` 220ms 滑动信标轨、`WorkspaceRailHandle` / `AcidSplitter` 拖拽手感与双眼视觉舒适度；
+  - 真实音频 WASAPI 按进程捕获下 `SignalLockDot` 脉动响应、`[STATIC_LOCK]` 冻结、系统托盘与无边框 8 边缩放手感、以及 RTX 5060 Ti `cu128` 实机分轨流畅度。
+- **Windows 目标机可复制复测命令**：
+  ```powershell
+  git fetch origin
+  git checkout feature/ui-polish-v026
+  $env:PYTHONUTF8 = "1"; $env:QT_QPA_PLATFORM = "offscreen"
+  .\.venv-core\Scripts\python.exe -m pytest -q --tb=short
+  Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+  .\.venv-core\Scripts\python.exe main.py
+  # 启动后实机核查：
+  # 1. 切换 01–05 Tab 与 03 内子 Tab，观察顶部信号锁轨 220ms 滑动与悬停预高亮；
+  # 2. 拖拽主工作区与 120s 历史缓冲间的水平点阵轨（双击复原），及 Tab 02/03 内部点阵分隔轨；
+  # 3. 切换「编辑外观与字体…」确认预设为 经典 / Lenso / 石墨靛紫 / 暖砂琥珀 / 酸性遥测，且打开各弹窗时右上角 [?] 不会自动实心高亮；
+  # 4. 切换英文/韩文模式并启动音频捕获，确认实时状态与缓冲计数无中文残留、SignalLockDot 正常脉动。
+  ```
+- **下一步**：合入 PR 并在 Windows 11 真机按上述步骤验收，若确认发布新版本再单独授权打 Tag。
+
+---
+
+## 历史交接：`v0.2.5` 发布交接：合并 PR #29、双端 CI 全绿、Windows 冻结包冒烟与 Release 发布（分支 `main` · 证据基线 `f3e6c2d45209e8f4c6e0f6ac8d0c01a84c11abf7` · Tag `v0.2.5`）
 
 - **目标与结果**：完成实机反馈全部 19 项用户体验、一键安装、托盘缩放、日志与遥测动画升级并合并 [PR #29](https://github.com/Ceph-learner/ListenScope/pull/29)（`f3e6c2d`）；Ubuntu CI、Windows offscreen CI、PyInstaller 打包、冻结 `ListenScope.exe --simulate --headless-smoke`、便携 ZIP 与 Inno Setup 安装包均一次构建成功并发布 [GitHub Release `v0.2.5`](https://github.com/Ceph-learner/ListenScope/releases/tag/v0.2.5)。
 - **关键改动文件**：
