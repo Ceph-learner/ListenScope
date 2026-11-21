@@ -54,21 +54,7 @@ TRANSPOSE_PRESETS: list[tuple[str, int]] = [
     ("降E乐器 (+9: 中音萨克斯)", 9),
 ]
 
-_ENHARMONIC_KEY_DISPLAY: dict[str, str] = {
-    "C# major": "C# / Db major",
-    "D# major": "D# / Eb major",
-    "F# major": "F# / Gb major",
-    "G# major": "G# / Ab major",
-    "A# major": "A# / Bb major",
-    "D# minor": "D# / Eb minor",
-    "G# minor": "G# / Ab minor",
-    "A# minor": "A# / Bb minor",
-}
-
-
-def _format_key_display(key_label: str) -> str:
-    clean = (key_label or "").strip()
-    return _ENHARMONIC_KEY_DISPLAY.get(clean, clean)
+from analysis.chords import format_key_display as _format_key_display
 
 
 class TuningCentsBar(QtWidgets.QWidget):

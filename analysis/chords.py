@@ -138,6 +138,24 @@ def transpose_key_label(key_label: str, semitones: int) -> str:
     return f"{new_tonic} {m.group(2)}"
 
 
+_ENHARMONIC_KEY_DISPLAY: dict[str, str] = {
+    "C# major": "C# / Db major",
+    "D# major": "D# / Eb major",
+    "F# major": "F# / Gb major",
+    "G# major": "G# / Ab major",
+    "A# major": "A# / Bb major",
+    "D# minor": "D# / Eb minor",
+    "G# minor": "G# / Ab minor",
+    "A# minor": "A# / Bb minor",
+}
+
+
+def format_key_display(key_label: str) -> str:
+    """Format a key label with enharmonic hint (e.g. `'G# major'` -> `'G# / Ab major'`)."""
+    clean = (key_label or "").strip()
+    return _ENHARMONIC_KEY_DISPLAY.get(clean, clean)
+
+
 def spell_chord_tones(chord_name: str) -> str:
     """Return chromatic note spelling (e.g. `'A · C · E'`) for detected chord symbols, or `'-'`."""
     raw = (chord_name or "").strip()

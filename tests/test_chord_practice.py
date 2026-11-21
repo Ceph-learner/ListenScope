@@ -196,18 +196,35 @@ def test_practice_dialog_applies_capo_once_exports_sounding_midi_and_handles_can
     assert "手动" in dialog._status.text()
     dialog.close()
 
+    # Medium / Low / modulation_hint still preselect the detected key and keep table + actions enabled
     uncertain = KeyEstimate("D major", "B minor", "Medium", 0.6, 0.04)
     dialog = ChordPracticeDialog(["D", "A", "Bm"], uncertain, 0)
-    assert dialog._key.currentData() is None
-    assert dialog._results.rowCount() == 0
-    assert not dialog._preview_btn.isEnabled()
-    assert not dialog._export_midi_btn.isEnabled()
-    key = dialog._key.findData("D major")
-    dialog._key.setCurrentIndex(key)
-    dialog._key.activated.emit(key)
+    assert dialog._key.currentData() == "D major"
     assert dialog._results.rowCount() > 0
     assert dialog._preview_btn.isEnabled()
     assert dialog._export_midi_btn.isEnabled()
+    dialog.close()
+
+    low_mod = KeyEstimate("G major", "E minor", "Low", 0.4, 0.02, modulation_hint=True)
+    dialog = ChordPracticeDialog(["G"], low_mod, 0)
+    assert dialog._key.currentData() == "G major"
+    assert "波动较大" in dialog._status.text()
+    assert dialog._results.rowCount() > 0
+    assert dialog._preview_btn.isEnabled()
+    assert dialog._export_midi_btn.isEnabled()
+    dialog.close()
+
+    # None / Unknown estimate falls back to C major template so actions stay usable
+    dialog = ChordPracticeDialog([], None, 0)
+    assert dialog._key.currentData() == "C major"
+    assert "C 大调" in dialog._status.text()
+    assert dialog._results.rowCount() > 0
+    assert dialog._preview_btn.isEnabled()
+    assert dialog._export_midi_btn.isEnabled()
+    key = dialog._key.findData("D major")
+    dialog._key.setCurrentIndex(key)
+    dialog._key.activated.emit(key)
+    assert "手动" in dialog._status.text()
     dialog.close()
     app.processEvents()
 

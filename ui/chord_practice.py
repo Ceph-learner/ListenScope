@@ -82,10 +82,22 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         self._transpose = int(transpose)
         self._recent = tuple(transpose_chord_symbol(chord, self._transpose) for chord in recent)
         suggested = None
-        if estimate and estimate.stability == "High" and not estimate.modulation_hint and len(set(recent)) >= 3:
+        if (
+            estimate is not None
+            and estimate.primary not in ("", "Unknown", "Insufficient")
+            and estimate.stability in ("High", "Medium", "Low")
+        ):
             suggested = practice_key(transpose_key_label(estimate.primary, self._transpose))
 
         self._estimated_key_selected = suggested is not None
+        self._estimate_low_or_mod = bool(
+            estimate is not None and (estimate.stability == "Low" or estimate.modulation_hint)
+        )
+        if suggested is None:
+            suggested = "C major"
+            self._default_fallback_selected = True
+        else:
+            self._default_fallback_selected = False
         self._insufficient_history = len(set(recent)) < 3
         self._items: list[PracticeProgression] = []
         self._player = preview_player if preview_player is not None else DrumPreviewPlayer(48000, 2)
@@ -318,6 +330,7 @@ class ChordPracticeDialog(QtWidgets.QDialog):
 
     def _on_key_selected(self) -> None:
         self._estimated_key_selected = False
+        self._default_fallback_selected = False
         self._refresh()
 
     def _on_tempo_changed(self) -> None:
@@ -341,7 +354,15 @@ class ChordPracticeDialog(QtWidgets.QDialog):
 
         items = recommend_progressions(key, self._recent)
         self._items = items
-        basis = "按稳定检测调性选中，可切换" if self._estimated_key_selected else "手动选调"
+        if self._default_fallback_selected:
+            basis = "尚未检测到稳定调性，已默认载入 C 大调练习模板，可随时切换"
+        elif self._estimated_key_selected:
+            if self._estimate_low_or_mod:
+                basis = "按当前检测调预选（波动较大，可手动切换）"
+            else:
+                basis = "按当前检测调预选，可切换"
+        else:
+            basis = "手动选调"
         if self._transpose:
             basis += f" · 当前指型偏移 {self._transpose:+d} 半音"
         self._status.setText(basis)

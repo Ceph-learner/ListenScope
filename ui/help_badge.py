@@ -227,7 +227,13 @@ class _HelpPopover(QtWidgets.QFrame):
         )
 
     def show_for(self, badge: "HelpBadge", title: str, explanation: str) -> None:
-        if not _HELP_MODE_ENABLED or badge.isHidden() or badge.parentWidget() is None:
+        win = badge.window()
+        if (
+            not _HELP_MODE_ENABLED
+            or badge.isHidden()
+            or badge.parentWidget() is None
+            or (win is not None and (not badge.isVisibleTo(win) or not win.isVisible() or not win.isActiveWindow()))
+        ):
             self.hide()
             return
         self._hide_timer.stop()
@@ -322,7 +328,7 @@ class HelpBadge(QtWidgets.QAbstractButton):
         self.setFixedSize(22, 22)
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
         self.setCursor(QtCore.Qt.CursorShape.WhatsThisCursor)
-        self.setFocusPolicy(QtCore.Qt.FocusPolicy.TabFocus)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
 
         self._hover_anim = QtCore.QVariantAnimation(self)
@@ -397,7 +403,14 @@ class HelpBadge(QtWidgets.QAbstractButton):
 
     def enterEvent(self, event: QtGui.QEnterEvent) -> None:  # type: ignore[override]
         self._animate_to(1.0)
-        if _HELP_MODE_ENABLED and not self.isHidden() and self.parentWidget() is not None:
+        win = self.window()
+        can_show = (
+            _HELP_MODE_ENABLED
+            and not self.isHidden()
+            and self.parentWidget() is not None
+            and (win is None or (self.isVisibleTo(win) and win.isVisible() and win.isActiveWindow()))
+        )
+        if can_show:
             if _SHARED_POPOVER is not None:
                 try:
                     _SHARED_POPOVER.cancel_hide()
@@ -418,14 +431,7 @@ class HelpBadge(QtWidgets.QAbstractButton):
         super().leaveEvent(event)
 
     def focusInEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
-        if event.reason() in (
-            QtCore.Qt.FocusReason.TabFocusReason,
-            QtCore.Qt.FocusReason.BacktabFocusReason,
-            QtCore.Qt.FocusReason.ShortcutFocusReason,
-        ):
-            self._animate_to(1.0)
-            if _HELP_MODE_ENABLED and not self.isHidden() and self.parentWidget() is not None:
-                self._show_help_popup()
+        # Never auto-open _HelpPopover on focusInEvent (prevents spurious popup on Qt focus fallback).
         super().focusInEvent(event)
 
     def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
@@ -636,12 +642,24 @@ class _TooltipOnlyOnHelpBadgeFilter(QtCore.QObject):
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
         try:
-            if event.type() == QtCore.QEvent.Type.ToolTip:
+            et = event.type()
+            if et == QtCore.QEvent.Type.ToolTip:
                 if isinstance(obj, HelpBadge):
                     return False
                 QtWidgets.QToolTip.hideText()
                 event.accept()
                 return True
+            if _SHARED_POPOVER is not None and _is_qt_valid(_SHARED_POPOVER) and _SHARED_POPOVER.isVisible():
+                if et in (
+                    QtCore.QEvent.Type.WindowDeactivate,
+                    QtCore.QEvent.Type.ApplicationDeactivate,
+                ):
+                    _SHARED_POPOVER.hide()
+                elif et == QtCore.QEvent.Type.MouseButtonPress and not isinstance(obj, HelpBadge):
+                    if obj is not _SHARED_POPOVER and (
+                        not isinstance(obj, QtWidgets.QWidget) or not _SHARED_POPOVER.isAncestorOf(obj)
+                    ):
+                        _SHARED_POPOVER.hide()
         except RuntimeError:
             return False
         return False
@@ -758,15 +776,40 @@ class FocusRingAnimator(QtCore.QObject):
         if not self._torn_down and _is_qt_valid(self._root):
             self._install_recursive(self._root)
 
+    def _on_tab_changed(self, *_args) -> None:
+        self._reset_focus_state()
+        if _SHARED_POPOVER is not None and _is_qt_valid(_SHARED_POPOVER):
+            try:
+                _SHARED_POPOVER.hide()
+            except RuntimeError:
+                pass
+
     def _install_recursive(self, widget: QtWidgets.QWidget) -> None:
         if self._torn_down or not _is_qt_valid(widget):
             return
         widget.removeEventFilter(self)
         widget.installEventFilter(self)
         for child in widget.findChildren(QtWidgets.QWidget):
-            if _is_qt_valid(child) and isinstance(child, _INTERACTIVE_TYPES) and not isinstance(child, HelpBadge):
+            if not _is_qt_valid(child) or isinstance(child, HelpBadge):
+                continue
+            if isinstance(child, QtWidgets.QTabWidget):
+                try:
+                    child.currentChanged.connect(
+                        self._on_tab_changed,
+                        QtCore.Qt.ConnectionType.UniqueConnection,
+                    )
+                except RuntimeError:
+                    pass
+            if isinstance(child, _INTERACTIVE_TYPES) or isinstance(
+                child, (QtWidgets.QTabWidget, QtWidgets.QAbstractScrollArea)
+            ):
                 child.removeEventFilter(self)
                 child.installEventFilter(self)
+            if isinstance(child, QtWidgets.QAbstractScrollArea):
+                vp = child.viewport()
+                if _is_qt_valid(vp):
+                    vp.removeEventFilter(self)
+                    vp.installEventFilter(self)
 
     def _widget_rect_in_root(self, w: QtWidgets.QWidget) -> QtCore.QRectF:
         top_left = w.mapTo(self._root, QtCore.QPoint(0, 0))
@@ -868,14 +911,27 @@ class FocusRingAnimator(QtCore.QObject):
                     return False
             if not getattr(self, "_enabled", False):
                 return False
+            if et == QtCore.QEvent.Type.Wheel:
+                self._reset_focus_state()
+                return False
+            if et == QtCore.QEvent.Type.MouseButtonPress:
+                if not isinstance(obj, _INTERACTIVE_TYPES) or obj is not self._current_target:
+                    self._reset_focus_state()
+                return False
             if isinstance(obj, _INTERACTIVE_TYPES) and not isinstance(obj, HelpBadge):
                 if et == QtCore.QEvent.Type.Enter:
-                    if root.isVisible():
+                    if root.isVisible() and obj.isVisibleTo(root) and obj.isEnabled():
                         self._focus_widget(obj)
                 elif et == QtCore.QEvent.Type.FocusIn:
-                    if root.isVisible() and not (
-                        isinstance(event, QtGui.QFocusEvent)
-                        and event.reason() == QtCore.Qt.FocusReason.ActiveWindowFocusReason
+                    if (
+                        root.isVisible()
+                        and obj.isVisibleTo(root)
+                        and isinstance(event, QtGui.QFocusEvent)
+                        and event.reason()
+                        in (
+                            QtCore.Qt.FocusReason.TabFocusReason,
+                            QtCore.Qt.FocusReason.BacktabFocusReason,
+                        )
                     ):
                         self._focus_widget(obj)
                 elif et in (QtCore.QEvent.Type.Leave, QtCore.QEvent.Type.FocusOut, QtCore.QEvent.Type.Hide):

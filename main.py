@@ -1920,6 +1920,11 @@ class ListenScopeController:
 
         if self.drum_preview.close_if_finished():
             self.window.mixer_widget.set_drum_preview_playing(False)
+        elif self.drum_preview.is_playing:
+            self.window.mixer_widget.update_drum_preview_progress(
+                self.drum_preview.position_sec,
+                self.drum_preview.duration_sec,
+            )
         if self.chord_preview.close_if_finished():
             self.window.chroma_widget.sync_chord_preview_stopped(natural=True)
         self.ab_player.close_if_finished()
