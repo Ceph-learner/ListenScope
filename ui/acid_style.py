@@ -2087,7 +2087,7 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
             f_mono.setBold(True)
             f_mono.setPixelSize(10)
             p.setFont(f_mono)
-            raw = "LISTENSCOPE_V1.0.0 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
+            raw = "LISTENSCOPE_V1.0.1 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
             elided = QtGui.QFontMetrics(f_mono).elidedText(raw, QtCore.Qt.TextElideMode.ElideRight, avail_w)
             p.drawText(QtCore.QRect(text_left, 0, avail_w, h), QtCore.Qt.AlignmentFlag.AlignVCenter, elided)
 
