@@ -10,7 +10,7 @@
 
 #define MyAppName "ListenScope"
 #ifndef MyAppVersion
-#define MyAppVersion "0.2.6"
+#define MyAppVersion "1.0.0"
 #endif
 #define MyAppPublisher "ListenScope Project"
 #define MyAppExeName "ListenScope.exe"
