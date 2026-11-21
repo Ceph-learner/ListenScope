@@ -497,9 +497,8 @@ class StemMixerWidget(QtWidgets.QWidget):
         deep_l.setContentsMargins(6, 3, 6, 2)
         deep_l.setSpacing(4)
         analysis_actions = QtWidgets.QHBoxLayout()
-        analysis_actions.setSpacing(8)
+        analysis_actions.setSpacing(6)
         analysis_actions.addWidget(self.deep_analyze_btn)
-        analysis_actions.addSpacing(4)
         analysis_actions.addWidget(self.sevenths_chk)
         analysis_actions.addWidget(
             HelpBadge(
@@ -508,20 +507,16 @@ class StemMixerWidget(QtWidgets.QWidget):
             )
         )
         analysis_actions.addWidget(self.export_sheet_btn)
-        analysis_actions.addStretch(1)
-        deep_l.addLayout(analysis_actions)
 
-        rhythm_capsule_row = QtWidgets.QHBoxLayout()
-        rhythm_capsule_row.setSpacing(8)
         self.deep_rhythm_badge_lbl = QtWidgets.QLabel("BPM: -- | 鼓点: 分轨分析后显示节奏与鼓点统计")
         self.deep_rhythm_badge_lbl.setObjectName("bannerNotice")
-        self.deep_rhythm_badge_lbl.setWordWrap(True)
+        self.deep_rhythm_badge_lbl.setWordWrap(False)
         set_widget_tone(self.deep_rhythm_badge_lbl, "info")
         self.goto_drums_btn = QtWidgets.QPushButton("查看 16 步鼓点 →")
         self.goto_drums_btn.clicked.connect(lambda: self.analysis_tabs.setCurrentIndex(3))
-        rhythm_capsule_row.addWidget(self.deep_rhythm_badge_lbl, 1)
-        rhythm_capsule_row.addWidget(self.goto_drums_btn)
-        deep_l.addLayout(rhythm_capsule_row)
+        analysis_actions.addWidget(self.deep_rhythm_badge_lbl, 1)
+        analysis_actions.addWidget(self.goto_drums_btn)
+        deep_l.addLayout(analysis_actions)
 
         self.deep_summary_lbl = QtWidgets.QLabel(
             "分轨完成后，可在这里分析和弦、调性、贝斯音符和鼓点。"
@@ -538,7 +533,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._deep_summary_scroll.setWidgetResizable(True)
         self._deep_summary_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._deep_summary_scroll.setMinimumHeight(54)
-        self._deep_summary_scroll.setMaximumHeight(82)
+        self._deep_summary_scroll.setMaximumHeight(74)
         self._deep_summary_scroll.setWidget(self.deep_summary_lbl)
 
         self.chord_timeline_table = QtWidgets.QTableWidget(0, 7)

@@ -789,15 +789,15 @@ class FocusRingAnimator(QtCore.QObject):
             return
         widget.removeEventFilter(self)
         widget.installEventFilter(self)
+        if not hasattr(self, "_connected_tabs"):
+            self._connected_tabs: "weakref.WeakSet[QtWidgets.QTabWidget]" = weakref.WeakSet()
         for child in widget.findChildren(QtWidgets.QWidget):
             if not _is_qt_valid(child) or isinstance(child, HelpBadge):
                 continue
-            if isinstance(child, QtWidgets.QTabWidget):
+            if isinstance(child, QtWidgets.QTabWidget) and child not in self._connected_tabs:
                 try:
-                    child.currentChanged.connect(
-                        self._on_tab_changed,
-                        QtCore.Qt.ConnectionType.UniqueConnection,
-                    )
+                    child.currentChanged.connect(self._on_tab_changed)
+                    self._connected_tabs.add(child)
                 except RuntimeError:
                     pass
             if isinstance(child, _INTERACTIVE_TYPES) or isinstance(
