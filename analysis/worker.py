@@ -107,21 +107,26 @@ class AnalysisWorker:
             return self._analyze_latest_locked()
 
     def _analyze_latest_locked(self) -> AnalysisSnapshot:
-        window_sec = max(0.1, self.config.fft_size / float(self.audio_config.sample_rate))
+        sr = self.audio_config.sample_rate
+        window_sec = max(0.1, self.config.fft_size / float(sr))
         _, _, ring_generation = self.ring_buffer.frame_state()
-        pcm, start_abs, end_abs = self.ring_buffer.read_recent(max(window_sec, 0.15))
+        pcm, start_abs, end_abs = self.ring_buffer.read_recent(max(window_sec, 0.36))
         if self._reset_boundary is not None and self._reset_boundary[0] == ring_generation:
             pcm = pcm[max(0, self._reset_boundary[1] - start_abs):]
 
         if pcm.shape[0] == 0:
             mono = np.zeros(self.config.fft_size, dtype=np.float32)
+            mono_recent = mono
             rms_db = -120.0
             peak_db = -120.0
             audio_silent = True
             is_silent = True
         else:
-            mono = np.mean(pcm, axis=1, dtype=np.float32)
-            _, rms_db, _, peak_db = compute_rms_and_peak(pcm)
+            mono_recent = np.mean(pcm, axis=1, dtype=np.float32)
+            recent_frames = max(self.config.fft_size, int(0.15 * sr))
+            pcm_recent = pcm[-recent_frames:]
+            mono = mono_recent[-recent_frames:]
+            _, rms_db, _, peak_db = compute_rms_and_peak(pcm_recent)
             prev_abs = self._last_analyzed_frame
             audio_silent = rms_db < self.config.silence_threshold_dbfs
             is_silent = (end_abs == prev_abs) or audio_silent
@@ -131,7 +136,8 @@ class AnalysisWorker:
         pitch_est = self.pitch.estimate_from_magnitude(fft_mag, is_silent=is_silent)
 
         self._last_analyzed_frame = end_abs
-        chroma_12 = self.chroma.extract_from_magnitude(fft_mag, record_history=True, is_silent=is_silent)
+        record_hist = not (pcm.shape[0] == 0 and self._reset_boundary is not None)
+        chroma_12 = self.chroma.extract_from_pcm(mono_recent, record_history=record_hist, is_silent=is_silent)
         chord_est = self.chords.update(chroma_12, is_silent=is_silent)
 
         self._frame_count += 1
@@ -139,8 +145,12 @@ class AnalysisWorker:
         with self._lock:
             prev_snap = self._latest_snapshot
         if self._frame_count % 8 == 1 or prev_snap is None:
-            chroma_win = self.chroma.recent_chroma_matrix(seconds=float(self.config.key_window_seconds))
-            key_est = self.key_detector.estimate(chroma_win)
+            chroma_win, weight_win, bass_win = self.chroma.recent_chroma_bundle(
+                seconds=float(self.config.key_window_seconds)
+            )
+            key_est = self.key_detector.estimate(
+                chroma_win, frame_weights=weight_win, bass_window=bass_win
+            )
         else:
             key_est = prev_snap.key
 

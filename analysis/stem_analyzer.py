@@ -676,6 +676,7 @@ def analyze_harmony_and_chords(
     max_seconds: float = 120.0,
     segment_sec: float = 0.5,
     include_sevenths: bool = False,
+    bass_root_prior: Optional[np.ndarray] = None,
 ) -> tuple[str, float, KeyEstimate, TempoEstimate, list[ChordTimelineSegment]]:
     """Stream harmonic source(s) to extract Key, BPM, and merged ChordTimelineSegments."""
     cfg = AnalysisConfig(analysis_rate_hz=CANONICAL_SR / 1024.0)
@@ -686,6 +687,7 @@ def analyze_harmony_and_chords(
 
     fft_size = cfg.fft_size
     hop_size = cfg.hop_size
+    hr_window = 16384
     hop_sec = hop_size / float(CANONICAL_SR)
     win_frames = max(4, int(round(segment_sec / hop_sec)))
     silence_rms = 10.0 ** (cfg.silence_threshold_dbfs / 20.0)
@@ -701,14 +703,22 @@ def analyze_harmony_and_chords(
     bucket_count = 0
     bucket_start = 0.0
     raw_segments: list[ChordTimelineSegment] = []
+    hr_buf = np.empty(0, dtype=np.float32)
 
     for idx, (center_sec, frame) in enumerate(frames_iter):
         if not np.all(np.isfinite(frame)):
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
+        if hr_buf.size == 0:
+            hr_buf = frame.astype(np.float32, copy=True)
+        else:
+            hr_buf = np.concatenate([hr_buf, frame[-hop_size:]])
+            if hr_buf.shape[0] > hr_window:
+                hr_buf = hr_buf[-hr_window:]
+
         rms = float(np.sqrt(np.mean(np.square(frame))))
         is_silent = (not np.isfinite(rms)) or rms < silence_rms
-        fft_mag, _fft_db, log_db = spec.analyze_frame(frame)
-        c12 = chroma_ext.extract_from_magnitude(fft_mag, record_history=True, is_silent=is_silent)
+        _fft_mag, _fft_db, log_db = spec.analyze_frame(frame)
+        c12 = chroma_ext.extract_from_pcm(hr_buf, record_history=True, is_silent=is_silent)
 
         log_safe = np.clip(np.nan_to_num(log_db, nan=-120.0, posinf=20.0, neginf=-120.0), -120.0, 20.0)
         mag_like = np.power(10.0, log_safe / 20.0)
@@ -781,8 +791,13 @@ def analyze_harmony_and_chords(
         else:
             merged.append(seg)
 
-    chroma_mat = chroma_ext.recent_chroma_matrix(seconds=max_seconds)
-    key_est = key_det.estimate(chroma_mat)
+    chroma_mat, weight_vec, bass_mat = chroma_ext.recent_chroma_bundle(seconds=max_seconds)
+    key_est = key_det.estimate(
+        chroma_mat,
+        frame_weights=weight_vec,
+        bass_window=bass_mat,
+        bass_root_prior=bass_root_prior,
+    )
     tempo_est = _estimate_offline_bpm_from_flux(np.asarray(flux_vals, dtype=np.float32), rate_hz=1.0 / hop_sec)
     return source_label, duration_sec, key_est, tempo_est, merged[:400]
 
@@ -798,10 +813,26 @@ def analyze_stems_offline(
     if not by_key:
         raise ValueError("未找到可供深度分析的音轨 WAV 文件。")
 
+    bass_res = analyze_bass_stem(by_key["bass"], max_seconds=max_seconds) if "bass" in by_key else None
+    bass_root_prior: Optional[np.ndarray] = None
+    if bass_res is not None and bass_res.notes:
+        prior = np.zeros(12, dtype=np.float32)
+        for ev in bass_res.notes:
+            dur = max(0.05, float(ev.end_sec) - float(ev.start_sec))
+            prior[int(ev.pitch_midi) % 12] += dur * float(ev.confidence)
+        if float(np.sum(prior)) > 1e-9:
+            bass_root_prior = prior
+
     # Select best harmonic combination without including drums when harmonic stems exist
     if "instrumental" in by_key:
-        harm_sources = [(by_key["instrumental"], 1.0)]
+        if "vocals" in by_key:
+            harm_sources = [(by_key["instrumental"], 0.85), (by_key["vocals"], 0.15)]
+        else:
+            harm_sources = [(by_key["instrumental"], 1.0)]
         harm_label = "instrumental"
+    elif "other" in by_key and "bass" in by_key and "vocals" in by_key:
+        harm_sources = [(by_key["other"], 0.55), (by_key["bass"], 0.30), (by_key["vocals"], 0.15)]
+        harm_label = "other + bass + vocals (drumless harmonic mix)"
     elif "other" in by_key and "bass" in by_key:
         harm_sources = [(by_key["other"], 0.65), (by_key["bass"], 0.35)]
         harm_label = "other + bass (harmonic mix)"
@@ -821,9 +852,9 @@ def analyze_stems_offline(
         source_label=harm_label,
         max_seconds=max_seconds,
         include_sevenths=include_sevenths,
+        bass_root_prior=bass_root_prior,
     )
 
-    bass_res = analyze_bass_stem(by_key["bass"], max_seconds=max_seconds) if "bass" in by_key else None
     drums_res = analyze_drums_stem(by_key["drums"], max_seconds=max_seconds) if "drums" in by_key else None
 
     melody_res: Optional[MelodyAnalysisResult] = None
