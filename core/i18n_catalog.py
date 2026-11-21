@@ -181,6 +181,61 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "독립 드럼 스템이 포함된 분리 결과를 분석하면 16스텝 드럼 그리드가 표시됩니다.",
         "ja": "独立ドラムステムを含む分離結果を解析すると、16ステップのドラムグリッドが表示されます。",
     },
+    "尚未转录。选择上方已分轨音轨点「立即转 MIDI」，点轨道右侧「转 MIDI」，或打开已有单轨 WAV。": {
+        "en": "Not transcribed yet. Select a separated stem above and click 'To MIDI Now', click 'To MIDI' on a stem row, or open a single-stem WAV.",
+        "ko": "아직 변환되지 않았습니다. 위에서 분리된 스템을 선택해 '지금 MIDI 변환'을 누르거나, 트랙 오른쪽의 'MIDI 변환' 또는 단일 WAV 열기를 사용하세요.",
+        "ja": "未転写です。上で分離済みステムを選んで「今すぐ MIDI 変換」、各トラック右の「MIDI 変換」、または単一 WAV を開いてください。",
+    },
+    "先完成 AI 分轨": {
+        "en": "Run AI separation first",
+        "ko": "먼저 AI 스템 분리 실행",
+        "ja": "先に AI ステム分離を実行",
+    },
+    "立即转 MIDI": {
+        "en": "To MIDI Now",
+        "ko": "지금 MIDI 변환",
+        "ja": "今すぐ MIDI 変換",
+    },
+    "先完成 AI 分轨，或前往「// 03 MIDI 音符」点击「打开单轨 WAV」直接转录": {
+        "en": "Run AI separation first, or go to '// 03 MIDI Notes' and click 'Open Stem WAV' to transcribe directly.",
+        "ko": "먼저 AI 분리를 실행하거나 '// 03 MIDI 음표' 탭에서 '단일 스템 WAV 열기'로 직접 변환하세요.",
+        "ja": "先に AI 分離を実行するか、「// 03 MIDI 音符」で「単一ステム WAV を開く」から直接変換してください。",
+    },
+    "BPM: -- | 鼓点: 分轨分析后显示节奏与鼓点统计": {
+        "en": "BPM: -- | Drums: Tempo & drum hit stats appear after stem analysis",
+        "ko": "BPM: -- | 드럼: 스템 분석 후 템포와 드럼 타격 통계가 표시됩니다",
+        "ja": "BPM: -- | ドラム: ステム解析後にテンポとドラム統計が表示されます",
+    },
+    "BPM: -- | 鼓点: 点「分析和弦与节奏」后显示": {
+        "en": "BPM: -- | Drums: Click 'Analyze Chords & Rhythm' to populate",
+        "ko": "BPM: -- | 드럼: '코드 및 리듬 분석'을 눌러 표시",
+        "ja": "BPM: -- | ドラム:「コードとリズム解析」を押して表示",
+    },
+    "查看 16 步鼓点 →": {
+        "en": "View 16-Step Drums →",
+        "ko": "16스텝 드럼 보기 →",
+        "ja": "16ステップドラムへ →",
+    },
+    "约拍数": {
+        "en": "Beats",
+        "ko": "박자 수",
+        "ja": "拍数",
+    },
+    "按当前检测调预选，可切换": {
+        "en": "Preselected from detected key (changeable)",
+        "ko": "감지된 조성으로 자동 선택됨 (변경 가능)",
+        "ja": "検出された調で自動選択（変更可）",
+    },
+    "按当前检测调预选（波动较大，可手动切换）": {
+        "en": "Preselected from detected key (fluctuating, changeable)",
+        "ko": "감지된 조성으로 선택됨 (변동 큼, 수동 변경 가능)",
+        "ja": "検出された調で自動選択（変動あり・手動変更可）",
+    },
+    "尚未检测到稳定调性，已默认载入 C 大调练习模板，可随时切换": {
+        "en": "No stable key detected yet; loaded C major practice templates by default (changeable)",
+        "ko": "안정적인 조성이 아직 감지되지 않아 기본 C 메이저 연습 템플릿을 불러왔습니다 (변경 가능)",
+        "ja": "安定した調が未検出のため、既定で C メジャー練習テンプレートを読み込みました（変更可）",
+    },
     "尚未转录。点轨道右侧「转 MIDI」，或打开已有单轨 WAV。": {
         "en": "Not transcribed yet. Click 'To MIDI' on a stem row or open an existing single-stem WAV file.",
         "ko": "아직 변환되지 않았습니다. 트랙 오른쪽의 'MIDI 변환'을 누르거나 단일 WAV 파일을 여세요.",

@@ -177,11 +177,16 @@ def test_tooltip_guard_strictly_allows_help_badges_only(tmp_path: Path, monkeypa
         assert native_tips == []
         pop.hide()
 
-        # Tab focus onto HelpBadge shows popover; FocusOut triggers hide without error
+        # FocusIn on HelpBadge must NOT auto-open popover; explicit click DOES open popover
+        assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.NoFocus
         QtWidgets.QApplication.sendEvent(
             badge,
             QtGui.QFocusEvent(QtCore.QEvent.Type.FocusIn, QtCore.Qt.FocusReason.TabFocusReason),
         )
+        app.processEvents()
+        assert pop.isVisible() is False
+
+        badge.click()
         app.processEvents()
         assert pop.isVisible() is True
         pop.hide()

@@ -62,12 +62,34 @@ class DrumPreviewPlayer:
         self.sample_rate = sample_rate
         self.channels = channels
         self._stream = None
+        self._position_frames: int = 0
+        self._total_frames: int = 0
+
+    @property
+    def is_playing(self) -> bool:
+        stream = self._stream
+        if stream is None:
+            return False
+        try:
+            return bool(stream.active)
+        except Exception:
+            return False
+
+    @property
+    def position_sec(self) -> float:
+        return self._position_frames / float(max(1, self.sample_rate))
+
+    @property
+    def duration_sec(self) -> float:
+        return self._total_frames / float(max(1, self.sample_rate))
 
     def play(self, pcm: np.ndarray) -> None:
         import sounddevice as sd
 
         self.stop()
         position = 0
+        self._position_frames = 0
+        self._total_frames = int(pcm.size)
 
         def callback(outdata, frames, _time_info, _status):
             nonlocal position
@@ -75,6 +97,7 @@ class DrumPreviewPlayer:
             outdata[:count] = pcm[position:position + count, None]
             outdata[count:].fill(0)
             position += count
+            self._position_frames = position
             if position == pcm.size:
                 raise sd.CallbackStop
 
@@ -100,6 +123,8 @@ class DrumPreviewPlayer:
         return self.stop()
 
     def stop(self) -> bool:
+        self._position_frames = 0
+        self._total_frames = 0
         stream, self._stream = self._stream, None
         if stream is None:
             return False

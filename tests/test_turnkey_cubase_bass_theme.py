@@ -309,8 +309,11 @@ def test_help_badge_tuning_bar_and_turnkey_discovery(tmp_path: Path, monkeypatch
     lbl = QtWidgets.QLabel("示例")
     holder, badge = wrap_with_help(lbl, "复杂功能说明", "详细操作指导内容")
     assert isinstance(badge, HelpBadge)
-    assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.TabFocus
+    assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.NoFocus
     assert "复杂功能说明" in badge.toolTip()
+    holder.show()
+    holder.activateWindow()
+    app.processEvents()
     badge.click()
     pop = _get_popover()
     assert pop.isVisible()
