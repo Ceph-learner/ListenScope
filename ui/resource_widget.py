@@ -23,18 +23,22 @@ def _status_to_tone(status: ResourceStatus) -> str:
     return "error"
 
 
-class ResourceMonitorBar(QtWidgets.QWidget):
-    """Compact top-bar resource health strip."""
+class ResourceMonitorBar(QtWidgets.QFrame):
+    """Compact top-bar resource health capsule."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("resourceCapsule")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self._cached_texts: dict[str, str] = {}
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 2, 4, 2)
+        layout.setSpacing(5)
 
         self.ram_label = QtWidgets.QLabel("RAM: -")
         self.ram_label.setObjectName("monoTelemetry")
+        self._sep_lbl = QtWidgets.QLabel("·")
+        self._sep_lbl.setObjectName("mutedCaption")
         self.vram_label = QtWidgets.QLabel("VRAM: -")
         self.vram_label.setObjectName("monoTelemetry")
         self.status_badge = QtWidgets.QLabel("Normal")
@@ -44,7 +48,9 @@ class ResourceMonitorBar(QtWidgets.QWidget):
             w.setSizePolicy(QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Preferred)
 
         layout.addWidget(self.ram_label)
+        layout.addWidget(self._sep_lbl)
         layout.addWidget(self.vram_label)
+        layout.addSpacing(2)
         layout.addWidget(self.status_badge)
 
     def _set_text_if_changed(self, key: str, lbl: QtWidgets.QLabel, text: str) -> None:
@@ -88,7 +94,18 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         self._last_perf_sig: Optional[tuple[int, Optional[str]]] = None
         self._last_log_sig: Optional[tuple[int, str]] = None
 
-        root = QtWidgets.QVBoxLayout(self)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QtWidgets.QScrollArea(self)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.viewport().setAutoFillBackground(False)
+        content = QtWidgets.QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        root = QtWidgets.QVBoxLayout(content)
         root.setContentsMargins(10, 8, 10, 10)
         root.setSpacing(8)
         hdr = TelemetryHeader("SYSTEM TELEMETRY // 8GB GUARDRAIL", "硬件资源遥测 · 性能日志 · 诊断包")
@@ -104,6 +121,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
 
         # Telemetry grid card
         grid_group = QtWidgets.QGroupBox("MEMORY + VRAM GRID // 实时资源监控 (主 RAM / AI RAM / RTX 5060 Ti 8GB VRAM)")
+        grid_group.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Minimum)
         grid = QtWidgets.QGridLayout(grid_group)
         grid.setContentsMargins(8, 6, 8, 6)
         grid.setVerticalSpacing(4)

@@ -10,13 +10,13 @@
 
 | 模块 | 功能概览 |
 | :--- | :--- |
-| **实时捕获与频谱** | Windows 进程环回捕获（Build ≥ 20348，无需虚拟声卡）或系统环回；实时波形、FFT / 对数频谱、基频 `F0` 与 `-50 ~ +50 cents` 音准刻度条 |
+| **实时捕获与频谱** | Windows 进程环回捕获（Build ≥ 20348，无需虚拟声卡）或系统环回；仅通过系统标准音频接口捕获实时播放输出，不涉及任何绕过加密或缓存提取；提供实时波形、FFT / 对数频谱、基频 `F0` 与 `-50 ~ +50 cents` 音准刻度条 |
 | **和弦、调性与移调** | 12-bin Chroma 热图、大/小三和弦与构成音实时识别、自然大调 / 自然小调罗马级数、12 步和弦轨迹、纯 CPU **Capo / 乐器移调联动**、24 调和弦练习弹窗（支持试听与 `.mid` 导出） |
 | **120 秒回溯与 A/B 练习** | 固定 120s 环形缓冲（`48 kHz / Stereo / float32`）、拖拽 A/B 选区、`0.5x–1.25x` 不变调变速回放、12 个练习书签、Tap 定速节拍器（含预备拍）及带节拍器的练习 WAV 导出 |
 | **本地 AI 分轨** | 独立 `.venv-ai` 进程按需运行 2-Stem（Vocals / Instrumental）或 4-Stem（Vocals / Drums / Bass / Other）分离，默认 6 秒流式分块，随时可紧急停止并释放显存 |
 | **分轨混音与扒谱** | 四轨独立静音/独听、**贝斯独听 `0–24 dB` 可调增益**（默认 `+12 dB`，超过 `+12 dB` 自动护耳提示，可选写入导出 WAV）、FFT-YIN 贝斯最低音（低至 `B0`/`E1`）与半程转调检测、16 步鼓组律动、`.md/.csv` 扒谱表 |
 | **MIDI 转录与 Cubase 适配** | 支持分轨后一键转 MIDI 或直接打开本地单轨 WAV 转 MIDI；所有和弦、鼓点与单轨 MIDI 均统一规范为 **Steinberg Cubase 兼容 SMF Type-0 (`480 TPB`)** |
-| **界面与个性化** | 默认启用 **酸性遥测（Acid Telemetry · 临床浅色）** 工业视觉，支持暗夜 / 临床浅色双模快切；同时提供经典、Lenso、Codex、Claude 主题（非酸性主题支持自定义字体、配色与背景壁纸）、**中 / 英 / 韩 / 日** 四语切换及无边框圆角窗口 |
+| **界面与个性化** | 默认启用 **酸性遥测（Acid Telemetry · 临床浅色）** 工业视觉，支持暗夜 / 临床浅色双模快切；同时提供经典、极光冰蓝、石墨靛紫、暖砂琥珀主题（非酸性主题支持自定义字体、配色与背景壁纸）、**中 / 英 / 韩 / 日** 四语切换及无边框圆角窗口 |
 
 ---
 
@@ -35,7 +35,7 @@ ListenScope/
 ├── ui/           # PySide6 + PyQtGraph 桌面界面、酸性遥测样式引擎、紧凑 [?] 说明徽标与设置面板
 ├── packaging/    # PyInstaller 打包规范与 requirements-ai / requirements-midi 依赖约束
 ├── scripts/      # Windows 环境初始化 (setup_windows.ps1)、硬件自检与 Inno Setup 安装脚本
-└── docs/         # 架构说明、开发接手记录 (CURRENT_STATE.md / HANDOFF.md)、打包指南与 Windows 实测报告
+└── docs/         # 架构说明、技术决策、开发指南与打包文档
 ```
 
 - **Core 环境（`.venv-core`，Python 3.12）**：仅包含 GUI、WASAPI 捕获与纯 CPU DSP，不依赖 PyTorch 或 TensorFlow。
@@ -48,7 +48,7 @@ ListenScope/
 
 ### 1. 直接使用安装包 / 便携版
 
-从 Release 下载 `ListenScope-Setup-Windows-x64.exe` 或 `ListenScope-Core-Windows-x64-Portable.zip`。
+从 [Releases](https://github.com/Ceph-learner/ListenScope/releases) 下载 `ListenScope-Setup-Windows-x64.exe` 或 `ListenScope-Core-Windows-x64-Portable.zip`。
 程序默认将配置文件（`settings.json`）、离线工作区和导出的 WAV/MIDI **保存在软件同级目录**，不会往 `C:\` 盘写入垃圾文件。
 
 ### 2. 从源码运行（Windows）
@@ -77,18 +77,15 @@ QT_QPA_PLATFORM=offscreen pytest -q --tb=short
 
 ## 文档导航
 
-工程细节、打包流程与开发接手记录已归档至 `docs/` 目录：
-
-- [项目当前状态与开发记录 (docs/CURRENT_STATE.md)](docs/CURRENT_STATE.md)
-- [维护接手指南 (docs/HANDOFF.md)](docs/HANDOFF.md)
-- [架构设计 (docs/ARCHITECTURE.md)](docs/ARCHITECTURE.md) & [设计决策 (docs/DECISIONS.md)](docs/DECISIONS.md)
+- [架构设计 (docs/ARCHITECTURE.md)](docs/ARCHITECTURE.md) & [技术决策 (docs/DECISIONS.md)](docs/DECISIONS.md)
+- [开发与测试指南 (docs/DEVELOPMENT.md)](docs/DEVELOPMENT.md)
 - [Windows 打包与环境配置 (docs/PACKAGING.md)](docs/PACKAGING.md)
-- [Windows 11 + RTX 5060 Ti 实测报告 (docs/WINDOWS_TEST_REPORT.md)](docs/WINDOWS_TEST_REPORT.md)
+- [贡献指南 (CONTRIBUTING.md)](CONTRIBUTING.md)
 
 ---
 
-## 致谢与反馈
+## 开源协议、致谢与反馈
 
-本项目基于众多优秀的开源音频算法与模型构建，详见 [致谢与来源 (ACKNOWLEDGMENTS.md)](ACKNOWLEDGMENTS.md)。
-
-如果 ListenScope 对你的听歌、练琴或扒谱有帮助，欢迎在 GitHub 点一颗 ⭐ **Star**，或在 [Issues](https://github.com/Ceph-learner/ListenScope/issues) 中提交问题与建议。
+- 本项目基于 [MIT License](LICENSE) 开源；所集成的第三方模型与开源库均保留各自原有许可协议，详见 [致谢与来源 (ACKNOWLEDGMENTS.md)](ACKNOWLEDGMENTS.md)。
+- ListenScope 与文中提及的任何第三方音乐播放器、DAW 或硬件厂商均无隶属或商业合作关系；各商标归其各自所有者所有。
+- 如果 ListenScope 对你的听歌、练琴或扒谱有帮助，欢迎在 GitHub 点一颗 ⭐ **Star**，或在 [Issues](https://github.com/Ceph-learner/ListenScope/issues) 中提交问题与建议。

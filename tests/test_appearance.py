@@ -23,7 +23,7 @@ def test_appearance_load_and_round_trip_preserve_schema_two(tmp_path):
     assert Appearance.from_mapping({"analysis_layout": "invalid"}).analysis_layout == "monitor"
     assert Appearance.from_mapping({"layout": "invalid"}).layout == "split"
     settings.appearance = Appearance.from_mapping({
-        "preset": "lenso", "font_size": 500, "background": "#abcdef",
+        "preset": "arctic_slate", "font_size": 500, "background": "#abcdef",
         "accent": "bad", "scope": "panels", "dispersion": -5,
         "strength": True, "softness": 81, "layout": "practice", "analysis_layout": "history",
     })
@@ -32,7 +32,7 @@ def test_appearance_load_and_round_trip_preserve_schema_two(tmp_path):
     assert restored.schema_version == 2
     assert restored.metronome_bpm == 144
     assert restored.appearance == Appearance(
-        "lenso", 20, "#ABCDEF", "", "", "panels", 45, 81, 0, "practice", "history", theme_mode="light"
+        "arctic_slate", 20, "#ABCDEF", "", "", "panels", 45, 81, 0, "practice", "history", theme_mode="light"
     )
 
 
@@ -46,7 +46,7 @@ def test_appearance_sample_isolated_from_parent_and_scopes_are_painted_only():
     dialog._layout.setCurrentIndex(dialog._layout.findData("practice"))
     dialog._analysis_layout.setCurrentIndex(dialog._analysis_layout.findData("history"))
     dialog._presets.buttons()[1].click()
-    assert dialog.values().preset == "lenso"
+    assert dialog.values().preset == "arctic_slate"
     assert dialog.values().layout == "practice"
     assert dialog.values().analysis_layout == "history"
     dialog._colors["accent"].setText("#123456")

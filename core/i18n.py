@@ -489,7 +489,7 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
     "打开单轨 WAV...": {"en": "Open Stem WAV...", "ko": "단일 WAV 열기...", "ja": "単一 WAV を開く..."},
     "MIDI 环境设置": {"en": "MIDI Setup", "ko": "MIDI 환경 설정", "ja": "MIDI 環境設定"},
     "另存 MIDI (.mid)": {"en": "Save MIDI (.mid)", "ko": "MIDI 다른 이름 저장 (.mid)", "ja": "MIDI 別名保存 (.mid)"},
-    "分析和弦与节奏": {"en": "Analyze Chords & Rhythm", "ko": "코드 & 리듬 분석", "ja": "コード＆リズム解析"},
+    "分析和弦与节奏": {"en": "Analyze Chords && Rhythm", "ko": "코드 && 리듬 분석", "ja": "コード＆リズム解析"},
     "导出扒谱表 (.md/.csv)": {"en": "Export Sheet (.md/.csv)", "ko": "채보 시트 내보내기 (.md/.csv)", "ja": "耳コピ表出力 (.md/.csv)"},
     "取消任务": {"en": "Cancel Job", "ko": "작업 취소", "ja": "ジョブ中止"},
     # UX Polish, Animations, Surface Styles, Tray, Bootstrap Progress & Logs
@@ -538,6 +538,11 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "준비됨: 로컬 PyTorch 환경을 스캔하거나 '원클릭 AI + MIDI 설정'으로 앱 폴더에 자동 구성하세요(페이지 이동 시에도 중단되지 않음).",
         "ja": "準備完了: 「ローカル PyTorch 検出」または「AI + MIDI 一括構築」でアプリ同階層へ自動構築します（画面切替でも中断されません）。",
     },
+    "准备就绪：点击「扫描本机 PyTorch 环境」自动查找电脑已安装的 PyTorch；若未安装可点击「一键自动配置 AI + MIDI」在同级目录自动下载配置（切换页面不会中断）。": {
+        "en": "Ready: Scan local PyTorch installations or click 'One-Click AI + MIDI Setup' to auto-download & configure beside the app (continues safely if you switch pages).",
+        "ko": "준비됨: 로컬 PyTorch 환경을 스캔하거나 '원클릭 AI + MIDI 설정'으로 앱 폴더에 자동 다운로드 및 구성하세요(페이지 이동 시에도 중단되지 않음).",
+        "ja": "準備完了: 「ローカル PyTorch 検出」または「AI + MIDI 一括構築」でアプリ同階層へ自動ダウンロード・構築します（画面切替でも中断されません）。",
+    },
     "一键环境初始化进度与镜像切换日志将显示在这里...": {
         "en": "Turnkey setup progress and mirror-switch logs will appear here...",
         "ko": "원클릭 환경 구성 진행 상황 및 미러 전환 로그가 여기에 표시됩니다...",
@@ -567,6 +572,10 @@ _PREFIX_REPLACEMENTS: tuple[tuple[str, dict[str, str]], ...] = (
     ("贝斯独听 +", {"en": "Bass Solo +", "ko": "베이스 솔로 +", "ja": "ベース独聴 +"}),
     ("循环范围:", {"en": "Loop Scope:", "ko": "루프 범위:", "ja": "ループ範囲:"}),
     ("当前和弦:", {"en": "Current Chord:", "ko": "현재 코드:", "ja": "現在コード:"}),
+    ("[混入警告] 有信号 ·", {"en": "[Loopback Warn] Signal ·", "ko": "[루프백 경고] 신호 있음 ·", "ja": "[ループバック警告] 信号あり ·"}),
+    ("[混入警告] 静音 ·", {"en": "[Loopback Warn] Silent ·", "ko": "[루프백 경고] 무음 ·", "ja": "[ループバック警告] 無音 ·"}),
+    ("有信号 ·", {"en": "Signal ·", "ko": "신호 있음 ·", "ja": "信号あり ·"}),
+    ("静音 ·", {"en": "Silent ·", "ko": "무음 ·", "ja": "無音 ·"}),
     ("注意：调性中心(Key)与调号(Key Signature)不同", {"en": "Note: Key center differs from Key Signature (relative/modal keys share signatures)", "ko": "참고: 조성 중심(Key)과 조표(Key Signature)는 다릅니다", "ja": "注: 調性中心(Key)と調号(Key Signature)は異なります"}),
 )
 
