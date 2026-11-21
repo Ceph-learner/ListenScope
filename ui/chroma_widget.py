@@ -54,6 +54,22 @@ TRANSPOSE_PRESETS: list[tuple[str, int]] = [
     ("降E乐器 (+9: 中音萨克斯)", 9),
 ]
 
+_ENHARMONIC_KEY_DISPLAY: dict[str, str] = {
+    "C# major": "C# / Db major",
+    "D# major": "D# / Eb major",
+    "F# major": "F# / Gb major",
+    "G# major": "G# / Ab major",
+    "A# major": "A# / Bb major",
+    "D# minor": "D# / Eb minor",
+    "G# minor": "G# / Ab minor",
+    "A# minor": "A# / Bb minor",
+}
+
+
+def _format_key_display(key_label: str) -> str:
+    clean = (key_label or "").strip()
+    return _ENHARMONIC_KEY_DISPLAY.get(clean, clean)
+
 
 class TuningCentsBar(QtWidgets.QWidget):
     """Lightweight horizontal -50c..+50c pitch-accuracy needle indicator with smooth glide animation."""
@@ -1037,14 +1053,14 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         )
         self._key_dots.set_state(key_pips)
         if semi == 0:
-            self._set_cached_text(self.key_primary_lbl, ky.primary)
-            self._set_cached_text(self.key_secondary_lbl, f"第二候选: {ky.secondary}")
+            self._set_cached_text(self.key_primary_lbl, _format_key_display(ky.primary))
+            self._set_cached_text(self.key_secondary_lbl, f"第二候选: {_format_key_display(ky.secondary)}")
         else:
-            disp_key = transpose_key_label(ky.primary, semi)
-            disp_key_sec = transpose_key_label(ky.secondary, semi)
+            disp_key = _format_key_display(transpose_key_label(ky.primary, semi))
+            disp_key_sec = _format_key_display(transpose_key_label(ky.secondary, semi))
             self._set_cached_text(
                 self.key_primary_lbl,
-                f"{disp_key} (实音 {ky.primary})" if disp_key != ky.primary else disp_key,
+                f"{disp_key} (实音 {ky.primary})" if disp_key != _format_key_display(ky.primary) else disp_key,
             )
             self._set_cached_text(self.key_secondary_lbl, f"第二候选: {disp_key_sec}")
         mod_tag = " [可能转调]" if ky.modulation_hint else ""
