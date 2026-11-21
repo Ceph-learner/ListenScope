@@ -237,7 +237,18 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._acid_overlays: list[AcidGraphicOverlay] = []
         self._dot_matrices: list[DotMatrixWidget] = []
 
-        root = QtWidgets.QVBoxLayout(self)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QtWidgets.QScrollArea(self)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.viewport().setAutoFillBackground(False)
+        content = QtWidgets.QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        root = QtWidgets.QVBoxLayout(content)
         root.setContentsMargins(10, 6, 10, 6)
         root.setSpacing(5)
 
@@ -360,7 +371,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         rhythm_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         rhythm_l = QtWidgets.QVBoxLayout(rhythm_box)
         rhythm_l.setContentsMargins(10, 6, 10, 6)
-        rhythm_l.setSpacing(3)
+        rhythm_l.setSpacing(5)
         rhythm_hdr = TelemetryHeader("TEMPO & PITCH // 03", "节拍 · 音高 · CPU 节拍器", badge_text="SYNTH CLICK")
         rhythm_hdr.add_right_widget(
             HelpBadge(

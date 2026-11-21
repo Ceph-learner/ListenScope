@@ -449,9 +449,13 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         self._empty_tracks_card = QtWidgets.QFrame()
         self._empty_tracks_card.setObjectName("emptyStemBay")
+        self._empty_tracks_card.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
         empty_l = QtWidgets.QVBoxLayout(self._empty_tracks_card)
-        empty_l.setContentsMargins(12, 10, 12, 10)
-        empty_l.setSpacing(6)
+        empty_l.setContentsMargins(10, 6, 10, 8)
+        empty_l.setSpacing(4)
         empty_hdr = TelemetryHeader(
             "STEM BAY // STANDBY",
             "分轨音轨槽位 · 待载入",
@@ -465,7 +469,6 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._empty_tracks_hint_lbl.setWordWrap(True)
         empty_l.addWidget(empty_hdr)
         empty_l.addWidget(self._empty_tracks_hint_lbl)
-        empty_l.addStretch(1)
         self._empty_tracks_ov = AcidGraphicOverlay(self._empty_tracks_card, stencil="4X")
         self._tracks_layout.addWidget(self._empty_tracks_card)
         self._tracks_layout.addStretch(1)

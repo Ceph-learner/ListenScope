@@ -269,7 +269,7 @@ def test_theme_modes_font_scanning_live_preview_and_system_follow(tmp_path: Path
         assert w.findChildren(QtWidgets.QGraphicsEffect) == []
 
         # Enable Follow-System theme mode
-        w.apply_appearance(Appearance(preset="lenso", theme_mode="system", font_size=14))
+        w.apply_appearance(Appearance(preset="arctic_slate", theme_mode="system", font_size=14))
         controller._on_appearance_applied()
 
         # Simulate Windows switching to Daylight mode
@@ -416,12 +416,13 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
-    # 1. Core preset registry keeps classic [0] and lenso [1], adds acid_telemetry, and migrates legacy preset name silently
+    # 1. Core preset registry keeps classic [0] and arctic_slate [1], adds acid_telemetry, and migrates legacy preset name silently
     preset_keys = list(PRESETS.keys())
     assert preset_keys[0] == "classic"
-    assert preset_keys[1] == "lenso"
+    assert preset_keys[1] == "arctic_slate"
     assert "acid_telemetry" in PRESETS
     assert Appearance.from_mapping({"preset": "marathon"}).preset == "acid_telemetry"
+    assert Appearance.from_mapping({"preset": "lenso"}).preset == "arctic_slate"
 
     m_dark = Appearance(preset="acid_telemetry", theme_mode="dark")
     m_light = Appearance(preset="acid_telemetry", theme_mode="light")
@@ -454,9 +455,9 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
     assert resolve_acid_variant(m_light) == "light"
     assert resolve_acid_variant(m_sys, system_is_dark=False) == "light"
     assert resolve_acid_variant(m_sys, system_is_dark=True) == "dark"
-    assert resolve_acid_variant(Appearance(preset="lenso")) is None
+    assert resolve_acid_variant(Appearance(preset="arctic_slate")) is None
 
-    # 2. AppearanceDialog lists Acid Telemetry preset, locks font/color/bg controls in Acid mode, unlocks in Lenso, and cancels cleanly
+    # 2. AppearanceDialog lists Acid Telemetry preset, locks font/color/bg controls in Acid mode, unlocks in Arctic Slate, and cancels cleanly
     previews: list[Appearance] = []
     initial = Appearance(preset="classic", theme_mode="dark")
     dlg = AppearanceDialog(initial, DARK_STYLESHEET, on_preview=previews.append, system_is_dark=True)
@@ -471,9 +472,9 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
     assert dlg._acid_lock_banner.isHidden() is False
     assert "#0B0D0F" in dlg._sample.styleSheet()
     assert "#CEFF18" in dlg._sample.styleSheet()
-    # Switch to Lenso unlocks font family, colors, and background image
-    lenso_btn = next(b for b in dlg._presets.buttons() if b.property("preset") == "lenso")
-    lenso_btn.click()
+    # Switch to Arctic Slate unlocks font family, colors, and background image
+    slate_btn = next(b for b in dlg._presets.buttons() if b.property("preset") == "arctic_slate")
+    slate_btn.click()
     assert dlg._font_family.isEnabled() is True
     assert all(edit.isEnabled() for edit in dlg._colors.values())
     assert dlg._bg_image_edit.isEnabled() is True
@@ -608,8 +609,8 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w._acid_variant == "light"
         assert w._pill_light.isChecked() is True
 
-        # Switch back to Lenso Light cleanly hides topbar switcher/chrome & restores classic tabs & plots
-        w.apply_appearance(Appearance(preset="lenso", theme_mode="light"))
+        # Switch back to Arctic Slate Light cleanly hides topbar switcher/chrome & restores classic tabs & plots
+        w.apply_appearance(Appearance(preset="arctic_slate", theme_mode="light"))
         assert w._acid_variant is None
         assert w._skin_switcher.isVisible() is False
         assert w._hazard_bar.isVisible() is False
@@ -619,7 +620,7 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert all(ov.isVisible() is False for ov in w.chroma_widget.findChildren(AcidGraphicOverlay))
         assert w._history_box.objectName() == ""
         assert w.tabs.tabText(0) == "// 01 实时频谱与波形"
-        assert w._skin_badge.text() == "THEME // LENSO"
+        assert w._skin_badge.text() == "THEME // ARCTIC_SLATE"
         assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#EEF4FC"
         assert w.findChildren(QtWidgets.QGraphicsEffect) == []
     finally:
@@ -686,8 +687,9 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
     forbidden = re.compile(r"marathon|nucaloric|\bm5\b|马拉松", re.IGNORECASE)
     for py_file in sorted((root / "ui").glob("*.py")):
         assert not forbidden.search(py_file.read_text(encoding="utf-8")), f"Unexpected legacy term in {py_file.name}"
-    for doc_file in [root / "README.md", root / "DESIGN.md", *sorted((root / "docs").glob("*.md"))]:
-        assert not forbidden.search(doc_file.read_text(encoding="utf-8")), f"Unexpected legacy term in {doc_file.name}"
+    for doc_file in [root / "README.md", root / "ACKNOWLEDGMENTS.md", root / "CONTRIBUTING.md", *sorted((root / "docs").glob("*.md"))]:
+        if doc_file.exists():
+            assert not forbidden.search(doc_file.read_text(encoding="utf-8")), f"Unexpected legacy term in {doc_file.name}"
 
 
 def test_home_feedback_i18n_bass_boost_export_singleline_chords_pytorch_scan_and_frameless(

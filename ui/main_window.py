@@ -297,9 +297,20 @@ class ExperimentalLiveWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.ai_config = ai_config
         self._pending_start = False
-        root = QtWidgets.QVBoxLayout(self)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QtWidgets.QScrollArea(self)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.viewport().setAutoFillBackground(False)
+        content = QtWidgets.QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        root = QtWidgets.QVBoxLayout(content)
         root.setContentsMargins(10, 8, 10, 10)
-        root.setSpacing(8)
+        root.setSpacing(6)
         hdr_row = QtWidgets.QHBoxLayout()
         hdr_row.addWidget(TelemetryHeader("LIVE ENGINE // 2-STEM STREAMING", "实验性近实时人声 / 伴奏分离"), 1)
         hdr_row.addWidget(

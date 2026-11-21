@@ -465,18 +465,18 @@ class TelemetryHeader(QtWidgets.QFrame):
 
         stack = QtWidgets.QVBoxLayout()
         stack.setContentsMargins(0, 0, 0, 0)
-        stack.setSpacing(1)
+        stack.setSpacing(2)
 
         self.eyebrow_lbl = ElidedLabel(eyebrow.upper())
         self.eyebrow_lbl.setObjectName("telemetryEyebrow")
-        self.eyebrow_lbl.setMinimumHeight(14)
+        self.eyebrow_lbl.setMinimumHeight(16)
         self.eyebrow_lbl.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
         self.title_lbl = ElidedLabel(title)
         self.title_lbl.setObjectName("telemetryTitle")
-        self.title_lbl.setMinimumHeight(22)
+        self.title_lbl.setMinimumHeight(28)
         self.title_lbl.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
@@ -2087,7 +2087,7 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
             f_mono.setBold(True)
             f_mono.setPixelSize(10)
             p.setFont(f_mono)
-            raw = "LISTENSCOPE_V0.2.5 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
+            raw = "LISTENSCOPE_V0.2.6 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
             elided = QtGui.QFontMetrics(f_mono).elidedText(raw, QtCore.Qt.TextElideMode.ElideRight, avail_w)
             p.drawText(QtCore.QRect(text_left, 0, avail_w, h), QtCore.Qt.AlignmentFlag.AlignVCenter, elided)
 

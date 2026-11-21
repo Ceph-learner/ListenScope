@@ -17,8 +17,4 @@
 
 ## 体验参考
 
-- 感谢 **PyQt-Fluent-Widgets** 提供 Qt 分组设置和滚动布局的公开示例，**Lucide** 为设置原型和原生分类页提供导航图标。许可随原型和应用分发。 [Qt 设置示例](https://github.com/zhiyiYo/PyQt-Fluent-Widgets/blob/master/examples/gallery/app/view/setting_interface.py) · [Lucide](https://github.com/lucide-icons/lucide)
-
-- 感谢 **LioRael 与 Lenso UI 贡献者**。ListenScope 的 Lenso 预设借鉴了面板材质与小面积光学层分工。参考提交 `81b06bf` 中的调度、偏好和效果回收实现，使用 Qt 原生样式独立实现。Codex 和 Claude Code 预设借鉴各自的桌面与终端视觉风格。 [Lenso UI 源码](https://github.com/LioRael/lenso-ui/tree/81b06bf475d02c6fefd373ef04d0b942e46d82f2/packages/glass/src) · [Codex](https://openai.com/index/introducing-the-codex-app/) · [Claude Code](https://code.claude.com/docs/en/interactive-mode)
-
-- **Moises Live** 的边听边调节分轨音量，为本项目的实验性近实时分轨体验提供了参考。 [Moises Live 官方介绍](https://moises.ai/newsroom/company-milestones/namm-2025/)
+- 感谢 **PyQt-Fluent-Widgets** 提供 Qt 分组设置和滚动布局的公开示例，**Lucide** 为设置分类页图标提供灵感与许可参考（ISC / MIT）。 [Qt 设置示例](https://github.com/zhiyiYo/PyQt-Fluent-Widgets/blob/master/examples/gallery/app/view/setting_interface.py) · [Lucide](https://github.com/lucide-icons/lucide)

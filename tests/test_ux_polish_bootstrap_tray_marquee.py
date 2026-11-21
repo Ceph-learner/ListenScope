@@ -481,13 +481,14 @@ def test_ui_rails_tabbar_elided_standby_bay_and_preset_brand_hygiene(tmp_path: P
     )
     from ui.main_window import ListenScopeMainWindow
 
-    # 1. Preset brand hygiene: zero Codex / Claude in PRESETS, LIGHT_PRESETS, or ui/*.py; silent legacy migration works
-    forbidden_brand = re.compile(r"\bcodex\b|\bclaude\b", re.IGNORECASE)
+    # 1. Preset brand hygiene: zero Codex / Claude / Lenso in PRESETS, LIGHT_PRESETS, or ui/*.py; silent legacy migration works
+    forbidden_brand = re.compile(r"\bcodex\b|\bclaude\b|\blenso\b", re.IGNORECASE)
     for table in (PRESETS, LIGHT_PRESETS):
-        assert tuple(table.keys()) == ("classic", "lenso", "graphite", "terracotta", "acid_telemetry")
+        assert tuple(table.keys()) == ("classic", "arctic_slate", "graphite", "terracotta", "acid_telemetry")
         for key, entry in table.items():
             assert not forbidden_brand.search(key)
             assert not forbidden_brand.search(entry[0])
+    assert Appearance.from_mapping({"preset": "lenso"}).preset == "arctic_slate"
     assert Appearance.from_mapping({"preset": "codex"}).preset == "graphite"
     assert Appearance.from_mapping({"preset": "claude"}).preset == "terracotta"
 

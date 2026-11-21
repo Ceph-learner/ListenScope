@@ -6,20 +6,21 @@ import re
 
 PRESETS = {
     "classic": ("经典", "#14161A", "#E6EAF0", "#7EE2B8"),
-    "lenso": ("Lenso", "#131B2B", "#EFF5FF", "#A3C6FF"),
+    "arctic_slate": ("极光冰蓝", "#131B2B", "#EFF5FF", "#A3C6FF"),
     "graphite": ("石墨靛紫", "#141417", "#ECECF0", "#ACAEFF"),
     "terracotta": ("暖砂琥珀", "#201B18", "#F1E5D8", "#DF9B7B"),
     "acid_telemetry": ("酸性遥测", "#0B0D0F", "#F1F2EC", "#CEFF18"),
 }
 LIGHT_PRESETS = {
     "classic": ("经典 · 白天", "#F4F6FA", "#181D25", "#0E8A6D"),
-    "lenso": ("Lenso · 白天", "#EEF4FC", "#152238", "#2563EB"),
+    "arctic_slate": ("极光冰蓝 · 白天", "#EEF4FC", "#152238", "#2563EB"),
     "graphite": ("石墨靛紫 · 白天", "#F5F5F8", "#18181F", "#4F46E5"),
     "terracotta": ("暖砂琥珀 · 白天", "#FAF5F0", "#2A211B", "#B45309"),
     "acid_telemetry": ("酸性遥测 · 白天", "#EEF2F6", "#090D14", "#00A878"),
 }
 _PRESET_ALIASES = {
     "marathon": "acid_telemetry",
+    "lenso": "arctic_slate",
     "codex": "graphite",
     "claude": "terracotta",
 }

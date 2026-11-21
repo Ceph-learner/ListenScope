@@ -220,6 +220,7 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
     },
     # --- AppearanceDialog ---
     "经典": {"en": "Classic", "ko": "클래식", "ja": "クラシック"},
+    "极光冰蓝": {"en": "Arctic Slate", "ko": "아틱 슬레이트", "ja": "アークティックスレート"},
     "石墨靛紫": {"en": "Graphite", "ko": "그래파이트", "ja": "グラファイト"},
     "暖砂琥珀": {"en": "Warm Sand", "ko": "웜 샌드", "ja": "ウォームサンド"},
     "白天": {"en": "Light", "ko": "라이트", "ja": "ライト"},
@@ -675,7 +676,7 @@ DYNAMIC_REGEX_RULES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
         for _p_zh, _p_tr in (
             ("酸性遥测", {"en": "Acid Telemetry", "ko": "애시드 텔레메트리", "ja": "アシッドテレメトリ"}),
             ("经典", {"en": "Classic", "ko": "클래식", "ja": "クラシック"}),
-            ("Lenso", {"en": "Lenso", "ko": "Lenso", "ja": "Lenso"}),
+            ("极光冰蓝", {"en": "Arctic Slate", "ko": "아틱 슬레이트", "ja": "アークティックスレート"}),
             ("石墨靛紫", {"en": "Graphite", "ko": "그래파이트", "ja": "グラファイト"}),
             ("暖砂琥珀", {"en": "Warm Sand", "ko": "웜 샌드", "ja": "ウォームサンド"}),
         )
@@ -1060,15 +1061,15 @@ HELP_TRANSLATIONS: dict[str, dict[str, tuple[str, str]]] = {
     "自定义背景壁纸（非酸性主题专享）": {
         "en": (
             "Custom Background Wallpaper (Non-Acid Themes Only)",
-            "In Classic, Lenso, Graphite, and Warm Sand themes, upload any PNG/JPG/WebP image as the window backdrop with an automatic readability scrim. Disabled under Acid Telemetry to preserve graphic realism contrast.",
+            "In Classic, Arctic Slate, Graphite, and Warm Sand themes, upload any PNG/JPG/WebP image as the window backdrop with an automatic readability scrim. Disabled under Acid Telemetry to preserve graphic realism contrast.",
         ),
         "ko": (
             "사용자 배경 이미지 (비-애시드 테마 전용)",
-            "Classic, Lenso, 그래파이트, 웜 샌드 테마에서는 PNG/JPG/WebP 이미지를 배경으로 업로드할 수 있으며 가독성 보호 오버레이가 자동 적용됩니다. 애시드 테마에서는 고대비 유지 차원에서 비활성화됩니다.",
+            "Classic, 아틱 슬레이트, 그래파이트, 웜 샌드 테마에서는 PNG/JPG/WebP 이미지를 배경으로 업로드할 수 있으며 가독성 보호 오버레이가 자동 적용됩니다. 애시드 테마에서는 고대비 유지 차원에서 비활성화됩니다.",
         ),
         "ja": (
             "カスタム壁紙（非アシッドテーマ専用）",
-            "Classic / Lenso / グラファイト / ウォームサンド テーマでは PNG/JPG/WebP 画像を背景に設定でき、視認性保護マスクが自動適用されます。アシッドテーマではコントラスト維持のため無効化されます。",
+            "Classic / アークティックスレート / グラファイト / ウォームサンド テーマでは PNG/JPG/WebP 画像を背景に設定でき、視認性保護マスクが自動適用されます。アシッドテーマではコントラスト維持のため無効化されます。",
         ),
     },
     "按进程捕获说明": {
@@ -1354,7 +1355,7 @@ HELP_TRANSLATIONS: dict[str, dict[str, tuple[str, str]]] = {
     "自定义外观与实时预览": {
         "en": (
             "Customize Appearance & Live Preview",
-            "Defaults to Acid Telemetry Clinical Light (industrial font & palette locked, 11–20px size adjustable). Switch to Classic/Lenso/Graphite/Warm Sand to customize colors, OS fonts, and upload custom wallpapers.",
+            "Defaults to Acid Telemetry Clinical Light (industrial font & palette locked, 11–20px size adjustable). Switch to Classic/Arctic Slate/Graphite/Warm Sand to customize colors, OS fonts, and upload custom wallpapers.",
         ),
         "ko": (
             "외관 사용자 지정 및 실시간 미리보기",

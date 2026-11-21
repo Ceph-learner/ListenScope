@@ -664,8 +664,9 @@ class SettingsDialog(QtWidgets.QDialog):
         hybrid_form.setHorizontalSpacing(18)
         hybrid_form.setVerticalSpacing(10)
 
-        plan_a_row = QtWidgets.QHBoxLayout()
-        plan_a_row.setSpacing(12)
+        plan_a_col = QtWidgets.QVBoxLayout()
+        plan_a_col.setContentsMargins(0, 0, 0, 0)
+        plan_a_col.setSpacing(6)
         self.igpu_dml_chk = QtWidgets.QCheckBox("启用方案 A：核显 DirectML 接管轻量 2-Stem ONNX 分离")
         self.igpu_dml_chk.setChecked(bool(ai_config.igpu_directml_2stem))
         self.igpu_dml_id_spin = QtWidgets.QSpinBox()
@@ -674,9 +675,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.igpu_dml_id_spin.setValue(int(ai_config.igpu_directml_device_id))
         self.igpu_dml_id_spin.setEnabled(bool(ai_config.igpu_directml_2stem))
         self.igpu_dml_chk.toggled.connect(self.igpu_dml_id_spin.setEnabled)
-        plan_a_row.addWidget(self.igpu_dml_chk, 1)
-        plan_a_row.addWidget(self.igpu_dml_id_spin)
-        plan_a_row.addWidget(
+        plan_a_sub = QtWidgets.QHBoxLayout()
+        plan_a_sub.setSpacing(10)
+        plan_a_sub.addWidget(self.igpu_dml_id_spin)
+        plan_a_sub.addWidget(
             HelpBadge(
                 "方案 A：核显 DirectML + 独显 CUDA 异构分工",
                 "• NVIDIA 独显 (cuda:0) 专职重负载 4-Stem HTDemucs 与 MIDI 扒谱。\n"
@@ -684,10 +686,14 @@ class SettingsDialog(QtWidgets.QDialog):
                 "• 若环境未安装 onnxruntime-directml，会自动安全回退至 CUDA / CPU，不会报错崩溃。",
             )
         )
-        hybrid_form.addRow("方案 A (异构计算):", plan_a_row)
+        plan_a_sub.addStretch(1)
+        plan_a_col.addWidget(self.igpu_dml_chk)
+        plan_a_col.addLayout(plan_a_sub)
+        hybrid_form.addRow("方案 A (异构计算):", plan_a_col)
 
-        plan_b_row = QtWidgets.QHBoxLayout()
-        plan_b_row.setSpacing(12)
+        plan_b_col = QtWidgets.QVBoxLayout()
+        plan_b_col.setContentsMargins(0, 0, 0, 0)
+        plan_b_col.setSpacing(6)
         self.gui_offload_chk = QtWidgets.QCheckBox("启用方案 B：GUI 渲染卸载核显 + AI 子进程锁定独显 (CUDA_VISIBLE_DEVICES=0)")
         self.gui_offload_chk.setChecked(bool(ai_config.offload_gui_to_igpu))
         self.open_win_graphics_btn = QtWidgets.QPushButton("Windows 图形设置")
@@ -695,16 +701,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self.open_win_graphics_btn.clicked.connect(
             lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl("ms-settings:display-advancedgraphics"))
         )
-        plan_b_row.addWidget(self.gui_offload_chk, 1)
-        plan_b_row.addWidget(self.open_win_graphics_btn)
-        plan_b_row.addWidget(
+        plan_b_sub = QtWidgets.QHBoxLayout()
+        plan_b_sub.setSpacing(10)
+        plan_b_sub.addWidget(self.open_win_graphics_btn)
+        plan_b_sub.addWidget(
             HelpBadge(
                 "方案 B：图形渲染与 AI 推理物理隔离",
                 "• 开启后，后台 AI 子进程将强制绑定 CUDA_VISIBLE_DEVICES=0 (PCI_BUS_ID) 独占 NVIDIA 独显算力。\n"
                 "• 点击右侧「Windows 图形设置」可将 ListenScope 主程序设为「节能 (AMD/Intel 核显)」渲染 Qt 界面与 PyQtGraph 波形，彻底杜绝 AI 满载时桌面掉帧。",
             )
         )
-        hybrid_form.addRow("方案 B (渲染隔离):", plan_b_row)
+        plan_b_sub.addStretch(1)
+        plan_b_col.addWidget(self.gui_offload_chk)
+        plan_b_col.addLayout(plan_b_sub)
+        hybrid_form.addRow("方案 B (渲染隔离):", plan_b_col)
         cfg_outer.addWidget(hybrid_box)
 
         cfg_outer.addStretch(1)
@@ -991,6 +1001,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.setStyleSheet(acid_stylesheet(appearance, self._acid_variant))
             else:
                 self.setStyleSheet("")
+        if hasattr(self, "_theme_summary"):
+            self.update_appearance_summary(appearance, _translate=_translate)
         if _translate:
             translate_widget_tree(self, appearance.language)
 

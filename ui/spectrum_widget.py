@@ -191,6 +191,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.spec_plot.setBackground("#F8FAFC")
         self.spec_plot.setLabel("bottom", "更新帧（右侧为最新）", **{"font-size": "9pt"})
         self.spec_plot.setLabel("left", "频带序号", **{"font-size": "9pt"})
+        self.spec_plot.setYRange(0, 64, padding=0)
         self._spec_img = pg.ImageItem()
         try:
             cmap = pg.colormap.get("inferno") if hasattr(pg, "colormap") else None

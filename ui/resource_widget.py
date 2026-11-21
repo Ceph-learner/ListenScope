@@ -94,7 +94,18 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         self._last_perf_sig: Optional[tuple[int, Optional[str]]] = None
         self._last_log_sig: Optional[tuple[int, str]] = None
 
-        root = QtWidgets.QVBoxLayout(self)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QtWidgets.QScrollArea(self)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.viewport().setAutoFillBackground(False)
+        content = QtWidgets.QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        root = QtWidgets.QVBoxLayout(content)
         root.setContentsMargins(10, 8, 10, 10)
         root.setSpacing(8)
         hdr = TelemetryHeader("SYSTEM TELEMETRY // 8GB GUARDRAIL", "硬件资源遥测 · 性能日志 · 诊断包")
@@ -110,6 +121,7 @@ class ResourceStatusPanel(QtWidgets.QWidget):
 
         # Telemetry grid card
         grid_group = QtWidgets.QGroupBox("MEMORY + VRAM GRID // 实时资源监控 (主 RAM / AI RAM / RTX 5060 Ti 8GB VRAM)")
+        grid_group.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Minimum)
         grid = QtWidgets.QGridLayout(grid_group)
         grid.setContentsMargins(8, 6, 8, 6)
         grid.setVerticalSpacing(4)
