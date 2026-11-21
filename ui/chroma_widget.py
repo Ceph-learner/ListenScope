@@ -1058,10 +1058,9 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         else:
             disp_key = _format_key_display(transpose_key_label(ky.primary, semi))
             disp_key_sec = _format_key_display(transpose_key_label(ky.secondary, semi))
-            concert_key = _format_key_display(ky.primary)
             self._set_cached_text(
                 self.key_primary_lbl,
-                f"{disp_key} (实音 {concert_key})" if disp_key != concert_key else disp_key,
+                f"{disp_key} (实音 {ky.primary})" if disp_key != _format_key_display(ky.primary) else disp_key,
             )
             self._set_cached_text(self.key_secondary_lbl, f"第二候选: {disp_key_sec}")
         mod_tag = " [可能转调]" if ky.modulation_hint else ""

@@ -681,7 +681,9 @@ def analyze_harmony_and_chords(
     """Stream harmonic source(s) to extract Key, BPM, and merged ChordTimelineSegments."""
     cfg = AnalysisConfig(analysis_rate_hz=CANONICAL_SR / 1024.0)
     spec = SpectrumAnalyzer(sample_rate=CANONICAL_SR, config=cfg)
-    chroma_ext = ChromaExtractor(sample_rate=CANONICAL_SR, config=cfg)
+    hr_stride = 3  # ~15.6 Hz effective HR chroma rate (matches real-time 15 Hz worker & cuts offline CPU ~3x)
+    chroma_cfg = AnalysisConfig(analysis_rate_hz=(CANONICAL_SR / float(cfg.hop_size)) / float(hr_stride))
+    chroma_ext = ChromaExtractor(sample_rate=CANONICAL_SR, config=chroma_cfg)
     chord_det = ChordDetector(ema_alpha=0.55, include_sevenths=include_sevenths)
     key_det = KeyDetector(min_active_frames=12)
 
@@ -703,22 +705,30 @@ def analyze_harmony_and_chords(
     bucket_count = 0
     bucket_start = 0.0
     raw_segments: list[ChordTimelineSegment] = []
-    hr_buf = np.empty(0, dtype=np.float32)
+    hr_buf = np.zeros(hr_window, dtype=np.float32)
+    hr_filled = 0
+    last_c12 = np.zeros(12, dtype=np.float32)
 
     for idx, (center_sec, frame) in enumerate(frames_iter):
         if not np.all(np.isfinite(frame)):
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
-        if hr_buf.size == 0:
-            hr_buf = frame.astype(np.float32, copy=True)
+        if hr_filled == 0:
+            take = min(hr_window, frame.shape[0])
+            hr_buf[hr_window - take :] = frame[-take:]
+            hr_filled = take
         else:
-            hr_buf = np.concatenate([hr_buf, frame[-hop_size:]])
-            if hr_buf.shape[0] > hr_window:
-                hr_buf = hr_buf[-hr_window:]
+            step = min(hop_size, frame.shape[0])
+            hr_buf[:-step] = hr_buf[step:]
+            hr_buf[-step:] = frame[-step:]
+            hr_filled = min(hr_window, hr_filled + step)
 
         rms = float(np.sqrt(np.mean(np.square(frame))))
         is_silent = (not np.isfinite(rms)) or rms < silence_rms
         _fft_mag, _fft_db, log_db = spec.analyze_frame(frame)
-        c12 = chroma_ext.extract_from_pcm(hr_buf, record_history=True, is_silent=is_silent)
+        if idx % hr_stride == 0:
+            hr_view = hr_buf[hr_window - hr_filled :] if hr_filled < hr_window else hr_buf
+            last_c12 = chroma_ext.extract_from_pcm(hr_view, record_history=True, is_silent=is_silent)
+        c12 = np.zeros(12, dtype=np.float32) if is_silent else last_c12
 
         log_safe = np.clip(np.nan_to_num(log_db, nan=-120.0, posinf=20.0, neginf=-120.0), -120.0, 20.0)
         mag_like = np.power(10.0, log_safe / 20.0)
