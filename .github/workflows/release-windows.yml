@@ -197,22 +197,13 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $notesLines = @(
-            "## ListenScope $tag (Windows x64 Core)",
+            "### 安装包说明 (Windows x64 Core)",
+            "- **``ListenScope-Setup-Windows-x64.exe``**：Inno Setup 6 单文件安装版（免管理员，默认保留升级后 ``exports\``）。",
+            "- **``ListenScope-Core-Windows-x64-Portable.zip``**：解压即用的绿色便携版（内含 ``ListenScope.exe``）。",
+            "- **图形化一键配置**：主程序仅打包轻量 Core（无需显卡即可实时分析与 A/B 练习）；如需 GPU AI 分轨或 Basic Pitch 转 MIDI，可在软件内 **``CONFIG // 设置 → AI 与 MIDI 环境``** 一键扫描本机 PyTorch 或自动配置。",
             "",
-            "### 本版修复与亮点 ($tag)",
-            "- **修复仅限 ``[?]`` 问号徽标悬停弹出说明**：新增应用级 ``install_tooltip_guard`` 拦截并隐藏所有非 ``HelpBadge`` 控件的原生 ToolTip，同时清理界面普通按钮/标签/表单/绘图区冗余提示，鼠标放到普通控件上不再乱弹窗，仅悬停或键盘 Tab 聚焦 ``[?]`` 徽标时才弹出说明浮卡。",
-            "- **根治启动与打开「设置」时小图标小窗闪烁（鬼畜）与卡顿**：限制 ``HelpBadge`` 仅在挂载父布局之后才显示（消除 20+ 个带软件图标的 ``22×22`` 顶层小窗闪现）；收敛 ``FocusRingAnimator`` 与 ``SettingsDialog`` 构造开销，并将启动期宽范围本机 PyTorch 扫描移至后台线程异步执行，同时为 SMTC PowerShell 探针补全无黑窗参数。",
-            "- **修复 Windows 一键配置 AI + MIDI（Python 3.15.2 拒检 + ANSI / CP936 中文乱码）**：``setup_windows.ps1`` 新增多源 Python 查找（``py -0p`` / 注册表 / Conda / ``uv`` / 盘符目录）、默认勾选的 ``winget`` 自动补装 ``Python.Python.3.12`` 与 ``Python.Python.3.11``（``-AutoInstallPython``）、纯文本 UTF-8 输出与设置页「Python 3.12 官方下载」直链；同步修复冻结版 exe 启动外部 Python 隔离与只读安装目录回退至 ``~/.listenscope`` 的自动发现。",
-            "- **包含 v0.2.2 全套升级**：默认 ``Acid Telemetry (临床浅色)`` 无边框圆角（10 px）居中窗口、中/英/韩/日四语实时切换、可调 ``0–24 dB`` 贝斯独听增益、核显 DirectML / 独显异构协同卸载开关，以及本机 PyTorch 扫描器与开源反馈入口。",
-            "",
-            "### 下载说明（Core 版架构边界与 AI/MIDI 配置指引）",
-            "- **``ListenScope-Setup-Windows-x64.exe``**：Inno Setup 6 单文件安装版（免管理员，默认优先安装至 ``D:\ListenScope`` / ``E:\ListenScope`` 并保留升级后 ``exports\``）。",
-            "- **``ListenScope-Core-Windows-x64-Portable.zip``**：解压即用的绿色便携目录（内含 ``ListenScope.exe``、随包脚本 ``scripts\setup_windows.ps1`` 与 UI SVG 资产）。",
-            "- **三环境隔离提示**：Release 安装包仅打包轻量 **Core 主程序（GUI + WASAPI 捕获 + CPU 实时分析，不捆绑 PyTorch / CUDA / TensorFlow）**。若要运行 GPU AI 分轨，需使用 **Python 3.12 (64位)** + **PyTorch ``cu128`` 三件套** + ``requirements-ai.txt``（可在「设置 → AI 与 MIDI 环境」保持勾选 ``winget`` 自动补装并点击「一键自动配置 AI + MIDI」）；可选 Basic Pitch 转 MIDI 使用独立 **Python 3.11 (64位)** 短路径环境。",
-            "",
-            "### 已在 CI 验证 vs. 需实机验收项",
-            "- **CI 自动通过**：Linux 离屏全量测试、Windows x64 offscreen ``pytest`` 全量测试、PyInstaller 打包资产核验、便携重定位执行 ``--simulate --headless-smoke`` 退出码校验、``ISCC.exe`` 安装包编译及 ``SHA256SUMS.txt`` 校验生成。",
-            "- **仍需在个人 Windows 11 真机复测**：实机启动与打开设置是否零小图标闪烁/零卡顿、鼠标仅在 ``[?]`` 上弹出说明、``一键自动配置 AI + MIDI``（``-AutoInstallPython`` 与无乱码日志）、实际 WASAPI 捕获与声卡试听、RTX 5060 Ti 8GB VRAM / 16GB RAM 下真实歌曲 AI 分轨与 Basic Pitch MIDI、SMTC 切歌重置及 ``Setup.exe`` 双击安装。"
+            "### 硬件兼容性备注",
+            "- 目前已在 **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM** 环境实测通过；其余显卡与硬件配置尚未全面测试，如遇问题欢迎在 Issues 反馈。"
           )
           $notesFile = Join-Path $env:RUNNER_TEMP "release-notes.md"
           $notesLines | Set-Content -Path $notesFile -Encoding utf8
@@ -221,4 +212,5 @@ jobs:
             "dist\release\ListenScope-Core-Windows-x64-Portable.zip" `
             "dist\release\SHA256SUMS.txt" `
             --title "ListenScope $tag (Windows x64 Core)" `
+            --generate-notes `
             --notes-file $notesFile
