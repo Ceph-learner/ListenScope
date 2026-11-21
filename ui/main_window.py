@@ -1544,11 +1544,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         lang = getattr(getattr(self, "appearance", Appearance()), "language", "zh")
         if is_active:
             eye_txt = {
-                "zh": "LISTENSCOPE · 实时频谱 / 120s 分轨",
-                "en": "LISTENSCOPE · SPECTRUM / 120S STEMS",
-                "ko": "LISTENSCOPE · 실시간 스펙트럼 / 120s",
-                "ja": "LISTENSCOPE · スペクトル / 120s 分離",
-            }.get(lang, "LISTENSCOPE · 实时频谱 / 120s 分轨")
+                "zh": "LISTENSCOPE · 实时频谱",
+                "en": "LISTENSCOPE · SPECTRUM",
+                "ko": "LISTENSCOPE · 실시간 스펙트럼",
+                "ja": "LISTENSCOPE · スペクトル",
+            }.get(lang, "LISTENSCOPE · 实时频谱")
             self._brand_eye.setText(eye_txt)
             self._brand_title.setText("SIGNAL_GRID")
             self._brand_title.setObjectName("acidHeroTitle")
