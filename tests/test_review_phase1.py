@@ -269,7 +269,6 @@ def test_e20_release_workflow_avoids_inline_expression_injection() -> None:
 # ============================================================================
 
 
-@pytest.mark.xfail(strict=True, reason="A-M1")
 def test_am1_realtime_pitch_parabolic_interpolation_bass_accuracy() -> None:
     """Real-time PitchEstimator on harmonic-rich A1 (55 Hz) must stay within 10 cents."""
     from analysis.pitch import PitchEstimator
@@ -288,7 +287,6 @@ def test_am1_realtime_pitch_parabolic_interpolation_bass_accuracy() -> None:
     assert cents_err < 10.0, f"A1 pitch error {cents_err:.1f} cents (got {est.frequency_hz:.2f} Hz)"
 
 
-@pytest.mark.xfail(strict=True, reason="A-M3")
 def test_am3_offline_bass_yin_pure_sine_no_octave_down_error() -> None:
     """Pure sine bass notes E1..C4 must not be misclassified an octave too low."""
     from analysis.stem_analyzer import _yin_bass_frame_f0
@@ -308,7 +306,6 @@ def test_am3_offline_bass_yin_pure_sine_no_octave_down_error() -> None:
     assert not errors, f"Octave/pitch errors on pure sine bass: {errors[:5]}"
 
 
-@pytest.mark.xfail(strict=True, reason="A-M7")
 def test_am7_steady_sine_does_not_report_high_confidence_fake_bpm() -> None:
     """A steady unmodulated sine wave has no beats and must not return a High/Medium BPM (RT or offline)."""
     from analysis.fft import SpectrumAnalyzer
@@ -346,7 +343,6 @@ def test_am7_steady_sine_does_not_report_high_confidence_fake_bpm() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="A-M8")
 def test_am8_wsola_time_stretch_preserves_low_e1_pitch() -> None:
     """WSOLA at 1.25x must preserve E1 (41.2 Hz) pitch within 5 cents."""
     from audio.time_stretch import StreamingTimeStretcher
@@ -358,10 +354,22 @@ def test_am8_wsola_time_stretch_preserves_low_e1_pitch() -> None:
 
     st = StreamingTimeStretcher(sample_rate=sr, channels=2)
     chunks = []
-    for i in range(0, src.shape[0], 2048):
-        out = st.process(src[i : i + 2048], rate=1.25)
+    rel_cursor = 0
+    span_frames = src.shape[0]
+    read_fn = lambda pos, n: src[pos : pos + n]
+    while True:
+        out, rel_cursor, eof = st.render_block(
+            2048,
+            speed=1.25,
+            span_frames=span_frames,
+            rel_cursor=rel_cursor,
+            loop_enabled=False,
+            read_rel_fn=read_fn,
+        )
         if out.shape[0] > 0:
             chunks.append(out)
+        if eof or len(chunks) > 40:
+            break
     y = np.concatenate(chunks, axis=0)[:, 0]
     # Measure frequency on steady middle section via zero-padded FFT
     seg = y[len(y) // 4 : (3 * len(y)) // 4]
@@ -373,7 +381,6 @@ def test_am8_wsola_time_stretch_preserves_low_e1_pitch() -> None:
     assert cents_err < 5.0, f"WSOLA E1 pitch shifted by {cents_err:.1f} cents (got {peak_hz:.2f} Hz)"
 
 
-@pytest.mark.xfail(strict=True, reason="A-M9")
 def test_am9_major_seventh_uppercase_M7_parsed_as_maj7_not_m7() -> None:
     """CM7 must be parsed as Cmaj7 (60, 64, 67, 71) and degree Imaj7, not Cm7."""
     from analysis.chord_practice import chord_midi_notes
@@ -383,7 +390,6 @@ def test_am9_major_seventh_uppercase_M7_parsed_as_maj7_not_m7() -> None:
     assert chord_scale_degree("CM7", "C major") == "Imaj7"
 
 
-@pytest.mark.xfail(strict=True, reason="A-M10")
 def test_am10_spell_chord_tones_uses_diatonic_letter_spelling() -> None:
     """Fm must spell as 'F · Ab · C' and Bb as 'Bb · D · F', not sharp-only."""
     from analysis.chords import spell_chord_tones
@@ -392,7 +398,6 @@ def test_am10_spell_chord_tones_uses_diatonic_letter_spelling() -> None:
     assert spell_chord_tones("Bb") == "Bb · D · F"
 
 
-@pytest.mark.xfail(strict=True, reason="A-L1")
 def test_al1_transpose_note_name_handles_b_sharp_and_c_flat_octaves() -> None:
     """B#3 + 12 semitones must be C5 (not C4); Cb4 + 12 must be B4 (not B5)."""
     from analysis.chords import transpose_note_name

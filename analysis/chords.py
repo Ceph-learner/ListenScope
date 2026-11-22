@@ -48,6 +48,18 @@ _DEGREE_SUFFIXES = {"maj": "", "m": "", "min": "", "m6": "6", "min6": "6", "m7":
                     "m9": "9", "dim": "°", "dim7": "°7", "m7b5": "ø7", "aug": "+"}
 
 
+_LETTERS = ("C", "D", "E", "F", "G", "A", "B")
+_LETTER_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+_IV_LETTER = {0: 0, 2: 1, 3: 2, 4: 2, 5: 3, 6: 4, 7: 4, 8: 5, 9: 5, 10: 6, 11: 6}
+
+
+def _normalize_chord_quality(suffix: str) -> str:
+    s = (suffix or "").strip()
+    if s.startswith(("M", "Δ")) and not s.startswith(("Ma", "Mi")):
+        s = "maj" + s[1:]
+    return s.lower()
+
+
 def _normalize_pitch_token(token: str) -> str | None:
     clean = (token or "").strip().replace("♯", "#").replace("♭", "b")
     if not clean:
@@ -64,8 +76,7 @@ def chord_scale_degree(chord_name: str, key_label: str) -> str:
         return "-"
     tonic = _normalize_pitch_token(key[1])
     root = _normalize_pitch_token(chord[1] + chord[2])
-    suffix = chord[3].strip()
-    quality = "maj" if suffix == "M" else suffix.lower()
+    quality = _normalize_chord_quality(chord[3])
     if tonic is None or root is None or (quality not in _CHORD_INTERVALS and quality not in _EXTRA_CHORD_SUFFIXES):
         return "-"
     degrees = _MINOR_DEGREES if key[2].lower() in ("minor", "小调") else _MAJOR_DEGREES
@@ -84,14 +95,14 @@ def transpose_note_name(note_name: str, semitones: int) -> str:
     m = _NOTE_RE.match(raw)
     if not m:
         return raw
-    norm_root = _normalize_pitch_token(m.group(1) + m.group(2))
-    if norm_root is None:
-        return raw
-    idx = PITCH_CLASSES.index(norm_root)
+    letter = m.group(1).upper()
+    acc_str = m.group(2).replace("♯", "#").replace("♭", "b")
+    acc = 1 if acc_str == "#" else (-1 if acc_str == "b" else 0)
+    raw_pc = _LETTER_PC[letter] + acc
     oct_str = m.group(3)
     if oct_str is None:
-        return PITCH_CLASSES[(idx + semi) % 12]
-    midi = (int(oct_str) + 1) * 12 + idx + semi
+        return PITCH_CLASSES[(raw_pc + semi) % 12]
+    midi = (int(oct_str) + 1) * 12 + raw_pc + semi
     return f"{PITCH_CLASSES[midi % 12]}{(midi // 12) - 1}"
 
 
@@ -117,7 +128,7 @@ def transpose_chord_symbol(chord_name: str, semitones: int) -> str:
     suffix = (m.group(3) or "").strip()
     if norm_root is None:
         return raw
-    s_low = suffix.lower()
+    s_low = _normalize_chord_quality(suffix)
     if suffix not in _CHORD_INTERVALS and s_low not in _CHORD_INTERVALS and s_low not in _EXTRA_CHORD_SUFFIXES:
         return raw
 
@@ -157,7 +168,7 @@ def format_key_display(key_label: str) -> str:
 
 
 def spell_chord_tones(chord_name: str) -> str:
-    """Return chromatic note spelling (e.g. `'A · C · E'`) for detected chord symbols, or `'-'`."""
+    """Return diatonic note spelling (e.g. `'A · C · E'`, `'F · Ab · C'`) for detected chord symbols, or `'-'`."""
     raw = (chord_name or "").strip()
     if not raw or raw in ("-", "N", "N (静音)", "Unknown", "结束"):
         return "-"
@@ -165,19 +176,40 @@ def spell_chord_tones(chord_name: str) -> str:
     m = _CHORD_RE.match(base)
     if not m:
         return "-"
-    norm_root = _normalize_pitch_token(m.group(1) + m.group(2))
+    root_letter = m.group(1).upper()
+    acc_str = m.group(2).replace("♯", "#").replace("♭", "b")
+    norm_root = _normalize_pitch_token(root_letter + acc_str)
     suffix = (m.group(3) or "").strip()
     if norm_root is None:
         return "-"
 
     intervals = _CHORD_INTERVALS.get(suffix)
     if intervals is None:
-        intervals = _CHORD_INTERVALS.get(suffix.lower())
+        intervals = _CHORD_INTERVALS.get(_normalize_chord_quality(suffix))
     if intervals is None:
         return "-"
 
-    root_idx = PITCH_CLASSES.index(norm_root)
-    return " · ".join(PITCH_CLASSES[(root_idx + iv) % 12] for iv in intervals)
+    root_acc = 1 if acc_str == "#" else (-1 if acc_str == "b" else 0)
+    root_pc = (_LETTER_PC[root_letter] + root_acc) % 12
+    root_letter_idx = _LETTERS.index(root_letter)
+    spelled: list[str] = []
+    for iv in intervals:
+        target_pc = (root_pc + iv) % 12
+        letter_off = _IV_LETTER.get(iv)
+        if letter_off is None:
+            spelled.append(PITCH_CLASSES[target_pc])
+            continue
+        note_letter = _LETTERS[(root_letter_idx + letter_off) % 7]
+        diff = (target_pc - _LETTER_PC[note_letter]) % 12
+        if diff == 0:
+            spelled.append(note_letter)
+        elif diff == 1:
+            spelled.append(f"{note_letter}#")
+        elif diff == 11:
+            spelled.append(f"{note_letter}b")
+        else:
+            spelled.append(PITCH_CLASSES[target_pc])
+    return " · ".join(spelled)
 
 
 def _build_chord_templates(*, include_sevenths: bool = False) -> tuple[list[str], np.ndarray]:

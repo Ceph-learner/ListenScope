@@ -58,14 +58,18 @@ class PitchEstimator:
         if prominence < 0.15:
             return PitchEstimate(frequency_hz=None, note_name="Unknown", cents_offset=0.0, confidence=prominence)
 
-        # Parabolic interpolation around peak bin (clamped strictly to +/- 0.5 bin)
-        alpha = float(score[rel_idx - 1])
-        beta = peak_val
-        gamma = float(score[rel_idx + 1])
-        denom = alpha - 2.0 * beta + gamma
-        raw_delta = 0.5 * (alpha - gamma) / denom if abs(denom) > 1e-9 else 0.0
-        delta = max(-0.5, min(0.5, raw_delta))
-        freq = float((peak_bin + delta) * self._bin_hz)
+        # Locate local fundamental peak and interpolate log-magnitude around it
+        lo = max(0, peak_bin - 1)
+        hi = min(fft_mag.shape[0], peak_bin + 2)
+        k = lo + int(np.argmax(fft_mag[lo:hi]))
+        if 1 <= k < fft_mag.shape[0] - 1:
+            a, b, c = np.log(np.maximum(fft_mag[k - 1 : k + 2], 1e-12))
+            denom = float(a - 2.0 * b + c)
+            raw_delta = 0.5 * float(a - c) / denom if abs(denom) > 1e-9 else 0.0
+            delta = max(-0.5, min(0.5, raw_delta))
+        else:
+            delta = 0.0
+        freq = float((k + delta) * self._bin_hz)
         if not np.isfinite(freq) or freq <= 0.0:
             return PitchEstimate(frequency_hz=None, note_name="-", cents_offset=0.0, confidence=0.0)
 
