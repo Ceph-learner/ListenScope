@@ -1845,7 +1845,7 @@ class ListenScopeController:
                     self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)
                     if self.hardware_report.gpu_ai_ready:
                         self.window.show_banner_message(
-                            f"✅ 独立 AI 环境已通过 RTX 5060 Ti / CUDA / ONNX 检测，GPU AI 推理已解锁。"
+                            "✅ 独立 AI 环境已通过 GPU / CUDA / ONNX 检测，GPU AI 推理已解锁。"
                         )
             except queue.Empty:
                 break

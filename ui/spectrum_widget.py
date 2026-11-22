@@ -207,12 +207,15 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                 p.hideButtons()
             except Exception:
                 pass
+        from core.config import AnalysisConfig
+
+        spec_hist_sec = int(AnalysisConfig().spectrum_history_seconds)
         self._chart_cards = tuple(
             self._chart_card(tag, name, unit, plot)
             for tag, name, unit, plot in zip(
                 ("CH-01", "CH-02", "CH-03", "CH-04"),
                 ("实时波形", "FFT 频谱", "频带能量", "最近时频图"),
-                ("AMP", "dBFS", "LOG BANDS", "120S HISTORY"),
+                ("AMP", "dBFS", "LOG BANDS", f"{spec_hist_sec}S HISTORY"),
                 self._plots,
             )
         )

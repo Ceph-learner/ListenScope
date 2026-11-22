@@ -60,7 +60,7 @@ from analysis.chords import format_key_display as _format_key_display
 class TuningCentsBar(QtWidgets.QWidget):
     """Lightweight horizontal -50c..+50c pitch-accuracy needle indicator with smooth glide animation."""
 
-    COLOR_IN_TUNE = "#00A878"
+    COLOR_IN_TUNE = "#007A57"
     COLOR_SLIGHT = "#0284C7"
     COLOR_OFF = "#EF4444"
     COLOR_IDLE = "#64748B"
@@ -590,7 +590,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chroma_bar_plot.addItem(self._bar_item)
         splitter.addWidget(self.chroma_bar_plot)
 
-        self.chroma_hist_plot = pg.PlotWidget(title="CHROMA HEATMAP // 有界时序热图 (120s)")
+        self.chroma_hist_plot = pg.PlotWidget(title="CHROMA HEATMAP // 有界时序热图 (30s)")
         self.chroma_hist_plot.setMinimumHeight(60)
         try:
             self.chroma_hist_plot.hideButtons()

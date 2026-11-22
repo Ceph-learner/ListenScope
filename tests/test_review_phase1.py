@@ -438,11 +438,11 @@ def test_ub04_practice_shortcuts_do_not_rely_solely_on_ctrl_space() -> None:
     _qapp()
     from audio.playback import StemMixerEngine
     from core.config import AIConfig, ResourceLimits
-    from core.system_probe import probe_system_hardware
+    from core.system_probe import probe_system
     from ui.main_window import ListenScopeMainWindow
 
     mw = ListenScopeMainWindow(
-        hardware_report=probe_system_hardware(),
+        hardware_report=probe_system(),
         resource_limits=ResourceLimits(),
         ai_config=AIConfig(),
         mixer_engine=StemMixerEngine(),
@@ -480,18 +480,17 @@ def test_ub05_tuning_cents_bar_matches_5c_20c_thresholds_and_amber_slight_color(
         bar.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B06")
 def test_ub06_banner_label_roundtrip_zh_en_zh_preserves_original_text() -> None:
     """show_banner_message must store Chinese original in _ls_orig_text, not translated text."""
     _qapp()
     from audio.playback import StemMixerEngine
     from core.config import AIConfig, ResourceLimits
     from core.i18n import set_current_language
-    from core.system_probe import probe_system_hardware
+    from core.system_probe import probe_system
     from ui.main_window import ListenScopeMainWindow
 
     mw = ListenScopeMainWindow(
-        hardware_report=probe_system_hardware(),
+        hardware_report=probe_system(),
         resource_limits=ResourceLimits(),
         ai_config=AIConfig(),
         mixer_engine=StemMixerEngine(),
@@ -507,7 +506,6 @@ def test_ub06_banner_label_roundtrip_zh_en_zh_preserves_original_text() -> None:
         mw.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B09")
 def test_ub09_translate_widget_tree_translates_qaction_tooltip_and_accessible_name() -> None:
     """translate_widget_tree must translate QAction, toolTip, and accessibleName."""
     _qapp()
@@ -529,18 +527,17 @@ def test_ub09_translate_widget_tree_translates_qaction_tooltip_and_accessible_na
         root.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B10")
 def test_ub10_non_acid_capture_button_uses_i18n() -> None:
     """In non-acid themes, set_capture_active_ui must translate capture_btn text when lang='en'."""
     _qapp()
     from audio.playback import StemMixerEngine
     from core.config import AIConfig, ResourceLimits
     from core.i18n import set_current_language
-    from core.system_probe import probe_system_hardware
+    from core.system_probe import probe_system
     from ui.main_window import ListenScopeMainWindow
 
     mw = ListenScopeMainWindow(
-        hardware_report=probe_system_hardware(),
+        hardware_report=probe_system(),
         resource_limits=ResourceLimits(),
         ai_config=AIConfig(),
         mixer_engine=StemMixerEngine(),
@@ -556,17 +553,16 @@ def test_ub10_non_acid_capture_button_uses_i18n() -> None:
         mw.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B11")
 def test_ub11_gpu_checkbox_does_not_hardcode_rtx_5060_ti() -> None:
     """UI GPU checkbox and help text should reflect detected GPU rather than hardcoding RTX 5060 Ti."""
     _qapp()
     from audio.playback import StemMixerEngine
     from core.config import AIConfig, ResourceLimits
     from core.models import GPUInfo
-    from core.system_probe import probe_system_hardware
+    from core.system_probe import probe_system
     from ui.main_window import ListenScopeMainWindow
 
-    hw = probe_system_hardware()
+    hw = probe_system()
     hw.gpus = [GPUInfo(index=0, name="NVIDIA GeForce RTX 4070", total_vram_mb=12288.0, used_vram_mb=1024.0, free_vram_mb=11264.0)]
     mw = ListenScopeMainWindow(
         hardware_report=hw,
@@ -588,12 +584,12 @@ def test_ub12_settings_and_appearance_dialogs_do_not_leak_children(monkeypatch: 
     _qapp()
     from audio.playback import StemMixerEngine
     from core.config import AIConfig, ResourceLimits
-    from core.system_probe import probe_system_hardware
+    from core.system_probe import probe_system
     from ui.main_window import ListenScopeMainWindow
     from ui.settings_dialog import SettingsDialog
 
     mw = ListenScopeMainWindow(
-        hardware_report=probe_system_hardware(),
+        hardware_report=probe_system(),
         resource_limits=ResourceLimits(),
         ai_config=AIConfig(),
         mixer_engine=StemMixerEngine(),
@@ -610,7 +606,6 @@ def test_ub12_settings_and_appearance_dialogs_do_not_leak_children(monkeypatch: 
         mw.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B16")
 def test_ub16_light_theme_primary_button_and_in_tune_meet_wcag_aa() -> None:
     """Light theme primary button text/bg contrast must be >= 4.5:1 (WCAG AA normal text)."""
     from ui.acid_style import get_acid_palette
@@ -626,11 +621,11 @@ def test_ub20_maximize_button_syncs_on_system_window_state_change() -> None:
     _qapp()
     from audio.playback import StemMixerEngine
     from core.config import AIConfig, ResourceLimits
-    from core.system_probe import probe_system_hardware
+    from core.system_probe import probe_system
     from ui.main_window import ListenScopeMainWindow
 
     mw = ListenScopeMainWindow(
-        hardware_report=probe_system_hardware(),
+        hardware_report=probe_system(),
         resource_limits=ResourceLimits(),
         ai_config=AIConfig(),
         mixer_engine=StemMixerEngine(),
@@ -651,11 +646,11 @@ def test_ub21_win32_icon_handles_not_reloaded_every_show_event(monkeypatch: pyte
     _qapp()
     from audio.playback import StemMixerEngine
     from core.config import AIConfig, ResourceLimits
-    from core.system_probe import probe_system_hardware
+    from core.system_probe import probe_system
     from ui.main_window import ListenScopeMainWindow
 
     mw = ListenScopeMainWindow(
-        hardware_report=probe_system_hardware(),
+        hardware_report=probe_system(),
         resource_limits=ResourceLimits(),
         ai_config=AIConfig(),
         mixer_engine=StemMixerEngine(),
@@ -724,7 +719,6 @@ def test_ub24_log_panel_preserves_scroll_position_when_user_scrolled_up() -> Non
         w.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B25")
 def test_ub25_spectrogram_and_chroma_history_duration_labels_match_actual_30s() -> None:
     """Spectrogram card unit must match actual spectrum_history_seconds (30s), not '120S HISTORY'."""
     _qapp()
@@ -742,7 +736,6 @@ def test_ub25_spectrogram_and_chroma_history_duration_labels_match_actual_30s() 
         w.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B28")
 def test_ub28_i18n_has_no_mixed_scripts_and_no_conflicting_duplicate_keys() -> None:
     """ja must contain no Hangul (メ트로ノーム bug), and UI_PHRASE_MAP/EXTRA_PHRASE_MAP must not conflict."""
     from core import i18n, i18n_catalog
@@ -759,7 +752,6 @@ def test_ub28_i18n_has_no_mixed_scripts_and_no_conflicting_duplicate_keys() -> N
     )
 
 
-@pytest.mark.xfail(strict=True, reason="U-B29")
 def test_ub29_dark_theme_status_warn_is_amber_not_cyan() -> None:
     """Dark theme status_warn_fg must be distinct amber (R > B), not cyan #77DCE4."""
     from ui.acid_style import get_acid_palette

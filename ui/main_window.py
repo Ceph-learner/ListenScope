@@ -996,7 +996,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ai_2stem_combo.setMinimumContentsLength(18)
         self.ai_2stem_combo.setMaximumWidth(300)
         self._refresh_model_combos()
-        self.ai_gpu_chk = QtWidgets.QCheckBox("优先 GPU (需通过 RTX 5060 Ti 检查)")
+        self.ai_gpu_chk = QtWidgets.QCheckBox("优先 GPU")
         self.update_hardware_report(hardware_report, auto_sync_gpu_chk=True)
 
         self.segment_spin = QtWidgets.QSpinBox()
@@ -1020,7 +1020,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             HelpBadge(
                 "8GB 显存防护与分轨模型",
                 "AI 分轨全部在独立子进程执行，按 6s 分块逐段流式推理并自动清理中间缓存；"
-                "若 RTX 5060 Ti (8GB VRAM) 或 16GB 系统内存接近保护阈值，将自动拦截或停止以保护播放器不卡顿。",
+                "若 GPU 显存或系统内存接近保护阈值，将自动拦截或停止以保护播放器不卡顿。",
             )
         )
         row_b.addStretch(1)
@@ -1794,6 +1794,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             )
         install_focus_animations(self)
         translate_widget_tree(self, appearance.language)
+        if self._tray_icon is not None and self._tray_icon.contextMenu() is not None:
+            translate_widget_tree(self._tray_icon.contextMenu(), appearance.language)
         # Re-apply Acid telemetry tab/header labels so fixed English + single localized caption stays crisp
         self._sync_acid_chrome(variant in ("light", "dark"), variant)
         if was_visible and saved_geom is not None and saved_geom.isValid() and not self.isMaximized():
@@ -1987,7 +1989,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 try:
                     self._tray_icon.showMessage(
                         "ListenScope",
-                        "已最小化到系统托盘，双击图标可恢复主窗口（可在「外观与字体」中关闭此项）。",
+                        translate_text(
+                            "已最小化到系统托盘，双击图标可恢复主窗口（可在「外观与字体」中关闭此项）。",
+                            get_current_language(),
+                        ),
                         QtWidgets.QSystemTrayIcon.MessageIcon.Information,
                         2500,
                     )
@@ -2018,10 +2023,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         auto_sync_gpu_chk: bool = False,
     ) -> None:
         self._hardware_report = report
-        if report.gpu_ai_ready:
-            self.ai_gpu_chk.setText("优先 GPU")
+        gpus = getattr(report, "gpus", None) or []
+        if gpus:
+            gpu = gpus[0]
+            vram_gb = gpu.total_vram_mb / 1024.0
+            chk_text = f"优先 GPU ({gpu.name} · {vram_gb:.0f} GB)"
         else:
-            self.ai_gpu_chk.setText("优先 GPU（未就绪）")
+            chk_text = "优先 GPU (未检测到可用 NVIDIA GPU)"
+        self.ai_gpu_chk.setProperty("_ls_orig_text", chk_text)
+        self.ai_gpu_chk.setText(translate_text(chk_text, get_current_language()))
         if auto_sync_gpu_chk:
             self.ai_gpu_chk.setChecked(bool(report.gpu_ai_ready))
 
@@ -2253,7 +2263,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
     def set_capture_active_ui(self, active: bool) -> None:
         is_acid = self._acid_variant in ("light", "dark")
-        lang = getattr(getattr(self, "appearance", Appearance()), "language", "zh")
+        lang = get_current_language()
         self.capture_btn.blockSignals(True)
         self.capture_btn.setChecked(active)
         self._capture_dot.set_active(active)
@@ -2264,15 +2274,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 else tr_telemetry("CAPTURE_START", lang, zh="开始捕获", ko="캡처 시작", ja="キャプチャ開始")
             )
         else:
-            self.capture_btn.setText("停止捕获" if active else "开始捕获")
+            self.capture_btn.setText(translate_text("停止捕获" if active else "开始捕获", lang))
         self.capture_btn.blockSignals(False)
         if not active:
             self._last_capture_banner = None
             set_widget_tone(self.capture_status_lbl, "info")
-            idle_txt = translate_text("未捕获", lang)
-            self.capture_status_lbl.setProperty("_ls_orig_text", "未捕获")
-            _set_label_cached(self.capture_status_lbl, idle_txt)
-            self._last_capture_status_txt = idle_txt
+            _set_label_cached(self.capture_status_lbl, "未捕获")
+            self._last_capture_status_txt = self.capture_status_lbl.text()
 
     def dismiss_banner(self) -> None:
         self._last_capture_banner = None
@@ -2293,8 +2301,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             resolved_tone = tone if tone is not None else _infer_banner_tone(text)
             set_widget_tone(self._notice_bar, resolved_tone)
             set_widget_tone(self.notice_banner, resolved_tone)
-            self.notice_banner.setProperty("_ls_orig_text", text)
-            _set_label_cached(self.notice_banner, translate_text(text, get_current_language()))
+            _set_label_cached(self.notice_banner, text)
             if not self.notice_banner.isVisible():
                 self.notice_banner.setVisible(True)
             if not self._notice_bar.isVisible():
