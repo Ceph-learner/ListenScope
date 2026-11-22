@@ -49,6 +49,9 @@ jobs:
             requirements-windows.txt
 
       - name: Resolve application version
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           $pyVersion = python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text('utf-8'))['project']['version'])"
           $pyVersion = $pyVersion.Trim()
@@ -56,8 +59,8 @@ jobs:
             throw "Failed to read project.version from pyproject.toml"
           }
           $tagName = "${{ github.ref_name }}"
-          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.release_tag }}".Trim()) {
-            $tagName = "${{ inputs.release_tag }}".Trim()
+          if ($env:EVENT_NAME -eq "workflow_dispatch" -and "$env:RELEASE_TAG_INPUT".Trim()) {
+            $tagName = "$env:RELEASE_TAG_INPUT".Trim()
           }
           if ($tagName -match '^v(\d+\.\d+\.\d+(?:[-+].+)?)$') {
             $tagVersion = $Matches[1]

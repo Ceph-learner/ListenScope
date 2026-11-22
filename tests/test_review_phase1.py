@@ -104,7 +104,6 @@ def test_e1_mdx_separator_44k_output_preserves_pitch_and_duration(tmp_path: Path
     assert abs(peak_hz - 440.0) < 5.0, f"Pitch shifted to {peak_hz:.1f} Hz due to missing 44.1k->48k resample"
 
 
-@pytest.mark.xfail(strict=True, reason="E5")
 def test_e5_system_loopback_retries_up_to_max_device_reconnects() -> None:
     """If the first reconnect open fails, SystemLoopback must retry up to max_device_reconnects."""
     from audio.system_loopback import WasapiSystemLoopbackBackend
@@ -162,11 +161,10 @@ def test_e5_system_loopback_retries_up_to_max_device_reconnects() -> None:
     # Speed up wait
     backend._stop_event.wait = lambda timeout=None: backend._stop_event.is_set()  # type: ignore[method-assign]
 
-    backend._capture_loop(48000, 2, 480, "float32")
+    backend._capture_loop(dev_info, 480, "float32")
     assert open_attempts["count"] >= 2, f"Only tried {open_attempts['count']} reconnect before exiting loop"
 
 
-@pytest.mark.xfail(strict=True, reason="E9")
 def test_e9_diagnostics_sanitizes_json_escaped_windows_home_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """JSON-escaped Windows paths (C:\\\\Users\\\\Alice) must be sanitized inside diagnostic zip."""
     from core import diagnostics
@@ -180,7 +178,6 @@ def test_e9_diagnostics_sanitizes_json_escaped_windows_home_paths(tmp_path: Path
     assert json.dumps(fake_home)[1:-1] not in sanitized
 
 
-@pytest.mark.xfail(strict=True, reason="E10")
 def test_e10_pyproject_toml_dependencies_under_project_table() -> None:
     """PEP 621: dependencies must live under [project], not [project.urls], and include sounddevice."""
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text("utf-8"))
@@ -191,7 +188,6 @@ def test_e10_pyproject_toml_dependencies_under_project_table() -> None:
     assert any(d.lower().startswith("sounddevice") for d in project["dependencies"])
 
 
-@pytest.mark.xfail(strict=True, reason="E13")
 def test_e13_output_stream_oserror_resets_playing_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """When importing sounddevice raises OSError (missing PortAudio), _is_playing must reset to False."""
     from audio.metronome import PracticeMetronome
@@ -218,7 +214,6 @@ def test_e13_output_stream_oserror_resets_playing_state(monkeypatch: pytest.Monk
     assert met.standalone_playing is False
 
 
-@pytest.mark.xfail(strict=True, reason="E19")
 def test_e19_mirror_downloader_rejects_truncated_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """If server closes early with total_rx < Content-Length and no sha256, downloader must raise."""
     from scripts import mirror_wheel_fetch as mwf
@@ -246,7 +241,7 @@ def test_e19_mirror_downloader_rejects_truncated_response(tmp_path: Path, monkey
     dest = tmp_path / "torch-fake.whl"
 
     with pytest.raises((mwf._SlowMirrorError, RuntimeError)):
-        mwf._download_with_monitor(
+        mwf._download_with_speed_guard(
             url="https://example.invalid/torch-fake.whl",
             dest=dest,
             expected_sha256="",
@@ -262,7 +257,6 @@ def test_e19_mirror_downloader_rejects_truncated_response(tmp_path: Path, monkey
     assert not dest.exists()
 
 
-@pytest.mark.xfail(strict=True, reason="E20")
 def test_e20_release_workflow_avoids_inline_expression_injection() -> None:
     """release-windows.yml must pass inputs.release_tag via env:, not inline ${{ inputs.release_tag }} in run."""
     yml = (REPO_ROOT / ".github" / "workflows" / "release-windows.yml").read_text("utf-8")

@@ -247,6 +247,10 @@ def _download_with_speed_guard(
                     )
                     last_emit = now
 
+    if total_size > 0 and total_rx != total_size:
+        part.unlink(missing_ok=True)
+        raise _SlowMirrorError(f"{mirror_label} 下载不完整 ({total_rx}/{total_size} bytes)")
+
     if expected_sha256 and hasher is not None:
         actual = hasher.hexdigest().lower()
         if actual != expected_sha256.lower():

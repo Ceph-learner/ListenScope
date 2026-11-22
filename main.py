@@ -951,7 +951,7 @@ class ListenScopeController:
             self.ab_player.pause()
             self.mixer_engine.pause()
             self.live_separator.close_output_stream()
-            self.metronome.start_standalone(open_audio_device=True)
+            self.metronome.start_standalone(open_audio_device=not self.use_mock_ai_for_demo)
             self.window.chroma_widget.sync_metronome_ui(standalone_playing=True)
             self.window.show_banner_message(
                 f"✅ 纯 CPU 独立练习节拍器已开启 ({self.metronome.bpm:.1f} BPM, {self.metronome.beats_per_bar} 拍/小节)。"
