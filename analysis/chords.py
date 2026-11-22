@@ -183,9 +183,10 @@ def spell_chord_tones(chord_name: str) -> str:
     if norm_root is None:
         return "-"
 
+    quality = _normalize_chord_quality(suffix)
     intervals = _CHORD_INTERVALS.get(suffix)
     if intervals is None:
-        intervals = _CHORD_INTERVALS.get(_normalize_chord_quality(suffix))
+        intervals = _CHORD_INTERVALS.get(quality)
     if intervals is None:
         return "-"
 
@@ -195,7 +196,7 @@ def spell_chord_tones(chord_name: str) -> str:
     spelled: list[str] = []
     for iv in intervals:
         target_pc = (root_pc + iv) % 12
-        letter_off = _IV_LETTER.get(iv)
+        letter_off = 4 if (quality == "aug" and iv == 8) else _IV_LETTER.get(iv)
         if letter_off is None:
             spelled.append(PITCH_CLASSES[target_pc])
             continue

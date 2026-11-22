@@ -83,6 +83,8 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
     "FFT 频谱": {"en": "FFT Spectrum", "ko": "FFT 스펙트럼", "ja": "FFT スペクトル"},
     "频带能量": {"en": "Band Energy", "ko": "대역 에너지", "ja": "帯域エネルギー"},
     "最近时频图": {"en": "Recent Spectrogram", "ko": "최근 스펙트로그램", "ja": "直近スペクトログラム"},
+    "时间 (s)": {"en": "Time (s)", "ko": "시간 (s)", "ja": "時間 (s)"},
+    "频率 (Hz)": {"en": "Frequency (Hz)", "ko": "주파수 (Hz)", "ja": "周波数 (Hz)"},
     "平均电平 · RMS": {"en": "AVG LEVEL · RMS", "ko": "평균 레벨 · RMS", "ja": "平均レベル · RMS"},
     "峰值电平": {"en": "PEAK LEVEL", "ko": "피크 레벨", "ja": "ピークレベル"},
     "主音高": {"en": "MAIN PITCH", "ko": "기본 음고", "ja": "基本ピッチ"},

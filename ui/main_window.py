@@ -726,9 +726,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         self._shortcut_pill = QtWidgets.QLabel("SPACE // 快捷键")
         self._shortcut_pill.setObjectName("telemetryPill")
-        self._shortcut_pill.setToolTip(
-            "快捷键: Space 播放/暂停 | L 循环 | [/] 设A/B | -/=/0 调速 | T 测速 | M 节拍器 | Ctrl+B 书签"
-        )
         self._skin_badge = QtWidgets.QLabel("ACID // CLINICAL_LIGHT")
         self._skin_badge.setObjectName("telemetryPill")
 

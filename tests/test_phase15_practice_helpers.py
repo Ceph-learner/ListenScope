@@ -50,12 +50,12 @@ def test_spell_chord_tones_comprehensive() -> None:
     assert spell_chord_tones("Bdim") == "B · D · F"
     assert spell_chord_tones("Caug") == "C · E · G#"
 
-    # Flats & enharmonic normalization
-    assert spell_chord_tones("Db") == "C# · F · G#"
-    assert spell_chord_tones("Bbm") == "A# · C# · F"
-    assert spell_chord_tones("Eb7") == "D# · G · A# · C#"
-    assert spell_chord_tones("Cb") == "B · D# · F#"
-    assert spell_chord_tones("E#m") == "F · G# · C"
+    # Flats & enharmonic normalization (diatonic letter spelling)
+    assert spell_chord_tones("Db") == "Db · F · Ab"
+    assert spell_chord_tones("Bbm") == "Bb · Db · F"
+    assert spell_chord_tones("Eb7") == "Eb · G · Bb · Db"
+    assert spell_chord_tones("Cb") == "Cb · Eb · Gb"
+    assert spell_chord_tones("E#m") == "E# · G# · B#"
 
     # Slash chords & empty/unknown tokens
     assert spell_chord_tones("C/G") == "C · E · G"
@@ -111,7 +111,7 @@ def test_tuning_cents_bar_and_chroma_widget_sync() -> None:
         chord=ChordEstimate(primary="Am7", secondary="C", stability="High", correlation=0.91, margin=0.14),
         key=KeyEstimate(primary="C major", secondary="A minor", stability="Moderate", correlation=0.82, margin=0.09),
         tempo=TempoEstimate(bpm=124.0, stability="Moderate", confidence_score=0.68),
-        pitch=PitchEstimate(frequency_hz=442.0, note_name="A4", cents_offset=+7.9, confidence=0.92),
+        pitch=PitchEstimate(frequency_hz=441.0, note_name="A4", cents_offset=+3.5, confidence=0.92),
         rms_dbfs=-18.0,
         peak_dbfs=-10.0,
         window_seconds=2.0,

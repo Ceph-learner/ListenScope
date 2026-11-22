@@ -161,6 +161,9 @@ class TuningCentsBar(QtWidgets.QWidget):
         if frequency_hz is None:
             if not self._has_signal and self._cents == 0.0:
                 return
+            self._has_signal = False
+            self._zone = "idle"
+            self._cents = 0.0
             if self.isVisible() and not self._hold_timer.isActive():
                 self._hold_timer.start(350)
             else:
@@ -170,6 +173,9 @@ class TuningCentsBar(QtWidgets.QWidget):
         if not math.isfinite(freq) or freq <= 0.0:
             if not self._has_signal and self._cents == 0.0:
                 return
+            self._has_signal = False
+            self._zone = "idle"
+            self._cents = 0.0
             if self.isVisible() and not self._hold_timer.isActive():
                 self._hold_timer.start(350)
             else:

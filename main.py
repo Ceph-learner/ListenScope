@@ -343,6 +343,7 @@ class ListenScopeController:
         )
         if getattr(saved_settings, "window_geometry", ""):
             self.window.restore_saved_geometry(saved_settings.window_geometry)
+        self.window.mixer_widget._open_audio_device = not self.use_mock_ai_for_demo
         self.metronome.set_bpm(saved_settings.metronome_bpm)
         self.metronome.set_beats_per_bar(saved_settings.metronome_beats_per_bar)
         self.metronome.set_volume(saved_settings.metronome_volume)
@@ -1076,7 +1077,7 @@ class ListenScopeController:
                 self.mixer_engine.pause()
             elif self.mixer_engine.max_frames > 0:
                 self._on_mixer_before_play()
-                self.mixer_engine.play(open_audio_device=True)
+                self.mixer_engine.play(open_audio_device=not self.use_mock_ai_for_demo)
         else:
             if self.ab_player.is_playing:
                 self.ab_player.pause()
