@@ -137,18 +137,31 @@ class DemucsSeparatorBackend(SeparationBackend):
         self._tmp_root = tempfile.TemporaryDirectory(prefix="ls_demucs_", dir=self.output_dir)
         chunk_out_dir = Path(self._tmp_root.name) / "out"
         chunk_out_dir.mkdir(parents=True, exist_ok=True)
-        self._separator = Separator(
-            output_dir=str(chunk_out_dir),
-            output_format="WAV",
-            use_soundfile=True,
-            use_autocast=bool(self.use_gpu),
-            demucs_params={
+        import inspect
+
+        sep_kwargs: dict[str, Any] = {
+            "output_dir": str(chunk_out_dir),
+            "output_format": "WAV",
+            "use_soundfile": True,
+            "use_autocast": bool(self.use_gpu),
+            "demucs_params": {
                 "segment_size": int(self.segment_seconds),
                 "shifts": int(self.ai_config.demucs_shifts),  # Strict shifts=1
                 "overlap": float(self.overlap),
                 "segments_enabled": True,
             },
-        )
+        }
+        try:
+            sig = inspect.signature(Separator.__init__)
+            if "sample_rate" in sig.parameters:
+                sep_kwargs["sample_rate"] = 48000
+            if "normalization_threshold" in sig.parameters:
+                sep_kwargs["normalization_threshold"] = 1.0
+            if "amplification_threshold" in sig.parameters:
+                sep_kwargs["amplification_threshold"] = 0.0
+        except Exception:
+            pass
+        self._separator = Separator(**sep_kwargs)
         self._separator.load_model(model_filename=self.model_spec.separator_filename)
         self._mode = "audio_separator"
         self._loaded = True
@@ -302,8 +315,11 @@ class DemucsSeparatorBackend(SeparationBackend):
                 matched = next((p for p in resolved if stem.lower() in p.name.lower()), None)
                 if matched is None or not matched.exists():
                     raise RuntimeError(f"Demucs 分块输出缺少 '{stem}': {resolved}")
-                arr, _ = _read_wav_f32(matched, target_frames=target_frames)
-                stems[stem] = arr
+                arr, out_sr = _read_wav_f32(matched)
+                if out_sr != sample_rate:
+                    arr = _resample_chunk(arr, out_sr, sample_rate)
+                from .mdx_backend import _fit_frames
+                stems[stem] = _fit_frames(arr, target_frames)
             return stems
         finally:
             in_wav.unlink(missing_ok=True)

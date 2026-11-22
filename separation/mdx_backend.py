@@ -77,12 +77,29 @@ def _read_wav_f32(path: Path, target_frames: Optional[int] = None) -> tuple[np.n
         arr = arr[:, :2]
 
     if target_frames is not None:
-        if arr.shape[0] > target_frames:
-            arr = arr[:target_frames]
-        elif arr.shape[0] < target_frames:
-            pad = np.zeros((target_frames - arr.shape[0], 2), dtype=np.float32)
-            arr = np.vstack([arr, pad])
+        arr = _fit_frames(arr, target_frames)
     return arr.astype(np.float32, copy=False), int(sr)
+
+
+def _fit_frames(arr: np.ndarray, target_frames: int) -> np.ndarray:
+    if arr.shape[0] > target_frames:
+        return arr[:target_frames]
+    if arr.shape[0] < target_frames:
+        pad = np.zeros((target_frames - arr.shape[0], 2), dtype=np.float32)
+        return np.vstack([arr, pad])
+    return arr
+
+
+def _resample_chunk(pcm_f32: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
+    if src_rate == dst_rate or pcm_f32.shape[0] == 0:
+        return pcm_f32.astype(np.float32, copy=False)
+    from math import gcd
+    from scipy.signal import resample_poly
+
+    g = gcd(int(src_rate), int(dst_rate))
+    up = int(dst_rate) // g
+    down = int(src_rate) // g
+    return resample_poly(pcm_f32, up, down, axis=0).astype(np.float32, copy=False)
 
 
 def _match_2stem_output(output_files: list[str | Path], expected_stems: tuple[str, ...]) -> dict[str, Path]:
@@ -206,14 +223,19 @@ class MDXSeparatorBackend(SeparationBackend):
                 "pitch_shift": 0,
             }
 
-        if self._using_directml:
-            import inspect
-            try:
-                sig = inspect.signature(Separator.__init__)
-                if "use_directml" in sig.parameters:
-                    kwargs["use_directml"] = True
-            except Exception:
-                pass
+        import inspect
+        try:
+            sig = inspect.signature(Separator.__init__)
+            if "sample_rate" in sig.parameters:
+                kwargs["sample_rate"] = 48000
+            if "normalization_threshold" in sig.parameters:
+                kwargs["normalization_threshold"] = 1.0
+            if "amplification_threshold" in sig.parameters:
+                kwargs["amplification_threshold"] = 0.0
+            if self._using_directml and "use_directml" in sig.parameters:
+                kwargs["use_directml"] = True
+        except Exception:
+            pass
         try:
             separator = Separator(**kwargs)
             separator.load_model(model_filename=self.model_spec.separator_filename)
@@ -267,8 +289,10 @@ class MDXSeparatorBackend(SeparationBackend):
             for stem_name in self.model_spec.stems:
                 if stem_name not in mapped or not mapped[stem_name].exists():
                     raise RuntimeError(f"MDX 分块分离缺少输出音轨 '{stem_name}' (输出: {resolved})")
-                arr, _ = _read_wav_f32(mapped[stem_name], target_frames=target_frames)
-                stems[stem_name] = arr
+                arr, out_sr = _read_wav_f32(mapped[stem_name])
+                if out_sr != sample_rate:
+                    arr = _resample_chunk(arr, out_sr, sample_rate)
+                stems[stem_name] = _fit_frames(arr, target_frames)
             return stems
         except Exception as exc:
             release_torch_and_memory()

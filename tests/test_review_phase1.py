@@ -62,22 +62,24 @@ def _wcag_contrast(fg_hex: str, bg_hex: str) -> float:
 # ============================================================================
 
 
-@pytest.mark.xfail(strict=True, reason="E1")
 def test_e1_mdx_separator_44k_output_preserves_pitch_and_duration(tmp_path: Path) -> None:
     """NEEDS_TARGET contract test: a 44.1kHz output from audio-separator must be resampled back to 48kHz."""
-    from separation.mdx_backend import MdxOnnxTwoStemBackend
+    from ai.models import MODEL_REGISTRY
+    from separation.mdx_backend import MDXSeparatorBackend
 
     sr_in = 48000
     sr_out = 44100
     dur = 0.5
     t_in = np.arange(int(sr_in * dur), dtype=np.float32) / sr_in
     in_pcm = np.stack([0.4 * np.sin(2 * np.pi * 440.0 * t_in)] * 2, axis=1).astype(np.float32)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     class _Fake44kSeparator:
         def __init__(self, out_dir: Path) -> None:
             self._out_dir = out_dir
 
-        def separate(self, _in_wav: str) -> list[str]:
+        def separate(self, _in_wav: str, _output_names=None) -> list[str]:
             # Simulates audio-separator default sample_rate=44100 output
             t_out = np.arange(int(sr_out * dur), dtype=np.float32) / sr_out
             sine440 = np.stack([0.4 * np.sin(2 * np.pi * 440.0 * t_out)] * 2, axis=1).astype(np.float32)
@@ -87,11 +89,11 @@ def test_e1_mdx_separator_44k_output_preserves_pitch_and_duration(tmp_path: Path
             _write_wav_pcm16(i_path, sine440 * 0.5, sr_out)
             return [str(v_path), str(i_path)]
 
-    backend = MdxOnnxTwoStemBackend()
-    backend._tmp_root = tmp_path
+    spec = next(m for m in MODEL_REGISTRY.values() if m.architecture == "MDX-ONNX" and m.stem_mode == "2stem")
+    backend = MDXSeparatorBackend(spec)
+    backend._tmp_root = types.SimpleNamespace(name=str(tmp_path))  # type: ignore[assignment]
     backend._loaded = True
-    backend._mode = "audio_separator"
-    backend._separator = _Fake44kSeparator(tmp_path / "out")
+    backend._separator = _Fake44kSeparator(out_dir)
 
     stems = backend.separate_chunk(in_pcm, sr_in)
     vocals = stems["vocals"]
