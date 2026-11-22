@@ -61,7 +61,7 @@ class TuningCentsBar(QtWidgets.QWidget):
     """Lightweight horizontal -50c..+50c pitch-accuracy needle indicator with smooth glide animation."""
 
     COLOR_IN_TUNE = "#007A57"
-    COLOR_SLIGHT = "#0284C7"
+    COLOR_SLIGHT = "#D97706"
     COLOR_OFF = "#EF4444"
     COLOR_IDLE = "#64748B"
 
@@ -70,6 +70,7 @@ class TuningCentsBar(QtWidgets.QWidget):
         self._has_signal: bool = False
         self._cents: float = 0.0
         self._display_cents: float = 0.0
+        self._zone: str = "idle"
         self._track_bg: str = "#E2E8F0"
         self._track_border: str = "#CBD5E1"
         self._center_tick: str = "#334155"
@@ -83,8 +84,20 @@ class TuningCentsBar(QtWidgets.QWidget):
         self._needle_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
         self._needle_anim.valueChanged.connect(self._on_anim_value)
 
-        self.setFixedHeight(18)
+        self._hold_timer = QtCore.QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.timeout.connect(self._on_hold_timeout)
+
+        self.setMinimumHeight(max(18, int(self.fontMetrics().height() * 1.2)))
         self.setMinimumWidth(140)
+
+    def _on_hold_timeout(self) -> None:
+        self._needle_anim.stop()
+        self._has_signal = False
+        self._zone = "idle"
+        self._cents = 0.0
+        self._display_cents = 0.0
+        self.update()
 
     def _on_anim_value(self, value: object) -> None:
         try:
@@ -99,8 +112,8 @@ class TuningCentsBar(QtWidgets.QWidget):
         track_bg: str,
         track_border: str,
         center_tick: str,
-        in_tune: str = "#00A878",
-        slight: str = "#0284C7",
+        in_tune: str = "#007A57",
+        slight: str = "#D97706",
         off: str = "#EF4444",
         idle: str = "#64748B",
     ) -> None:
@@ -121,14 +134,26 @@ class TuningCentsBar(QtWidgets.QWidget):
     def cents_offset(self) -> float:
         return self._cents
 
+    def _update_zone(self, abs_cents: float) -> str:
+        # Hysteresis: in <= 5c (exit > 7c), slight <= 20c (exit > 22c)
+        if self._zone == "in":
+            if abs_cents <= 7.0:
+                return "in"
+        elif abs_cents <= 5.0:
+            return "in"
+        if self._zone == "slight" and abs_cents < 21.5:
+            return "slight"
+        if abs_cents <= 20.0:
+            return "slight"
+        return "off"
+
     @property
     def zone_color(self) -> str:
         if not self._has_signal:
             return self._color_idle
-        ac = abs(self._cents)
-        if ac <= 10.0:
+        if self._zone == "in":
             return self._color_in_tune
-        if ac <= 25.0:
+        if self._zone == "slight":
             return self._color_slight
         return self._color_off
 
@@ -136,22 +161,21 @@ class TuningCentsBar(QtWidgets.QWidget):
         if frequency_hz is None:
             if not self._has_signal and self._cents == 0.0:
                 return
-            self._needle_anim.stop()
-            self._has_signal = False
-            self._cents = 0.0
-            self._display_cents = 0.0
-            self.update()
+            if self.isVisible() and not self._hold_timer.isActive():
+                self._hold_timer.start(350)
+            else:
+                self._on_hold_timeout()
             return
         freq = float(frequency_hz)
         if not math.isfinite(freq) or freq <= 0.0:
             if not self._has_signal and self._cents == 0.0:
                 return
-            self._needle_anim.stop()
-            self._has_signal = False
-            self._cents = 0.0
-            self._display_cents = 0.0
-            self.update()
+            if self.isVisible() and not self._hold_timer.isActive():
+                self._hold_timer.start(350)
+            else:
+                self._on_hold_timeout()
             return
+        self._hold_timer.stop()
         cents = float(cents_offset)
         if not math.isfinite(cents):
             cents = 0.0
@@ -159,14 +183,20 @@ class TuningCentsBar(QtWidgets.QWidget):
         was_signal = self._has_signal
         self._has_signal = True
         self._cents = clamped
-        if not was_signal or not self.isVisible() or abs(clamped - self._display_cents) < 0.4:
+        self._zone = self._update_zone(abs(clamped))
+        # Smooth exponential target update without blocking unit tests
+        alpha = 0.45
+        target = clamped if (not was_signal or not self.isVisible()) else (
+            self._display_cents + alpha * (clamped - self._display_cents)
+        )
+        if not was_signal or not self.isVisible() or abs(target - self._display_cents) < 0.4:
             self._needle_anim.stop()
-            self._display_cents = clamped
+            self._display_cents = target
             self.update()
         else:
             self._needle_anim.stop()
             self._needle_anim.setStartValue(self._display_cents)
-            self._needle_anim.setEndValue(clamped)
+            self._needle_anim.setEndValue(target)
             self._needle_anim.start()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
@@ -184,8 +214,8 @@ class TuningCentsBar(QtWidgets.QWidget):
         p.setBrush(QtGui.QColor(self._track_bg))
         p.drawRoundedRect(track, 3.0, 3.0)
 
-        # Signal cyan-green center ±10 cents zone
-        band_w = track.width() * 0.20
+        # Center ±5 cents green zone (10% of -50..+50 range)
+        band_w = track.width() * 0.10
         center_x = track.center().x()
         band_rect = QtCore.QRectF(center_x - band_w * 0.5, track.top() + 1.0, band_w, max(2.0, track.height() - 2.0))
         in_tune_col = QtGui.QColor(self._color_in_tune)
@@ -197,6 +227,13 @@ class TuningCentsBar(QtWidgets.QWidget):
         # Center 0c tick
         p.setPen(QtGui.QPen(QtGui.QColor(self._center_tick), 1.0))
         p.drawLine(QtCore.QPointF(center_x, track.top() + 1.0), QtCore.QPointF(center_x, track.bottom() - 1.0))
+
+        if self._has_signal:
+            p.setPen(QtGui.QColor(self.zone_color))
+            f = p.font()
+            f.setPointSize(max(7, f.pointSize() - 1))
+            p.setFont(f)
+            p.drawText(track.adjusted(4, 0, -4, 0), QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter, f"{self._cents:+.1f}c")
 
         if self._has_signal:
             ratio = (self._display_cents + 50.0) / 100.0

@@ -299,6 +299,11 @@ class ResourceStatusPanel(QtWidgets.QWidget):
         self._last_log_sig = sig
         joined = "\n".join(tail)
         if self.log_text.toPlainText() != joined:
-            self.log_text.setPlainText(joined)
             bar = self.log_text.verticalScrollBar()
-            bar.setValue(bar.maximum())
+            at_bottom = bar.value() >= max(0, bar.maximum() - 2)
+            prev_val = bar.value()
+            self.log_text.setPlainText(joined)
+            if at_bottom:
+                bar.setValue(bar.maximum())
+            else:
+                bar.setValue(min(prev_val, bar.maximum()))

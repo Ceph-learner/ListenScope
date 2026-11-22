@@ -341,6 +341,8 @@ class ListenScopeController:
             midi_python_executable=self._midi_python_executable,
             appearance=saved_settings.appearance,
         )
+        if getattr(saved_settings, "window_geometry", ""):
+            self.window.restore_saved_geometry(saved_settings.window_geometry)
         self.metronome.set_bpm(saved_settings.metronome_bpm)
         self.metronome.set_beats_per_bar(saved_settings.metronome_beats_per_bar)
         self.metronome.set_volume(saved_settings.metronome_volume)
@@ -1700,6 +1702,7 @@ class ListenScopeController:
             auto_reset_on_track_change=self._auto_reset_on_track_change,
             appearance=self.window.appearance,
             progression_mode=self.window.chroma_widget.progression_mode,
+            window_geometry=bytes(self.window.saveGeometry().toBase64()).decode("ascii"),
         )
 
     def _on_appearance_applied(self) -> None:

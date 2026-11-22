@@ -31,6 +31,7 @@ class PersistedSettings:
     schema_version: int = 2
     appearance: Appearance = Appearance()
     progression_mode: str = "chords"
+    window_geometry: str = ""
 
 
 def default_settings_path() -> Path:
@@ -166,6 +167,8 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
         transpose_semitones=payload.get("transpose_semitones", 0),
         auto_reset_on_track_change=payload.get("auto_reset_on_track_change", True),
     )
+    raw_geom = payload.get("window_geometry", "")
+    window_geometry = str(raw_geom).strip() if isinstance(raw_geom, str) else ""
     return PersistedSettings(
         resource_limits=limits,
         ai_config=ai_cfg,
@@ -173,6 +176,7 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
         midi_python_executable=midi_python,
         appearance=Appearance.from_mapping(payload.get("appearance")),
         progression_mode=_progression_mode(payload.get("progression_mode")),
+        window_geometry=window_geometry,
         **practice,
     )
 
@@ -201,10 +205,15 @@ def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None
         "midi_python_executable": str(settings.midi_python_executable or "").strip(),
         "appearance": asdict(settings.appearance),
         "progression_mode": _progression_mode(settings.progression_mode),
+        "window_geometry": str(getattr(settings, "window_geometry", "") or "").strip(),
         **practice,
     }
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(target)
     return target
+
+
+load_persisted_settings = load_settings
+save_persisted_settings = save_settings
 

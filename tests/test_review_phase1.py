@@ -413,7 +413,6 @@ def test_al1_transpose_note_name_handles_b_sharp_and_c_flat_octaves() -> None:
 # ============================================================================
 
 
-@pytest.mark.xfail(strict=True, reason="U-B01")
 def test_ub01_spectrogram_displays_full_96_log_bins_and_hz_axis() -> None:
     """Spectrogram YRange must cover all 96 log_freq_bins (not truncated at 64 ~ 1.87kHz)."""
     _qapp()
@@ -432,7 +431,6 @@ def test_ub01_spectrogram_displays_full_96_log_bins_and_hz_axis() -> None:
         w.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B04")
 def test_ub04_practice_shortcuts_do_not_rely_solely_on_ctrl_space() -> None:
     """NEEDS_TARGET contract test: Space/L/[/] shortcuts must exist and avoid single-key hijack in QLineEdit."""
     _qapp()
@@ -456,7 +454,6 @@ def test_ub04_practice_shortcuts_do_not_rely_solely_on_ctrl_space() -> None:
         mw.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B05")
 def test_ub05_tuning_cents_bar_matches_5c_20c_thresholds_and_amber_slight_color() -> None:
     """TuningCentsBar thresholds must match help text (±5c green, ±20c amber, >20c red)."""
     _qapp()
@@ -578,7 +575,6 @@ def test_ub11_gpu_checkbox_does_not_hardcode_rtx_5060_ti() -> None:
         mw.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B12")
 def test_ub12_settings_and_appearance_dialogs_do_not_leak_children(monkeypatch: pytest.MonkeyPatch) -> None:
     """Opening SettingsDialog repeatedly must delete closed dialogs instead of accumulating children."""
     _qapp()
@@ -615,7 +611,6 @@ def test_ub16_light_theme_primary_button_and_in_tune_meet_wcag_aa() -> None:
     assert btn_ratio >= 4.5, f"Light primary button contrast {btn_ratio:.2f}:1 < 4.5:1 ({p.text_inverse} on {p.accent})"
 
 
-@pytest.mark.xfail(strict=True, reason="U-B20")
 def test_ub20_maximize_button_syncs_on_system_window_state_change() -> None:
     """System-triggered WindowStateChange (e.g. Win+Up) must sync win_max_btn icon/state."""
     _qapp()
@@ -640,7 +635,6 @@ def test_ub20_maximize_button_syncs_on_system_window_state_change() -> None:
         mw.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B21")
 def test_ub21_win32_icon_handles_not_reloaded_every_show_event(monkeypatch: pytest.MonkeyPatch) -> None:
     """NEEDS_TARGET contract test: _apply_windows_taskbar_and_rounding must load HICONs once, not every show."""
     _qapp()
@@ -680,13 +674,17 @@ def test_ub21_win32_icon_handles_not_reloaded_every_show_event(monkeypatch: pyte
         mw.deleteLater()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B23")
 def test_ub23_settings_store_persists_window_geometry_within_schema_2(tmp_path: Path) -> None:
     """PersistedSettings (schema_version=2) must support saving and loading window_geometry."""
+    from core.config import AIConfig, ResourceLimits
     from core.settings_store import PersistedSettings, load_persisted_settings, save_persisted_settings
 
     assert hasattr(PersistedSettings, "window_geometry")
-    s = PersistedSettings(window_geometry="AAAA/fakebase64==")
+    s = PersistedSettings(
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        window_geometry="AAAA/fakebase64==",
+    )
     p = tmp_path / "settings.json"
     save_persisted_settings(s, path=p)
     loaded = load_persisted_settings(path=p)
@@ -694,13 +692,12 @@ def test_ub23_settings_store_persists_window_geometry_within_schema_2(tmp_path: 
     assert loaded.window_geometry == "AAAA/fakebase64=="
 
 
-@pytest.mark.xfail(strict=True, reason="U-B24")
 def test_ub24_log_panel_preserves_scroll_position_when_user_scrolled_up() -> None:
-    """When user scrolls up in ResourceMonitorWidget log view, new logs must not yank scrollbar to bottom."""
+    """When user scrolls up in ResourceStatusPanel log view, new logs must not yank scrollbar to bottom."""
     _qapp()
-    from ui.resource_widget import ResourceMonitorWidget
+    from ui.resource_widget import ResourceStatusPanel
 
-    w = ResourceMonitorWidget()
+    w = ResourceStatusPanel()
     w.resize(600, 300)
     w.show()
     try:

@@ -187,11 +187,24 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             fillLevel=-105,
             brush=(2, 132, 199, 34),
         )
+        from core.config import AnalysisConfig
+
+        n_bins = int(AnalysisConfig().log_freq_bins)
         self.spec_plot = pg.PlotWidget()
         self.spec_plot.setBackground("#F8FAFC")
-        self.spec_plot.setLabel("bottom", "更新帧（右侧为最新）", **{"font-size": "9pt"})
-        self.spec_plot.setLabel("left", "频带序号", **{"font-size": "9pt"})
-        self.spec_plot.setYRange(0, 64, padding=0)
+        self.spec_plot.setLabel("bottom", "时间 (s)", **{"font-size": "9pt"})
+        self.spec_plot.setLabel("left", "频率 (Hz)", **{"font-size": "9pt"})
+        self.spec_plot.setYRange(0, n_bins, padding=0)
+        bin_freqs = np.geomspace(27.5, 16000.0, n_bins)
+        tick_freqs = (31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
+        ticks = [
+            (
+                float(np.interp(np.log(f), np.log(bin_freqs), np.arange(n_bins))),
+                f"{int(f // 1000)}k" if f >= 1000.0 else (f"{f:g}"),
+            )
+            for f in tick_freqs
+        ]
+        self.spec_plot.getAxis("left").setTicks([ticks])
         self._spec_img = pg.ImageItem()
         try:
             cmap = pg.colormap.get("inferno") if hasattr(pg, "colormap") else None
@@ -408,3 +421,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
 
         if spectrogram is not None and spectrogram.size > 0:
             self._spec_img.setImage(spectrogram, autoLevels=False, levels=(-90.0, -5.0))
+            frames = int(spectrogram.shape[0])
+            bins = int(spectrogram.shape[1]) if spectrogram.ndim > 1 else 96
+            dur_s = max(1.0 / 15.0, frames / 15.0)
+            self._spec_img.setRect(QtCore.QRectF(-dur_s, 0.0, dur_s, float(bins)))

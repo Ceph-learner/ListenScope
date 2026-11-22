@@ -16,6 +16,12 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ja": "CHORD PRACTICE // コード練習",
     },
     "设置 / 系统状态": {"en": "Settings / Status", "ko": "설정 / 시스템 상태", "ja": "設定 / システム状態"},
+    "SPACE // 快捷键": {"en": "SPACE // SHORTCUTS", "ko": "SPACE // 단축키", "ja": "SPACE // ショートカット"},
+    "快捷键: Space 播放/暂停 | L 循环 | [/] 设A/B | -/=/0 调速 | T 测速 | M 节拍器 | Ctrl+B 书签": {
+        "en": "Shortcuts: Space Play/Pause | L Loop | [/] Set A/B | -/=/0 Speed | T Tap BPM | M Metronome | Ctrl+B Bookmark",
+        "ko": "단축키: Space 재생/일시정지 | L 루프 | [/] A/B 설정 | -/=/0 배속 | T 탭 템포 | M 메트로놈 | Ctrl+B 북마크",
+        "ja": "ショートカット: Space 再生/一時停止 | L ループ | [/] A/B設定 | -/=/0 速度 | T タップ | M メトロノーム | Ctrl+B ブックマーク",
+    },
     "优先 GPU（未就绪）": {"en": "Prefer GPU (Not Ready)", "ko": "GPU 우선 (미준비)", "ja": "GPU 優先 (未準備)"},
     "优先 GPU（已就绪）": {"en": "Prefer GPU (Ready)", "ko": "GPU 우선 (준비됨)", "ja": "GPU 優先 (準備完了)"},
     "优先 GPU (未检测到可用 NVIDIA GPU)": {
