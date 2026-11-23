@@ -415,7 +415,7 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
             nbrs.append(frame_data[idx - 1][1])
         if idx + 1 < len(frame_data) and frame_data[idx + 1][1] > 0.0:
             nbrs.append(frame_data[idx + 1][1])
-        med_freq = float(np.median(nbrs))
+        med_freq = float(np.median(nbrs)) if len(nbrs) == 3 else freq
         midi = max(0, min(127, int(round(69.0 + 12.0 * np.log2(med_freq / 440.0)))))
         raw_obs.append((t_start, midi, med_freq, conf))
 

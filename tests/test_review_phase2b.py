@@ -351,7 +351,6 @@ def test_al2_midi_normalize_preserves_multi_tempo_onset_timing(tmp_path: Path) -
         assert abs(got - exp) < 0.05, f"Multi-tempo onset drift: got {onsets_sec}, expected {expected}"
 
 
-@pytest.mark.xfail(strict=True, reason="A-L4")
 def test_al4_bass_median_filter_does_not_average_two_neighbors_to_1_5f() -> None:
     """analyze_bass_stem must only take median when 3 neighbors exist, never np.median([f, 2f]) = 1.5f."""
     src = (REPO_ROOT / "analysis" / "stem_analyzer.py").read_text("utf-8")
