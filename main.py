@@ -199,6 +199,46 @@ def _read_wav_excerpt_f32(wav_path: Path, *, max_seconds: float = 30.0) -> tuple
         return arr, sr, ch
 
 
+def prune_old_stem_job_dirs(
+    work_root: Path,
+    keep_recent: int = 5,
+    active_dirs: Optional[set[Path]] = None,
+) -> int:
+    """Prune old stem job subdirectories under `work_root`, keeping the most recent `keep_recent` and `active_dirs`."""
+    if not work_root.exists() or not work_root.is_dir():
+        return 0
+    active_resolved: set[Path] = set()
+    for p in active_dirs or ():
+        try:
+            active_resolved.add(Path(p).resolve())
+        except OSError:
+            pass
+    subdirs: list[tuple[float, Path]] = []
+    for entry in work_root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        subdirs.append((mtime, entry))
+    subdirs.sort(key=lambda item: item[0], reverse=True)
+    keep_n = max(0, int(keep_recent))
+    removed = 0
+    for idx, (_mtime, d) in enumerate(subdirs):
+        if idx < keep_n:
+            continue
+        try:
+            if d.resolve() in active_resolved:
+                continue
+        except OSError:
+            pass
+        shutil.rmtree(d, ignore_errors=True)
+        logger.info("Pruned old stem job directory: %s", d)
+        removed += 1
+    return removed
+
+
 class ListenScopeController:
     """Owns background threads/subprocesses and bridges immutable snapshots to the Qt UI thread."""
 
@@ -238,6 +278,7 @@ class ListenScopeController:
 
         # Rotating file + bounded diagnostic logging
         setup_application_file_logging(resolve_log_dir(self.work_dir))
+        prune_old_stem_job_dirs(self.work_dir / "stems", keep_recent=5)
         self.log_handler = BoundedMemoryLogHandler(maxlen=500)
         self.log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
         logging.getLogger().addHandler(self.log_handler)
@@ -315,6 +356,10 @@ class ListenScopeController:
         self._ui_hw_probe_q: queue.Queue[tuple[int, dict[str, Any]]] = queue.Queue(maxsize=4)
         self._ui_ai_discover_q: queue.Queue[str] = queue.Queue(maxsize=2)
         self._ui_track_decision_q: queue.Queue[TrackTrackerDecision] = queue.Queue(maxsize=32)
+        self._ui_callbacks_q: queue.Queue[Callable[[], None]] = queue.Queue(maxsize=32)
+        self._io_lock = threading.Lock()
+        self._io_busy_flags: dict[str, bool] = {"export_ab": False, "export_mix": False, "import_audio": False}
+        self._io_threads: list[threading.Thread] = []
         self._probe_seq = 0
         self._stem_generation = 0
         self._cleared_ai_task_id = ""
@@ -615,13 +660,14 @@ class ListenScopeController:
             self.window.chroma_widget.sync_auto_reset_ui(track_status_text=msg)
             return
 
-        self._track_monitor_stop.clear()
+        stop_event = threading.Event()
+        self._track_monitor_stop = stop_event
         self.window.chroma_widget.sync_auto_reset_ui(
             track_status_text=f"曲目监测 (SMTC/{backend_name}): 正在等待 {target_process_name or '播放会话'} 元数据..."
         )
         self._track_monitor_thread = threading.Thread(
             target=self._track_monitor_loop,
-            args=(target_process_name,),
+            args=(target_process_name, stop_event),
             name="ListenScope-SmtcTrackWatch",
             daemon=True,
         )
@@ -651,11 +697,16 @@ class ListenScopeController:
             except Exception:
                 pass
 
-    def _track_monitor_loop(self, _target_process_name: Optional[str]) -> None:
+    def _track_monitor_loop(
+        self,
+        _target_process_name: Optional[str],
+        stop_event: Optional[threading.Event] = None,
+    ) -> None:
+        ev = stop_event if stop_event is not None else self._track_monitor_stop
         reader = WindowsMediaSessionReader()
         last_status_key: Optional[tuple[Any, ...]] = None
         try:
-            while not self._track_monitor_stop.is_set() and not getattr(self, "_shutdown_done", False):
+            while not ev.is_set() and not getattr(self, "_shutdown_done", False):
                 snaps, _backend = reader.query_sessions()
                 decision = self._track_tracker.update(snaps)
                 cur_sess = decision.selected_session
@@ -670,7 +721,7 @@ class ListenScopeController:
                 if decision.triggered_reset or key != last_status_key:
                     last_status_key = key
                     self._enqueue_track_decision(decision)
-                if self._track_monitor_stop.wait(1.0):
+                if ev.wait(1.0):
                     break
         finally:
             reader.close()
@@ -879,37 +930,92 @@ class ListenScopeController:
         except Exception as exc:
             self.window.show_banner_message(f"A/B 回放失败: {exc}")
 
+    def _post_ui_callback(self, fn: Callable[[], None]) -> None:
+        if getattr(self, "_shutdown_done", False):
+            return
+        try:
+            self._ui_callbacks_q.put_nowait(fn)
+        except queue.Full:
+            pass
+
+    def wait_pending_io(self, timeout: float = 10.0) -> None:
+        """Wait for any background export/import threads and flush their UI callbacks (for tests/shutdown)."""
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            with self._io_lock:
+                alive = [t for t in self._io_threads if t.is_alive()]
+                self._io_threads = alive
+            if not alive:
+                break
+            rem = deadline - time.monotonic()
+            if rem <= 0:
+                break
+            alive[0].join(timeout=min(0.1, rem))
+        self._drain_ui_callbacks()
+
+    def _drain_ui_callbacks(self) -> None:
+        while not getattr(self, "_shutdown_done", False):
+            try:
+                cb = self._ui_callbacks_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                cb()
+            except Exception:
+                logger.exception("Error in deferred UI callback")
+
     def _on_export_ab_wav(self, out_path: str) -> None:
         if not out_path:
             return
         if self.ring_buffer.available_seconds < 0.2:
             self.window.show_banner_message("当前 120s 环形缓冲可用音频不足，请先捕获或导入本地音频。")
             return
+        with self._io_lock:
+            if self._io_busy_flags["export_ab"]:
+                self.window.show_banner_message("正在导出 A/B 片段，请稍候...")
+                return
+            self._io_busy_flags["export_ab"] = True
         if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
             self.ab_player.select_recent_seconds(min(30.0, self.ring_buffer.available_seconds))
         a_frame, b_frame = self.ab_player.loop_range
         spd = self.ab_player.speed
         inc_met = bool(self.metronome.overlay_enabled)
-        try:
-            saved, dur = self.ab_player.export_ab_practice_wav_streaming(
-                out_path,
-                a_frame,
-                b_frame,
-                speed=spd,
-                include_metronome=inc_met,
-                bpm=self.metronome.bpm,
-                beats_per_bar=self.metronome.beats_per_bar,
-                metronome_volume=self.metronome.volume,
-            )
-            tags: list[str] = []
-            if abs(spd - 1.0) >= 1e-3:
-                tags.append(f"{spd:.2f}x不变调")
-            if inc_met:
-                tags.append(f"节拍器{self.metronome.bpm:.0f}BPM")
-            tag_txt = f" | {'+'.join(tags)}" if tags else ""
-            self.window.show_banner_message(f"✅ 已流式导出 A/B 片段 WAV ({dur:.2f}s{tag_txt}): {saved}")
-        except Exception as exc:
-            self.window.show_banner_message(f"导出 A/B 片段失败: {exc}")
+        bpm = float(self.metronome.bpm)
+        beats_per_bar = int(self.metronome.beats_per_bar)
+        met_vol = float(self.metronome.volume)
+        self.window.show_banner_message("正在后台流式导出 A/B 片段 WAV...")
+
+        def _worker() -> None:
+            try:
+                saved, dur = self.ab_player.export_ab_practice_wav_streaming(
+                    out_path,
+                    a_frame,
+                    b_frame,
+                    speed=spd,
+                    include_metronome=inc_met,
+                    bpm=bpm,
+                    beats_per_bar=beats_per_bar,
+                    metronome_volume=met_vol,
+                )
+                tags: list[str] = []
+                if abs(spd - 1.0) >= 1e-3:
+                    tags.append(f"{spd:.2f}x不变调")
+                if inc_met:
+                    tags.append(f"节拍器{bpm:.0f}BPM")
+                tag_txt = f" | {'+'.join(tags)}" if tags else ""
+                msg = f"✅ 已流式导出 A/B 片段 WAV ({dur:.2f}s{tag_txt}): {saved}"
+            except Exception as exc:
+                msg = f"导出 A/B 片段失败: {exc}"
+            finally:
+                with self._io_lock:
+                    self._io_busy_flags["export_ab"] = False
+            self._post_ui_callback(lambda m=msg: self.window.show_banner_message(m))
+
+        t = threading.Thread(target=_worker, name="ListenScope-ExportAB", daemon=True)
+        with self._io_lock:
+            self._io_threads = [th for th in self._io_threads if th.is_alive()]
+            self._io_threads.append(t)
+        t.start()
 
     def _on_mixer_before_play(self) -> None:
         self._stop_drum_preview()
@@ -1105,8 +1211,7 @@ class ListenScopeController:
 
         a_frame, b_frame = self.ab_player.loop_range
         task_id = f"job_{uuid.uuid4().hex[:8]}"
-        task_dir = self.work_dir / "stems" / task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
+        task_dir = self._prepare_stem_work_dir(task_id)
         in_wav = task_dir / "excerpt_input.wav"
         try:
             _, dur = self.ring_buffer.export_wav_streaming(in_wav, a_frame, b_frame)
@@ -1145,6 +1250,22 @@ class ListenScopeController:
             self.window.tabs.setCurrentWidget(self.window.mixer_widget)
             self.window.show_banner_message(msg)
 
+    def _active_stem_dirs(self) -> set[Path]:
+        active: set[Path] = set()
+        if self._last_ai_request is not None and self._last_ai_request.output_dir:
+            active.add(Path(self._last_ai_request.output_dir))
+        for track in getattr(self.mixer_engine, "_tracks", {}).values():
+            if getattr(track, "path", None) is not None:
+                active.add(Path(track.path).parent)
+        return active
+
+    def _prepare_stem_work_dir(self, task_id: str) -> Path:
+        stems_root = self.work_dir / "stems"
+        prune_old_stem_job_dirs(stems_root, keep_recent=5, active_dirs=self._active_stem_dirs())
+        task_dir = stems_root / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        return task_dir
+
     def _on_cancel_ai(self) -> None:
         threading.Thread(target=self.ai_job_manager.cancel_job, name="ListenScope-AICancel", daemon=True).start()
 
@@ -1173,10 +1294,11 @@ class ListenScopeController:
         prev = self._last_ai_request
         action = OOMRecoveryAction(action_val)
         new_id = f"job_{uuid.uuid4().hex[:8]}"
+        new_dir = self._prepare_stem_work_dir(new_id)
         new_req = AIJobRequest(
             task_id=new_id,
             input_wav_path=prev.input_wav_path,
-            output_dir=str(self.work_dir / "stems" / new_id),
+            output_dir=str(new_dir),
             stem_mode=prev.stem_mode,
             model_id=prev.model_id,
             use_gpu=prev.use_gpu,
@@ -1205,30 +1327,53 @@ class ListenScopeController:
             self._last_ai_request = new_req
 
     def _on_export_mix(self, out_path: str) -> None:
+        if not out_path:
+            return
+        with self._io_lock:
+            if self._io_busy_flags["export_mix"]:
+                self.window.show_banner_message("正在导出混音，请稍候...")
+                return
+            self._io_busy_flags["export_mix"] = True
         use_loop = self.mixer_engine.loop_region_sec is not None
         spd = self.mixer_engine.speed
         inc_met = bool(self.metronome.overlay_enabled)
-        try:
-            saved = self.mixer_engine.export_mix_streaming(
-                out_path,
-                use_loop_region=use_loop,
-                speed=spd,
-                include_metronome=inc_met,
-                bpm=self.metronome.bpm,
-                beats_per_bar=self.metronome.beats_per_bar,
-                metronome_volume=self.metronome.volume,
-            )
-            tags: list[str] = []
-            if use_loop:
-                tags.append("局部循环区")
-            if abs(spd - 1.0) >= 1e-3:
-                tags.append(f"{spd:.2f}x不变调")
-            if inc_met:
-                tags.append(f"节拍器{self.metronome.bpm:.0f}BPM")
-            tag_txt = f" ({'+'.join(tags)})" if tags else ""
-            self.window.show_banner_message(f"✅ 已流式导出混合音轨 WAV{tag_txt}: {saved}")
-        except Exception as exc:
-            self.window.show_banner_message(f"导出混音失败: {exc}")
+        bpm = float(self.metronome.bpm)
+        beats_per_bar = int(self.metronome.beats_per_bar)
+        met_vol = float(self.metronome.volume)
+        self.window.show_banner_message("正在后台流式导出混合音轨 WAV...")
+
+        def _worker() -> None:
+            try:
+                saved = self.mixer_engine.export_mix_streaming(
+                    out_path,
+                    use_loop_region=use_loop,
+                    speed=spd,
+                    include_metronome=inc_met,
+                    bpm=bpm,
+                    beats_per_bar=beats_per_bar,
+                    metronome_volume=met_vol,
+                )
+                tags: list[str] = []
+                if use_loop:
+                    tags.append("局部循环区")
+                if abs(spd - 1.0) >= 1e-3:
+                    tags.append(f"{spd:.2f}x不变调")
+                if inc_met:
+                    tags.append(f"节拍器{bpm:.0f}BPM")
+                tag_txt = f" ({'+'.join(tags)})" if tags else ""
+                msg = f"✅ 已流式导出混合音轨 WAV{tag_txt}: {saved}"
+            except Exception as exc:
+                msg = f"导出混音失败: {exc}"
+            finally:
+                with self._io_lock:
+                    self._io_busy_flags["export_mix"] = False
+            self._post_ui_callback(lambda m=msg: self.window.show_banner_message(m))
+
+        t = threading.Thread(target=_worker, name="ListenScope-ExportMix", daemon=True)
+        with self._io_lock:
+            self._io_threads = [th for th in self._io_threads if th.is_alive()]
+            self._io_threads.append(t)
+        t.start()
 
     def _on_import_audio_file(self, file_path: str) -> None:
         """Stream up to 120s of a local WAV/FLAC/OGG file into the bounded ring buffer."""
@@ -1238,40 +1383,64 @@ class ListenScopeController:
         if not src_path.exists():
             self.window.show_banner_message(f"导入本地音频失败: 文件不存在 ({src_path})")
             return
-        try:
-            self.stop_capture(live_stop_reason="已导入本地音频，自动停止实验性实时分轨")
-            self._stop_chord_preview()
-            self.ab_player.stop()
-            self.mixer_engine.pause()
-            imported_sec, truncated = self.ring_buffer.import_audio_file_streaming(
-                src_path,
-                max_seconds=float(self.audio_config.ring_buffer_seconds),
-            )
-            self.analysis_worker.reset_harmony(include_buffered_audio=True)
-            self.window.chroma_widget.clear_progression()
-            self.bookmark_manager.clear()
-            self._sync_ab_bookmarks()
-            avail = self.ring_buffer.available_seconds
-            if avail >= 0.5:
-                sel = min(30.0, avail)
-                self.ab_player.select_recent_seconds(sel)
-                self.window.start_ago_spin.setValue(round(sel, 2))
-                self.window.end_ago_spin.setValue(0.0)
-                self.window._set_ab_region_from_ago(sel, 0.0)
-            self.window.history_coverage_lbl.setText(
-                f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s"
-            )
-            self._refresh_history_overview()
-            if truncated:
-                self.window.show_banner_message(
-                    f"⚠️ 本地音频已流式载入前 {imported_sec:.1f}s（超过 {self.audio_config.ring_buffer_seconds:.0f}s 上限已自动截断以保护内存），可直接 A/B 播放或 AI 分轨。"
+        with self._io_lock:
+            if self._io_busy_flags["import_audio"]:
+                self.window.show_banner_message("正在导入本地音频，请稍候...")
+                return
+            self._io_busy_flags["import_audio"] = True
+
+        self.stop_capture(live_stop_reason="已导入本地音频，自动停止实验性实时分轨")
+        self._stop_chord_preview()
+        self.ab_player.stop()
+        self.mixer_engine.pause()
+        self.window.show_banner_message(f"正在后台流式载入本地音频: {src_path.name}...")
+        max_sec = float(self.audio_config.ring_buffer_seconds)
+
+        def _worker() -> None:
+            try:
+                imported_sec, truncated = self.ring_buffer.import_audio_file_streaming(
+                    src_path,
+                    max_seconds=max_sec,
                 )
-            else:
-                self.window.show_banner_message(
-                    f"✅ 已流式载入本地音频 {imported_sec:.1f}s 到环形缓冲，可直接 A/B 播放、实时分析或 AI 分轨。"
-                )
-        except Exception as exc:
-            self.window.show_banner_message(f"导入本地音频失败: {exc}")
+
+                def _finish_ok() -> None:
+                    self.analysis_worker.reset_harmony(include_buffered_audio=True)
+                    self.window.chroma_widget.clear_progression()
+                    self.bookmark_manager.clear()
+                    self._sync_ab_bookmarks()
+                    avail = self.ring_buffer.available_seconds
+                    if avail >= 0.5:
+                        sel = min(30.0, avail)
+                        self.ab_player.select_recent_seconds(sel)
+                        self.window.start_ago_spin.setValue(round(sel, 2))
+                        self.window.end_ago_spin.setValue(0.0)
+                        self.window._set_ab_region_from_ago(sel, 0.0)
+                    self.window.history_coverage_lbl.setText(
+                        f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s"
+                    )
+                    self._refresh_history_overview()
+                    if truncated:
+                        self.window.show_banner_message(
+                            f"⚠️ 本地音频已流式载入前 {imported_sec:.1f}s（超过 {self.audio_config.ring_buffer_seconds:.0f}s 上限已自动截断以保护内存），可直接 A/B 播放或 AI 分轨。"
+                        )
+                    else:
+                        self.window.show_banner_message(
+                            f"✅ 已流式载入本地音频 {imported_sec:.1f}s 到环形缓冲，可直接 A/B 播放、实时分析或 AI 分轨。"
+                        )
+
+                self._post_ui_callback(_finish_ok)
+            except Exception as exc:
+                err_msg = f"导入本地音频失败: {exc}"
+                self._post_ui_callback(lambda m=err_msg: self.window.show_banner_message(m))
+            finally:
+                with self._io_lock:
+                    self._io_busy_flags["import_audio"] = False
+
+        t = threading.Thread(target=_worker, name="ListenScope-ImportAudio", daemon=True)
+        with self._io_lock:
+            self._io_threads = [th for th in self._io_threads if th.is_alive()]
+            self._io_threads.append(t)
+        t.start()
 
     def _on_send_stem_to_analysis(self, stem_name: str, stem_path: str) -> None:
         """Load selected stem WAV excerpt cleanly into canonical 48kHz stereo ring buffer."""
@@ -1873,6 +2042,7 @@ class ListenScopeController:
                 self.window.handle_ai_result(ai_res)
             except queue.Empty:
                 break
+        self._drain_ui_callbacks()
         while True:
             try:
                 self.window.show_banner_message(self._ui_banner_q.get_nowait())

@@ -28,7 +28,7 @@ from core.models import (
     OOMRecoveryAction,
     ResourceSnapshot,
 )
-from core.paths import get_bundle_root, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
+from core.paths import get_bundle_root, popen_external_python, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
 from core.resource_manager import ResourceManager
 
 from .models import MODEL_REGISTRY
@@ -339,8 +339,6 @@ class AIJobManager:
             cfg_path.write_text(json.dumps(cfg_dict, ensure_ascii=False), encoding="utf-8")
 
             env = prepend_ffmpeg_path_env(os.environ.copy())
-            existing_pp = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
             if self.ai_config.offload_gui_to_igpu:
                 env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
                 env.setdefault("CUDA_VISIBLE_DEVICES", "0")
@@ -350,7 +348,7 @@ class AIJobManager:
 
             msg_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
             self._subproc_stderr_tail.clear()
-            proc = subprocess.Popen(
+            proc = popen_external_python(
                 [
                     self.ai_python_executable,
                     "-m",
@@ -362,7 +360,6 @@ class AIJobManager:
                     "--cancel-flag",
                     str(cancel_path),
                 ],
-                cwd=str(bundle_root),
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

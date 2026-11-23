@@ -40,7 +40,7 @@ from ai.resource_guard import release_torch_and_memory
 from audio.ring_buffer import FixedRingBuffer
 from core.config import AIConfig, AudioConfig, TargetHardwareSpec
 from core.models import LiveSeparationMetrics, ResourceStatus
-from core.paths import get_bundle_root, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
+from core.paths import get_bundle_root, popen_external_python, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
 from core.resource_manager import ResourceManager
 from core.system_probe import (
     _probe_gpus_nvml,
@@ -140,7 +140,11 @@ def _live_worker_entry(
 
 def _external_worker_cli(config_json: Path) -> int:
     """External `.venv-ai` live 2-stem worker communicating via JSON + base64 over stdin/stdout."""
-    ipc_out = sys.stdout
+    sys.stdout.flush()
+    sys.stderr.flush()
+    ipc_fd = os.dup(1)
+    os.dup2(2, 1)
+    ipc_out = os.fdopen(ipc_fd, "w", encoding="utf-8", buffering=1)
     sys.stdout = sys.stderr
 
     def _send(obj: dict[str, Any]) -> None:
@@ -416,11 +420,9 @@ class ExperimentalLiveSeparator:
         )
 
         env = prepend_ffmpeg_path_env(os.environ.copy())
-        existing_pp = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
 
         self._subproc_stderr_tail.clear()
-        proc = subprocess.Popen(
+        proc = popen_external_python(
             [
                 self.ai_python_executable,
                 "-m",
@@ -429,7 +431,6 @@ class ExperimentalLiveSeparator:
                 "--config-json",
                 str(cfg_path),
             ],
-            cwd=str(bundle_root),
             env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -442,13 +443,14 @@ class ExperimentalLiveSeparator:
         )
         req_q: queue.Queue[Any] = queue.Queue(maxsize=2)
         res_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=4)
+        run_stop = self._stop_event
 
         def _write_stdin() -> None:
             pipe = proc.stdin
             if pipe is None:
                 return
             try:
-                while not self._stop_event.is_set() and proc.poll() is None:
+                while not run_stop.is_set() and proc.poll() is None:
                     try:
                         item = req_q.get(timeout=0.08)
                     except queue.Empty:
@@ -625,7 +627,9 @@ class ExperimentalLiveSeparator:
 
             self._starting = True
             self._cancel_start_requested = False
-            self._stop_event.clear()
+            self._stop_event.set()
+            run_stop = threading.Event()
+            self._stop_event = run_stop
             self._status_message = "正在运行基准测试与启动实时分轨..."
 
         try:
@@ -771,6 +775,7 @@ class ExperimentalLiveSeparator:
                     )
                     self._feed_thread = threading.Thread(
                         target=self._run_loop,
+                        args=(run_stop,),
                         name="ListenScope-LiveSepCoordinator",
                         daemon=True,
                     )
@@ -891,7 +896,8 @@ class ExperimentalLiveSeparator:
             self._output_primed = self._out_available >= frames
             self._fill_mixed_locked(out, self._vocals_gain, self._inst_gain)
 
-    def _run_loop(self) -> None:
+    def _run_loop(self, stop_event: Optional[threading.Event] = None) -> None:
+        ev = stop_event if stop_event is not None else self._stop_event
         sr = self.audio_config.sample_rate
         hop_duration = self._hop_frames / sr
         seq = 0
@@ -899,7 +905,7 @@ class ExperimentalLiveSeparator:
         last_result_seq = -1
         last_request_start: int | None = None
 
-        while not self._stop_event.is_set():
+        while not ev.is_set():
             snap = self.resource_manager.sample()
             if snap.status in (ResourceStatus.WARNING, ResourceStatus.CRITICAL):
                 reason = "；".join(snap.status_reasons) or f"资源状态进入 {snap.status.value}"

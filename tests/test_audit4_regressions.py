@@ -496,6 +496,7 @@ def test_live_separator_survives_ring_clear_and_controller_stops_on_reset(tmp_pa
         assert ok_live and ctrl.live_separator.is_active
         wav_imp = _write_pcm_wav(tmp_path / "imp.wav", np.ones((48000, 2), dtype=np.float32) * 0.2)
         ctrl._on_import_audio_file(str(wav_imp))
+        ctrl.wait_pending_io()
         assert ctrl.live_separator.is_active is False
         assert ctrl.ring_buffer.available_seconds >= 0.9
     finally:

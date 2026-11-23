@@ -245,7 +245,19 @@ class DemucsSeparatorBackend(SeparationBackend):
         tensor = None
         sources = None
         try:
-            tensor = torch.from_numpy(np.ascontiguousarray(work.T, dtype=np.float32)).unsqueeze(0).to(self._device, dtype=torch.float32)
+            mix = torch.from_numpy(np.ascontiguousarray(work.T, dtype=np.float32)).to(self._device, dtype=torch.float32)
+            if hasattr(mix, "mean") and hasattr(mix, "std"):
+                ref = mix.mean(0)
+                ref_mean = ref.mean()
+                ref_std = ref.std()
+                is_non_silent = bool(float(ref_std.item() if hasattr(ref_std, "item") else ref_std) >= 1e-8)
+                mix_in = (mix - ref_mean) / (ref_std + 1e-8) if is_non_silent else mix
+            else:
+                ref_mean = None
+                ref_std = None
+                is_non_silent = False
+                mix_in = mix
+            tensor = mix_in.unsqueeze(0)
             with torch.inference_mode():
                 # Upstream demucs.apply.apply_model does NOT accept `jobs=`; use shifts=1 and num_workers=0.
                 sources = self._apply_model_fn(
@@ -259,6 +271,8 @@ class DemucsSeparatorBackend(SeparationBackend):
                     progress=False,
                     device=self._device,
                 )[0]
+                if is_non_silent and ref_mean is not None and ref_std is not None:
+                    sources = sources * (ref_std + 1e-8) + ref_mean
 
             source_names = list(getattr(model, "sources", self.model_spec.stems))
             out: dict[str, np.ndarray] = {}

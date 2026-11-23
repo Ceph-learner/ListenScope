@@ -32,7 +32,7 @@ class OverlapAddAccumulator:
         for name, chunk in stems.items():
             arr = np.asarray(chunk, dtype=np.float32)
             if arr.ndim == 1:
-                arr = np.column_stack([arr, arr])
+                arr = arr[:, None] if self.channels == 1 else np.column_stack([arr, arr])
             if ov <= 0 or arr.shape[0] <= ov:
                 out[name] = arr
                 continue

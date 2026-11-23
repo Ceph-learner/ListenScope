@@ -15,7 +15,7 @@ from core.config import AudioConfig, TargetHardwareSpec
 from core.models import CaptureMode, CaptureStats
 
 from .capture_base import AudioCaptureBackend, CaptureStatsTracker
-from .pcm_utils import normalize_to_canonical_pcm
+from .pcm_utils import StreamingResampler, normalize_to_canonical_pcm
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
         self._timing_lock = threading.Lock()
         self._last_chunk_time: float = 0.0
         self._was_active_audio: bool = False
+        self._resampler: Optional[StreamingResampler] = None
 
         self._stats = CaptureStatsTracker(
             mode=CaptureMode.PROCESS_LOOPBACK,
@@ -244,14 +245,30 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 if not np.all(np.isfinite(chunk)):
                     chunk = np.nan_to_num(chunk, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
             else:
-                chunk = normalize_to_canonical_pcm(
+                decoded = normalize_to_canonical_pcm(
                     pcm_bytes,
                     src_rate=src_rate,
                     src_channels=src_channels,
                     src_dtype=src_dtype,
-                    dst_rate=self.audio_config.sample_rate,
+                    dst_rate=src_rate,
                     dst_channels=self.audio_config.channels,
                 )
+                if src_rate != self.audio_config.sample_rate:
+                    if (
+                        self._resampler is None
+                        or self._resampler.src_rate != src_rate
+                        or self._resampler.dst_rate != self.audio_config.sample_rate
+                        or self._resampler.channels != self.audio_config.channels
+                    ):
+                        self._resampler = StreamingResampler(
+                            src_rate,
+                            self.audio_config.sample_rate,
+                            self.audio_config.channels,
+                        )
+                    chunk = self._resampler.process(decoded)
+                else:
+                    self._resampler = None
+                    chunk = decoded
 
             if chunk.shape[0] == 0:
                 return

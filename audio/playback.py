@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from math import gcd
 from operator import index
 from pathlib import Path
 import threading
@@ -678,6 +679,9 @@ class StemMixerEngine:
             self._loop_end_frame = None
             self._stretcher.reset(0.0)
 
+    def close(self) -> None:
+        self.clear()
+
     def load_stems(self, stem_paths: dict[str, str | Path]) -> dict[str, StemTrackState]:
         """Register stem WAV files using streaming handles (supports 16/24/32-bit/float32 & resampling)."""
         self.clear()
@@ -866,18 +870,27 @@ class StemMixerEngine:
             elif ch > 2 and self.channels == 2:
                 raw_arr = raw_arr[:, :2]
         else:
-            src_start = int(round(start_frame * (track.sample_rate / float(self.sample_rate))))
-            src_count = max(1, int(round(num_frames * (track.sample_rate / float(self.sample_rate)))) + 4)
-            raw_arr = handle.read_frames_f32(src_start, src_count)
+            divisor = gcd(self.sample_rate, track.sample_rate)
+            up = self.sample_rate // divisor
+            down = track.sample_rate // divisor
+            halo_in = (10 * max(up, down) + up - 1) // up + 2
+            first_src = (start_frame * down) // up
+            last_src = ((start_frame + num_frames) * down + up - 1) // up
+            left_src = max(0, ((first_src - halo_in) // down) * down)
+            right_src = min(handle.total_frames, last_src + halo_in)
+            raw_arr = handle.read_frames_f32(left_src, max(0, right_src - left_src))
             if raw_arr.shape[0] == 0:
                 return np.zeros((num_frames, self.channels), dtype=np.float32)
-            raw_arr = normalize_to_canonical_pcm(
+            converted = normalize_to_canonical_pcm(
                 raw_arr,
                 src_rate=track.sample_rate,
                 src_channels=max(1, track.channels),
                 dst_rate=self.sample_rate,
                 dst_channels=self.channels,
             )
+            origin_out = (left_src * up) // down
+            offset = max(0, start_frame - origin_out)
+            raw_arr = converted[offset : offset + num_frames]
 
         if raw_arr.shape[0] > num_frames:
             return raw_arr[:num_frames]

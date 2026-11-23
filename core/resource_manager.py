@@ -61,6 +61,10 @@ class ResourceManager:
         self._audio_queue_maxsize: int = 0
 
         self._simulation: Optional[SimulationOverrides] = None
+        self._last_smi_ts: float = 0.0
+        self._cached_smi_result: tuple[
+            Optional[str], Optional[float], Optional[float], Optional[float], Optional[float]
+        ] = (None, None, None, None, None)
 
         self._pynvml = None
         self._nvml_initialized = False
@@ -166,16 +170,80 @@ class ResourceManager:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             return 0.0
 
+    def _read_nvml_metrics(
+        self, pynvml_mod: Any
+    ) -> Optional[tuple[Optional[str], Optional[float], Optional[float], Optional[float], Optional[float]]]:
+        try:
+            count = int(pynvml_mod.nvmlDeviceGetCount())
+            if count > 0:
+                handle = pynvml_mod.nvmlDeviceGetHandleByIndex(0)
+                raw_name = pynvml_mod.nvmlDeviceGetName(handle)
+                name = raw_name.decode("utf-8", errors="replace") if isinstance(raw_name, bytes) else str(raw_name)
+                mem = pynvml_mod.nvmlDeviceGetMemoryInfo(handle)
+                util_pct: Optional[float] = None
+                try:
+                    util = pynvml_mod.nvmlDeviceGetUtilizationRates(handle)
+                    util_pct = float(util.gpu)
+                except Exception:
+                    util_pct = None
+                return (
+                    name,
+                    mem.total / (1024.0 * 1024.0),
+                    mem.used / (1024.0 * 1024.0),
+                    mem.free / (1024.0 * 1024.0),
+                    util_pct,
+                )
+        except Exception:
+            pass
+        return None
+
     def sample(self) -> ResourceSnapshot:
         """Take a point-in-time RAM/VRAM sample and append to bounded history."""
-        with self._lock:
-            vm = psutil.virtual_memory()
-            system_total_mb = vm.total / (1024.0 * 1024.0)
-            system_avail_mb = vm.available / (1024.0 * 1024.0)
-            main_ram_mb = self._process.memory_info().rss / (1024.0 * 1024.0)
-            ai_worker_ram_mb = self._read_ai_worker_ram_mb()
+        vm = psutil.virtual_memory()
+        system_total_mb = vm.total / (1024.0 * 1024.0)
+        system_avail_mb = vm.available / (1024.0 * 1024.0)
+        main_ram_mb = self._process.memory_info().rss / (1024.0 * 1024.0)
 
-            gpu_name, vram_total_mb, vram_used_mb, vram_free_mb, gpu_util = self._read_gpu_metrics()
+        with self._lock:
+            ai_worker_pid = self._ai_worker_pid
+            nvml_ok = self._nvml_initialized and self._pynvml is not None
+            pynvml_mod = self._pynvml
+            last_smi_ts = self._last_smi_ts
+            cached_smi = self._cached_smi_result
+
+        ai_worker_ram_mb = 0.0
+        if ai_worker_pid is not None:
+            try:
+                ai_worker_ram_mb = psutil.Process(ai_worker_pid).memory_info().rss / (1024.0 * 1024.0)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                ai_worker_ram_mb = 0.0
+
+        gpu_metrics = self._read_nvml_metrics(pynvml_mod) if nvml_ok and pynvml_mod is not None else None
+        new_smi_ts: Optional[float] = None
+        new_smi_result: Optional[
+            tuple[Optional[str], Optional[float], Optional[float], Optional[float], Optional[float]]
+        ] = None
+
+        if gpu_metrics is None:
+            now_mono = time.monotonic()
+            if last_smi_ts > 0.0 and (now_mono - last_smi_ts) < 2.0:
+                gpu_metrics = cached_smi
+            else:
+                gpus, _, _ = _probe_gpus_nvidia_smi()
+                if gpus:
+                    g = gpus[0]
+                    new_smi_result = (g.name, g.total_vram_mb, g.used_vram_mb, g.free_vram_mb, g.utilization_pct)
+                else:
+                    new_smi_result = (None, None, None, None, None)
+                new_smi_ts = time.monotonic()
+                gpu_metrics = new_smi_result
+
+        gpu_name, vram_total_mb, vram_used_mb, vram_free_mb, gpu_util = gpu_metrics
+
+        with self._lock:
+            if new_smi_result is not None and new_smi_ts is not None:
+                self._last_smi_ts = new_smi_ts
+                self._cached_smi_result = new_smi_result
 
             simulated = False
             if self._simulation is not None:

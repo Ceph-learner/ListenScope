@@ -19,7 +19,7 @@ from ai.backend import build_separation_backend
 from ai.models import MODEL_REGISTRY
 from ai.resource_guard import release_torch_and_memory
 from core.config import AIConfig, AudioConfig, TargetHardwareSpec
-from core.paths import get_bundle_root, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
+from core.paths import get_bundle_root, popen_external_python, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
 from core.system_probe import (
     _probe_gpus_nvml,
     _probe_gpus_nvidia_smi,
@@ -166,10 +166,7 @@ def benchmark_live_model_isolated(
     if not exe_path.exists():
         raise FileNotFoundError(f"找不到 AI Python 解释器: {exe}")
 
-    bundle_root = get_bundle_root()
     env = prepend_ffmpeg_path_env(os.environ.copy())
-    existing_pp = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
 
     ai_cfg_payload = json.dumps(asdict(ai_config or AIConfig()))
     aud_cfg_payload = json.dumps(asdict(audio_config or AudioConfig()))
@@ -194,9 +191,8 @@ def benchmark_live_model_isolated(
     if use_mock_backend:
         cmd.append("--use-mock-backend")
 
-    proc = subprocess.Popen(
+    proc = popen_external_python(
         cmd,
-        cwd=str(bundle_root),
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -286,7 +282,6 @@ def benchmark_live_model_isolated(
 
 
 def _cli_main() -> int:
-    ipc_out = sys.stdout
     parser = argparse.ArgumentParser(description="ListenScope Isolated Live 2-Stem RTF Benchmark")
     parser.add_argument("--model-id", type=str, default="mdx_low_vram_2stem")
     parser.add_argument("--use-gpu", dest="use_gpu", action="store_true", default=True)
@@ -302,7 +297,16 @@ def _cli_main() -> int:
     ai_cfg = AIConfig(**json.loads(args.ai_config_json_str)) if args.ai_config_json_str else AIConfig()
     aud_cfg = AudioConfig(**json.loads(args.audio_config_json_str)) if args.audio_config_json_str else AudioConfig()
 
+    orig_stdout = sys.stdout
+    ipc_out = sys.stdout
+    owns_ipc_out = False
     if args.json:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        ipc_fd = os.dup(1)
+        os.dup2(2, 1)
+        ipc_out = os.fdopen(ipc_fd, "w", encoding="utf-8", buffering=1)
+        owns_ipc_out = True
         sys.stdout = sys.stderr
     try:
         res = benchmark_live_model(
@@ -326,7 +330,13 @@ def _cli_main() -> int:
             print(f"Benchmark error: {exc}", file=sys.stderr)
         return 1
     finally:
-        sys.stdout = ipc_out
+        if owns_ipc_out:
+            try:
+                ipc_out.flush()
+                ipc_out.close()
+            except Exception:
+                pass
+        sys.stdout = orig_stdout
 
 
 if __name__ == "__main__":

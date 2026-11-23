@@ -69,7 +69,12 @@ def normalize_to_canonical_pcm(
         if arr.size == 0:
             return np.empty((0, dst_channels), dtype=np.float32)
         if arr.dtype != np.float32:
-            if np.issubdtype(arr.dtype, np.signedinteger):
+            if arr.dtype == np.uint8:
+                arr = (arr.astype(np.float32) - 128.0) / 128.0
+            elif np.issubdtype(arr.dtype, np.unsignedinteger):
+                half = float(2 ** (arr.dtype.itemsize * 8 - 1))
+                arr = (arr.astype(np.float32) - half) / half
+            elif np.issubdtype(arr.dtype, np.signedinteger):
                 max_val = float(2 ** (arr.dtype.itemsize * 8 - 1))
                 arr = arr.astype(np.float32) / max_val
             else:
@@ -81,8 +86,11 @@ def normalize_to_canonical_pcm(
             return np.empty((0, dst_channels), dtype=np.float32)
         arr = arr[:usable].reshape(-1, src_channels)
     elif arr.ndim == 2:
-        if arr.shape[1] != src_channels and arr.shape[0] == src_channels:
-            arr = arr.T
+        if arr.shape[1] != src_channels:
+            if arr.shape[0] == src_channels:
+                arr = arr.T
+            else:
+                raise ValueError(f"Expected {src_channels} channels, got shape {arr.shape}")
     else:
         raise ValueError(f"Expected 1D or 2D PCM array, got shape {arr.shape}")
 
@@ -114,6 +122,107 @@ def normalize_to_canonical_pcm(
     if not stereo.flags["C_CONTIGUOUS"]:
         stereo = np.ascontiguousarray(stereo)
     return stereo
+
+
+class StreamingResampler:
+    """Stateful polyphase resampler using `scipy.signal.resample_poly` without chunk-boundary clicks."""
+
+    def __init__(self, src_rate: int, dst_rate: int, channels: int = 2) -> None:
+        if src_rate <= 0:
+            raise ValueError(f"src_rate must be positive, got {src_rate}")
+        if dst_rate <= 0:
+            raise ValueError(f"dst_rate must be positive, got {dst_rate}")
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        self.src_rate = int(src_rate)
+        self.dst_rate = int(dst_rate)
+        self.channels = int(channels)
+        g = gcd(self.dst_rate, self.src_rate)
+        self._up = self.dst_rate // g
+        self._down = self.src_rate // g
+        self._halo_in = (10 * max(self._up, self._down) + self._up - 1) // self._up + 2 if self._up != self._down else 0
+        self._buf = np.empty((0, self.channels), dtype=np.float32)
+        self._buf_start_in = 0
+        self._emitted_out = 0
+
+    def reset(self) -> None:
+        self._buf = np.empty((0, self.channels), dtype=np.float32)
+        self._buf_start_in = 0
+        self._emitted_out = 0
+
+    def process(self, chunk: np.ndarray) -> np.ndarray:
+        arr = np.asarray(chunk, dtype=np.float32)
+        if arr.size == 0:
+            return np.empty((0, self.channels), dtype=np.float32)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+            if self.channels > 1 and arr.shape[1] == 1:
+                arr = np.repeat(arr, self.channels, axis=1)
+        if arr.shape[1] != self.channels:
+            raise ValueError(f"Expected {self.channels} channels, got shape {arr.shape}")
+
+        if self._up == self._down:
+            return np.ascontiguousarray(arr, dtype=np.float32)
+
+        self._buf = arr if self._buf.shape[0] == 0 else np.concatenate([self._buf, arr], axis=0)
+        total_in = self._buf_start_in + self._buf.shape[0]
+        safe_in_end = total_in - self._halo_in
+        if safe_in_end <= self._buf_start_in:
+            return np.empty((0, self.channels), dtype=np.float32)
+
+        target_out = (safe_in_end * self._up) // self._down
+        if target_out <= self._emitted_out:
+            return np.empty((0, self.channels), dtype=np.float32)
+
+        approx_in = (self._emitted_out * self._down) // self._up
+        left_in = max(self._buf_start_in, ((approx_in - self._halo_in) // self._down) * self._down)
+        # Align left_in to down-grid if possible
+        if left_in > self._buf_start_in:
+            left_in = (left_in // self._down) * self._down
+            if left_in < self._buf_start_in:
+                left_in = self._buf_start_in
+
+        window = self._buf[left_in - self._buf_start_in :]
+        converted = resample_poly(window, self._up, self._down, axis=0).astype(np.float32, copy=False)
+        origin_out = (left_in * self._up) // self._down
+        start_idx = self._emitted_out - origin_out
+        end_idx = target_out - origin_out
+        if start_idx < 0:
+            start_idx = 0
+        if end_idx <= start_idx:
+            return np.empty((0, self.channels), dtype=np.float32)
+
+        out = np.ascontiguousarray(converted[start_idx:end_idx], dtype=np.float32)
+        self._emitted_out = target_out
+
+        next_approx_in = (self._emitted_out * self._down) // self._up
+        keep_from_in = max(self._buf_start_in, ((next_approx_in - self._halo_in - self._down) // self._down) * self._down)
+        if keep_from_in > self._buf_start_in:
+            drop = keep_from_in - self._buf_start_in
+            self._buf = np.ascontiguousarray(self._buf[drop:])
+            self._buf_start_in = keep_from_in
+
+        return out
+
+    def flush(self) -> np.ndarray:
+        if self._up == self._down or self._buf.shape[0] == 0:
+            self.reset()
+            return np.empty((0, self.channels), dtype=np.float32)
+        total_in = self._buf_start_in + self._buf.shape[0]
+        target_out = (total_in * self._up + self._down - 1) // self._down
+        if target_out <= self._emitted_out:
+            self.reset()
+            return np.empty((0, self.channels), dtype=np.float32)
+        approx_in = (self._emitted_out * self._down) // self._up
+        left_in = max(self._buf_start_in, ((approx_in - self._halo_in) // self._down) * self._down)
+        window = self._buf[left_in - self._buf_start_in :]
+        converted = resample_poly(window, self._up, self._down, axis=0).astype(np.float32, copy=False)
+        origin_out = (left_in * self._up) // self._down
+        start_idx = max(0, self._emitted_out - origin_out)
+        end_idx = target_out - origin_out
+        out = np.ascontiguousarray(converted[start_idx:end_idx], dtype=np.float32)
+        self.reset()
+        return out
 
 
 def compute_rms_and_peak(pcm_f32: np.ndarray) -> tuple[float, float, float, float]:

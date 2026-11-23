@@ -256,7 +256,7 @@ class FixedRingBuffer:
                 else:
                     idxs = (start_ring + np.linspace(b0, b1 - 1, 96, dtype=np.int64)) % cap
                 seg = buf[idxs]
-                mono = 0.5 * (seg[:, 0] + seg[:, 1])
+                mono = seg[:, 0] if seg.shape[1] == 1 else np.mean(seg, axis=1)
                 mins[i] = float(np.min(mono))
                 maxs[i] = float(np.max(mono))
             return mins, maxs, avail_sec
