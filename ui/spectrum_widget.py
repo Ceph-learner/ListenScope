@@ -213,7 +213,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
 
         # Row 1: Waveform
         self.wave_plot = pg.PlotWidget()
-        self.wave_plot.setLabel("bottom", "包络点", **{"font-size": "9pt"})
+        self.wave_plot.setLabel("bottom", "时间 (秒)", **{"font-size": "9pt"})
         self.wave_plot.setBackground("#F8FAFC")
         self.wave_plot.setYRange(-1.05, 1.05)
         self.wave_plot.showGrid(x=True, y=True, alpha=0.22)
@@ -407,10 +407,10 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             return
         self._compact_mode = compact
         if compact:
-            self._root_layout.setContentsMargins(6, 2, 6, 2)
+            self._root_layout.setContentsMargins(6, 0, 6, 0)
             self._root_layout.setSpacing(2)
             self._plot_grid.setSpacing(4)
-            self._header.setMaximumHeight(34)
+            self._header.setMaximumHeight(16777215)
         else:
             self._root_layout.setContentsMargins(10, 6, 10, 8)
             self._root_layout.setSpacing(6)
@@ -421,10 +421,10 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.pitch_detail.setVisible(not compact)
         self.level_meter.setVisible(not compact)
         for card in self._metric_cards:
-            card.setMaximumHeight(44 if compact else 16777215)
+            card.setMaximumHeight(36 if compact else 16777215)
             lay = card.layout()
             if lay is not None:
-                lay.setContentsMargins(8 if compact else 11, 2 if compact else 7, 8 if compact else 11, 2 if compact else 7)
+                lay.setContentsMargins(8 if compact else 11, 1 if compact else 7, 8 if compact else 11, 1 if compact else 7)
                 lay.setSpacing(0 if compact else 2)
         self._arrange_plots()
 
@@ -540,7 +540,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         if snap.waveform_min and snap.waveform_max:
             n_w = len(snap.waveform_min)
             if self._cached_wave_x is None or len(self._cached_wave_x) != n_w:
-                self._cached_wave_x = np.arange(n_w, dtype=np.float32)
+                self._cached_wave_x = np.linspace(-4.0, 0.0, n_w, dtype=np.float32)
             self._wave_max_curve.setData(
                 self._cached_wave_x, np.asarray(snap.waveform_max, dtype=np.float32), skipFiniteCheck=True
             )

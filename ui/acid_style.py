@@ -115,10 +115,10 @@ ACID_PALETTES: dict[str, AcidPalette] = {
         danger="#FF2442",
         border="#2D3438",
         border_strong="#4B565B",
-        dock_bg="#E9EBE7",
-        dock_card="#F4F5F2",
-        dock_ink="#0B0D0F",
-        dock_border="#9EA6A1",
+        dock_bg="#14181C",
+        dock_card="#1D2328",
+        dock_ink="#F1F2EC",
+        dock_border="#4B565B",
         status_ok_bg="#142310",
         status_ok_fg="#CEFF18",
         status_ok_bd="#CEFF18",
@@ -129,14 +129,14 @@ ACID_PALETTES: dict[str, AcidPalette] = {
         status_danger_fg="#FF8FA0",
         status_danger_bd="#FF2442",
         plot_bg="#0E1216",
-        plot_axis="#89918F",
+        plot_axis="#B8C2C0",
         plot_tick_pen="#2D3438",
         plot_wave="#CEFF18",
         plot_fft="#77DCE4",
         plot_log="#CEFF18",
-        hist_plot_bg="#F4F5F2",
-        hist_plot_axis="#0B0D0F",
-        hist_plot_wave="#0B0D0F",
+        hist_plot_bg="#0E1216",
+        hist_plot_axis="#B8C2C0",
+        hist_plot_wave="#CEFF18",
         plot_region_rgba=(34, 17, 255, 34),
         plot_region_pen="#2211FF",
         plot_playhead="#FF2442",
@@ -2199,23 +2199,23 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         row.setSpacing(6)
         row.addStretch(1)
 
-        self.lock_btn = QtWidgets.QPushButton("[STATIC_LOCK: OFF]")
+        self.lock_btn = QtWidgets.QPushButton("[STATIC_DECOR: OFF]")
         self.lock_btn.setObjectName("acidStaticLockBtn")
         self.lock_btn.setCheckable(True)
-        self.lock_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.lock_btn.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         self.lock_btn.setFixedHeight(19)
         self.lock_btn.toggled.connect(self._on_lock_btn_toggled)
         self.lock_help = HelpBadge(
-            "静态锁定 (STATIC_LOCK) 与遥测微动画",
+            "静态装饰锁定 (STATIC_DECOR) 与遥测微动画",
             "• 右侧卡片上的跳动圆点、信号能量柱及电池分段条属于「遥测微动画」，开启音乐动态响应后会随音量与高潮实时变化。\n"
-            "• 点击 [STATIC_LOCK] 可立即冻结主屏幕实时频谱/和弦刷新与全部微动画，方便静态读谱或截图并进一步降低功耗。",
+            "• 点击 [STATIC_DECOR] 可立即冻结底部装饰微动画（不影响主屏幕实时频谱/和弦刷新；如需冻结主屏幕请点顶栏「暂停/冻结画面」）。",
         )
         row.addWidget(self.lock_btn)
         row.addWidget(self.lock_help)
 
     def _on_lock_btn_toggled(self, checked: bool) -> None:
         self._locked = bool(checked)
-        self.lock_btn.setText("[STATIC_LOCK: ON]" if self._locked else "[STATIC_LOCK: OFF]")
+        self.lock_btn.setText("[STATIC_DECOR: ON]" if self._locked else "[STATIC_DECOR: OFF]")
         self.update()
         self.static_lock_toggled.emit(self._locked)
 
@@ -2227,7 +2227,7 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         self._locked = val
         self.lock_btn.blockSignals(True)
         self.lock_btn.setChecked(val)
-        self.lock_btn.setText("[STATIC_LOCK: ON]" if val else "[STATIC_LOCK: OFF]")
+        self.lock_btn.setText("[STATIC_DECOR: ON]" if val else "[STATIC_DECOR: OFF]")
         self.lock_btn.blockSignals(False)
         self.update()
 
@@ -2764,8 +2764,8 @@ QGroupBox#historyPaperDock {{
     border-radius: 0px;
 }}
 QGroupBox#historyPaperDock::title {{
-    background-color: {p.dock_ink};
-    color: {'#FFFFFF' if is_light else '#CEFF18'};
+    background-color: {p.dock_ink if is_light else p.bg_elevated};
+    color: {'#FFFFFF' if is_light else p.accent};
     border-left: 3px solid {p.accent};
     padding: 1px 8px;
 }}
@@ -2782,7 +2782,7 @@ QGroupBox#historyPaperDock QToolButton {{
 QGroupBox#historyPaperDock QPushButton:hover:enabled,
 QGroupBox#historyPaperDock QToolButton:hover:enabled {{
     background-color: {p.dock_ink};
-    color: #FFFFFF;
+    color: {'#FFFFFF' if is_light else p.text_inverse};
     border-color: {p.dock_ink};
 }}
 QGroupBox#historyPaperDock QToolButton#helpBadge {{
@@ -3626,4 +3626,15 @@ def apply_acid_plot_theme(
         axis.setTickFont(tick_font)
         axis.setPen(p.plot_tick_pen)
         axis.setTextPen(axis_col)
+        try:
+            axis.labelStyle["color"] = axis_col
+            if axis.labelText:
+                axis.setLabel(
+                    text=axis.labelText,
+                    units=axis.labelUnits,
+                    unitPrefix=axis.labelUnitPrefix,
+                    color=axis_col,
+                )
+        except Exception:
+            pass
 

@@ -37,7 +37,7 @@ from ai.models import MODEL_REGISTRY, list_models
 from audio.playback import StemMixerEngine
 from core.appearance import Appearance
 from core.config import AIConfig, ResourceLimits
-from core.i18n import get_current_language, tr, tr_telemetry, translate_text, translate_widget_tree
+from core.i18n import get_current_language, set_i18n_text, tr, tr_telemetry, translate_text, translate_widget_tree
 from core.logging import PerformanceRecord
 from core.models import (
     AIJobProgress,
@@ -785,6 +785,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         # 2. CENTER TABS (Slash-indexed Telemetry navigation with animated signal-lock rail)
         self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setUsesScrollButtons(True)
         self._main_tab_bar = AcidTabBar(self.tabs)
         self.tabs.setTabBar(self._main_tab_bar)
         self.spectrum_widget = SpectrumAnalysisWidget()
@@ -931,6 +932,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         )
         more_flow.addWidget(self.ab_export_wav_btn)
         more_flow.addWidget(self.import_audio_btn)
+        self.segment_spin = QtWidgets.QSpinBox()
+        self.segment_spin.setRange(4, 10)
+        self.segment_spin.setValue(max(4, min(10, int(ai_config.demucs_default_segment_sec))))
+        self.segment_spin.setPrefix("Demucs seg=")
+        self.segment_spin.setSuffix("s")
+        more_flow.addWidget(self.segment_spin)
         more_v.addLayout(more_flow)
         bottom_l.addWidget(self._ab_more_panel)
 
@@ -983,18 +990,18 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_region.sigRegionChanged.connect(self._on_ab_region_dragged)
         self.ab_region.sigRegionChangeFinished.connect(self._on_ab_region_finished)
         bottom_l.addWidget(self.history_overview_plot)
+        bookmark_row = FlowLayout(margin=0, h_spacing=6, v_spacing=3)
         for text, label, factor in (("−", "缩小横轴", 1.6), ("+", "放大横轴", 0.625)):
             button = QtWidgets.QToolButton()
             button.setText(text)
             button.setAccessibleName(label)
             button.setToolTip(label)
             button.clicked.connect(lambda _checked=False, factor=factor: self.zoom_history(factor))
-            more_flow.addWidget(button)
+            bookmark_row.addWidget(button)
         self.history_reset = QtWidgets.QPushButton("120 秒总览")
         self.history_reset.clicked.connect(lambda: self.history_overview_plot.setXRange(-120, 0, padding=0))
-        more_flow.addWidget(self.history_reset)
+        bookmark_row.addWidget(self.history_reset)
 
-        bookmark_row = FlowLayout(margin=0, h_spacing=6, v_spacing=3)
         bookmark_row.addWidget(QtWidgets.QLabel("A/B 书签(<=12):"))
         self.bookmark_label_edit = QtWidgets.QLineEdit()
         self.bookmark_label_edit.setPlaceholderText("书签名称 (如 副歌/Solo，可留空)")
@@ -1031,16 +1038,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.ai_2stem_combo.setMinimumContentsLength(18)
-        self.ai_2stem_combo.setMaximumWidth(260)
+        self.ai_2stem_combo.setMaximumWidth(240)
         self._refresh_model_combos()
         self.ai_gpu_chk = QtWidgets.QCheckBox("优先 GPU")
         self.update_hardware_report(hardware_report, auto_sync_gpu_chk=True)
-
-        self.segment_spin = QtWidgets.QSpinBox()
-        self.segment_spin.setRange(4, 10)
-        self.segment_spin.setValue(max(4, min(10, int(ai_config.demucs_default_segment_sec))))
-        self.segment_spin.setPrefix("Demucs seg=")
-        self.segment_spin.setSuffix("s")
 
         self.sep_2stem_btn = QtWidgets.QPushButton("AI 2-Stem 分轨 (人声/伴奏)")
         self.sep_2stem_btn.setObjectName("acidPrimaryBtn")
@@ -1050,7 +1051,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         row_b.addWidget(QtWidgets.QLabel("2-Stem 模型:"))
         row_b.addWidget(self.ai_2stem_combo)
-        row_b.addWidget(self.segment_spin)
         row_b.addWidget(self.ai_gpu_chk)
         row_b.addWidget(
             HelpBadge(
@@ -1332,6 +1332,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _on_ab_more_toggled(self, checked: bool) -> None:
         self._ab_more_user_override = bool(checked)
         self._ab_more_panel.setVisible(bool(checked))
+        set_i18n_text(self.ab_more_btn, "▴ 收起更多" if checked else "⋯ 更多")
 
     def set_bottom_panel_collapsed(self, collapsed: bool) -> None:
         collapsed = bool(collapsed)
@@ -1339,7 +1340,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._bottom_dock.setVisible(not collapsed)
         self._bottom_collapse_btn.blockSignals(True)
         self._bottom_collapse_btn.setChecked(collapsed)
-        self._bottom_collapse_btn.setText("▸ 展开 A/B" if collapsed else "▾ 收起 A/B")
+        set_i18n_text(self._bottom_collapse_btn, "▸ 展开 A/B" if collapsed else "▾ 收起 A/B")
         self._bottom_collapse_btn.blockSignals(False)
         if not collapsed:
             self._apply_responsive_layout()
@@ -1371,6 +1372,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._ab_more_panel.setVisible(show_more)
             self.ab_more_btn.blockSignals(True)
             self.ab_more_btn.setChecked(show_more)
+            set_i18n_text(self.ab_more_btn, "▴ 收起更多" if show_more else "⋯ 更多")
             self.ab_more_btn.blockSignals(False)
 
         if not self._bottom_panel_collapsed:
@@ -2591,7 +2593,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "freeze_screen_btn"):
             self.freeze_screen_btn.blockSignals(True)
             self.freeze_screen_btn.setChecked(self._freeze_screen)
-            self.freeze_screen_btn.setText("▶ 恢复画面" if self._freeze_screen else "⏸ 冻结画面")
+            set_i18n_text(self.freeze_screen_btn, "▶ 恢复画面" if self._freeze_screen else "⏸ 冻结画面")
             self.freeze_screen_btn.blockSignals(False)
 
     def toggle_freeze_screen(self) -> None:

@@ -551,7 +551,7 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w._pill_dark.isChecked() is True
         assert w._skin_badge.text() == "ACID // VOID_V2"
         assert w._history_box.objectName() == "historyPaperDock"
-        assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#F4F5F2"
+        assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#0E1216"
         assert "// 01 SPECTRUM" in w.tabs.tabText(0)
         assert "// 02 CHROMA & HARMONY" in w.tabs.tabText(1).replace("&&", "&")
         assert w.chroma_widget.chord_echo_lbl.isHidden() is False
@@ -597,10 +597,10 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
 
         w._acid_footer.lock_btn.click()
         assert w._static_lock is True
-        assert w._acid_footer.lock_btn.text() == "[STATIC_LOCK: ON]"
+        assert w._acid_footer.lock_btn.text() == "[STATIC_DECOR: ON]"
         w._acid_footer.lock_btn.click()
         assert w._static_lock is False
-        assert w._acid_footer.lock_btn.text() == "[STATIC_LOCK: OFF]"
+        assert w._acid_footer.lock_btn.text() == "[STATIC_DECOR: OFF]"
 
         w.freeze_screen_btn.click()
         assert w._freeze_screen is True

@@ -373,3 +373,147 @@ def test_p2c_perf_analyze_latest_once_cpu_within_5ms_median() -> None:
     med_ms = float(np.median(times[20:]))
     assert med_ms <= 5.0, f"analyze_latest_once steady median CPU is {med_ms:.2f} ms (must be <= 5.0 ms)"
 
+
+def test_ub08_all_visible_controls_translated_in_en_ja_ko(tmp_path: Path) -> None:
+    """U-B08: Switching to en/ja/ko leaves zero untranslated CJK/Hangul/Kana leaks across visible widgets and tabs."""
+    from dataclasses import replace
+    from audio.playback import StemMixerEngine
+    from core.config import AIConfig, ResourceLimits
+    from core.system_probe import probe_system
+    from core.i18n import set_current_language
+    from ui.main_window import ListenScopeMainWindow
+
+    app = _get_app()
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    re_cjk_all = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+    re_hangul = re.compile(r"[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]")
+    re_han_kana = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff]")
+    user_data_whitelist: set[str] = set()
+
+    try:
+        win.resize(1093, 566)
+        win.show()
+        # Exercise dynamic state toggles before/after translation
+        win.freeze_screen_btn.click()
+        win._bottom_collapse_btn.click()
+        win._bottom_collapse_btn.click()
+        win.ab_more_btn.click()
+        win.ab_more_btn.click()
+        app.processEvents()
+
+        for lang, pat in (("en", re_cjk_all), ("ja", re_hangul), ("ko", re_han_kana)):
+            win.apply_appearance(replace(win.appearance, language=lang), force_theme=True)
+            app.processEvents()
+            leaks: list[str] = []
+            for w in [win, *win.findChildren(QtWidgets.QWidget)]:
+                if not w.isVisible():
+                    continue
+                for attr in ("text", "toolTip", "accessibleName"):
+                    fn = getattr(w, attr, None)
+                    if callable(fn):
+                        val = str(fn() or "").strip()
+                        if val and val not in user_data_whitelist and pat.search(val):
+                            leaks.append(f"{type(w).__name__}.{attr}={val!r}")
+                if isinstance(w, QtWidgets.QTabBar):
+                    for idx in range(w.count()):
+                        t = w.tabText(idx).strip()
+                        if t and t not in user_data_whitelist and pat.search(t):
+                            leaks.append(f"QTabBar[{idx}]={t!r}")
+            assert leaks == [], f"{lang} visible leaks: {leaks}"
+    finally:
+        set_current_language("zh")
+        win.close()
+        mixer.close()
+
+
+def _rel_luminance(hex_color: str) -> float:
+    from PySide6 import QtGui
+
+    c = QtGui.QColor(hex_color)
+    def _lin(v: float) -> float:
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * _lin(c.redF()) + 0.7152 * _lin(c.greenF()) + 0.0722 * _lin(c.blueF())
+
+
+def _contrast_ratio(fg_hex: str, bg_hex: str) -> float:
+    l1 = _rel_luminance(fg_hex)
+    l2 = _rel_luminance(bg_hex)
+    hi, lo = max(l1, l2), min(l1, l2)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_ub03_dark_dock_contrast_header_no_clip_1093_no_overflow_and_tab05_accessible() -> None:
+    """U-B03: Dark dock & axis contrast >=4.5:1, no header subtitle clip (zh/en), no 1093x566 bottom overflow, tab 05 accessible."""
+    from dataclasses import replace
+    from audio.playback import StemMixerEngine
+    from core.config import AIConfig, ResourceLimits
+    from core.system_probe import probe_system
+    from core.i18n import set_current_language
+    from ui.acid_style import get_acid_palette
+    from ui.main_window import ListenScopeMainWindow
+
+    app = _get_app()
+    dark_p = get_acid_palette("dark")
+    assert _rel_luminance(dark_p.dock_bg) < 0.20, f"Dark dock_bg {dark_p.dock_bg} is too bright"
+    assert _rel_luminance(dark_p.dock_card) < 0.20, f"Dark dock_card {dark_p.dock_card} is too bright"
+    assert _rel_luminance(dark_p.hist_plot_bg) < 0.20, f"Dark hist_plot_bg {dark_p.hist_plot_bg} is too bright"
+    assert _contrast_ratio(dark_p.plot_axis, dark_p.plot_bg) >= 4.5
+    assert _contrast_ratio(dark_p.hist_plot_axis, dark_p.hist_plot_bg) >= 4.5
+
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    try:
+        # 1. Dark dock QSS uses dark background
+        win.apply_appearance(replace(win.appearance, preset="acid_telemetry", theme_mode="dark", language="en"), force_theme=True)
+        win.resize(1366, 768)
+        win.show()
+        app.processEvents()
+        assert f"background-color: {dark_p.dock_bg}" in win.styleSheet()
+
+        # 2. SpectrumAnalysisWidget header subtitle not clipped by metric cards in both zh and en
+        for lang in ("en", "zh"):
+            for w, h in ((1366, 768), (1093, 566)):
+                win.apply_appearance(replace(win.appearance, language=lang), force_theme=True)
+                win.resize(w, h)
+                app.processEvents()
+                sw = win.spectrum_widget
+                assert sw._header.geometry().bottom() <= sw._metric_cards[0].geometry().top(), (
+                    f"Header overlaps cards at {w}x{h} ({lang}): {sw._header.geometry()} vs {sw._metric_cards[0].geometry()}"
+                )
+                assert sw._header.height() >= sw._header.sizeHint().height() - 1, (
+                    f"Header clipped at {w}x{h} ({lang}): {sw._header.height()} < {sw._header.sizeHint().height()}"
+                )
+
+        # 3. At 1093x566, no visible widget inside _history_box overflows bottom/right
+        win.resize(1093, 566)
+        app.processEvents()
+        box_rect = win._history_box.rect()
+        for child in win._history_box.findChildren(QtWidgets.QWidget):
+            if child.isVisible() and child.parent() is win._history_box:
+                g = child.geometry()
+                assert g.bottom() <= box_rect.bottom() + 1 and g.right() <= box_rect.right() + 1, (
+                    f"Overflow in _history_box at 1093x566: {type(child).__name__} {g} vs {box_rect}"
+                )
+
+        # 4. Tabs scroll buttons enabled and tab 05 (LIVE ENGINE) switchable at 1093 width
+        assert win.tabs.usesScrollButtons() is True
+        win.tabs.setCurrentIndex(4)
+        app.processEvents()
+        assert win.tabs.currentWidget() is win.live_widget
+    finally:
+        set_current_language("zh")
+        win.close()
+        mixer.close()
+
+
