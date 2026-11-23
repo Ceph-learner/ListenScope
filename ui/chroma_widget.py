@@ -21,7 +21,7 @@ from analysis.chords import (
 from analysis.chroma import PITCH_CLASSES
 from audio.drum_preview import DrumPreviewPlayer
 from audio.metronome import TapTempoTracker
-from core.i18n import get_current_language, translate_text
+from core.i18n import get_current_language, set_i18n_text, translate_text
 from core.models import AnalysisSnapshot
 from ui.appearance import apply_plot_appearance, set_widget_tone
 from ui.chord_practice import ChordPracticeDialog
@@ -806,15 +806,15 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     def _on_tap_tempo_clicked(self) -> None:
         tap_bpm = self._tap_tracker.tap()
         if tap_bpm is None:
-            self.tap_status_lbl.setText(f"Tap x{self._tap_tracker.tap_count} (继续点击...)")
+            set_i18n_text(self.tap_status_lbl, f"Tap x{self._tap_tracker.tap_count} (继续点击...)")
             return
-        self.tap_status_lbl.setText(f"Tap={tap_bpm:.1f} BPM")
+        set_i18n_text(self.tap_status_lbl, f"Tap={tap_bpm:.1f} BPM")
         self.metronome_bpm_spin.setValue(tap_bpm)
 
     def _on_adopt_bpm_clicked(self) -> None:
         if self._latest_detected_bpm is not None:
             self.metronome_bpm_spin.setValue(round(self._latest_detected_bpm, 1))
-            self.tap_status_lbl.setText(f"已同步 {self._latest_detected_bpm:.1f} BPM")
+            set_i18n_text(self.tap_status_lbl, f"已同步 {self._latest_detected_bpm:.1f} BPM")
 
     def _on_metronome_vol_slider_changed(self, value: int) -> None:
         self.metronome_vol_lbl.setText(f"音量: {int(value)}%")
@@ -831,7 +831,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.auto_reset_chk.setChecked(bool(enabled))
             self.auto_reset_chk.blockSignals(False)
         if track_status_text is not None:
-            self.track_status_lbl.setText(track_status_text)
+            set_i18n_text(self.track_status_lbl, track_status_text)
 
     def sync_metronome_ui(
         self,

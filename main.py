@@ -1242,7 +1242,8 @@ class ListenScopeController:
             shutil.rmtree(task_dir, ignore_errors=True)
             self.window.ai_status_badge.setText("AI: Blocked")
             self.window.mixer_widget.job_progress.setValue(0)
-            self.window.mixer_widget.job_status_lbl.setText(f"❌ 拒绝启动 AI 分轨: {msg}")
+            from core.i18n import set_i18n_text
+            set_i18n_text(self.window.mixer_widget.job_status_lbl, f"❌ 拒绝启动 AI 分轨: {msg}")
             self._refresh_resource_ui_now()
             self.window.show_banner_message(f"拒绝启动 AI 分轨: {msg}")
         else:
@@ -1320,7 +1321,8 @@ class ListenScopeController:
         if not ok:
             self.window.ai_status_badge.setText("AI: Blocked")
             self.window.mixer_widget.job_progress.setValue(0)
-            self.window.mixer_widget.job_status_lbl.setText(f"❌ OOM 恢复启动失败: {msg}")
+            from core.i18n import set_i18n_text
+            set_i18n_text(self.window.mixer_widget.job_status_lbl, f"❌ OOM 恢复启动失败: {msg}")
             self._refresh_resource_ui_now()
             self.window.show_banner_message(f"OOM 恢复启动失败: {msg}")
         else:

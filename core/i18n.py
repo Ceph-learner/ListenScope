@@ -663,6 +663,17 @@ def _translate_cached(
         apply_fn(target)
 
 
+def set_i18n_text(widget: QtCore.QObject, zh_text: str) -> None:
+    """Update a dynamic widget's text while refreshing _ls_orig_text for language switches."""
+    orig = str(zh_text)
+    widget.setProperty("_ls_orig_text", orig)
+    code = get_current_language()
+    target = orig if code == "zh" else translate_text(orig, code)
+    setter = getattr(widget, "setText", None)
+    if callable(setter):
+        setter(target)
+
+
 def translate_widget_tree(root: QtWidgets.QWidget, lang: str) -> None:
     """Recursively translate labels, buttons, groupboxes, tabs, combos, tables, spinboxes, plots, and HelpBadges.
 

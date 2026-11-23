@@ -124,7 +124,6 @@ def test_ufx2_ballistics_and_spectrogram_ring_buffer_exist() -> None:
     assert "skipFiniteCheck=True" in ui_texts, "pyqtgraph curves missing skipFiniteCheck=True"
 
 
-@pytest.mark.xfail(strict=True, reason="U-B08")
 def test_ub08_set_i18n_text_prevents_dynamic_label_reversion_on_language_switch() -> None:
     """core/i18n.py must provide set_i18n_text(widget, zh) so updating dynamic labels refreshes _ls_orig_text."""
     from core import i18n

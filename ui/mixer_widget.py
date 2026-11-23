@@ -15,6 +15,7 @@ from analysis.chroma import PITCH_CLASSES
 from analysis.drum_midi import export_drum_midi
 from audio.playback import BASS_MONITOR_BOOST_DB, StemMixerEngine
 from core.appearance import Appearance
+from core.i18n import set_i18n_text
 from core.models import (
     AIJobProgress,
     AIJobResult,
@@ -891,14 +892,14 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.loop_chk.blockSignals(True)
         self.loop_chk.setChecked(True)
         self.loop_chk.blockSignals(False)
-        self.subloop_badge_lbl.setText(f"局部循环 [{self._tr_chord(seg.chord)}]: {s_sec:.2f}s ~ {e_sec:.2f}s")
+        set_i18n_text(self.subloop_badge_lbl, f"局部循环 [{self._tr_chord(seg.chord)}]: {s_sec:.2f}s ~ {e_sec:.2f}s")
         set_widget_tone(self.subloop_badge_lbl, "ok")
         self.clear_subloop_btn.setEnabled(True)
         self.sync_playback_position()
 
     def _on_clear_subloop(self) -> None:
         self.mixer_engine.clear_loop_region()
-        self.subloop_badge_lbl.setText("循环范围: 全曲")
+        set_i18n_text(self.subloop_badge_lbl, "循环范围: 全曲")
         set_widget_tone(self.subloop_badge_lbl, "info")
         self.clear_subloop_btn.setEnabled(False)
 
@@ -985,7 +986,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         subloop = self.mixer_engine.loop_region_sec
         if subloop is None and self.clear_subloop_btn.isEnabled():
-            self.subloop_badge_lbl.setText("循环范围: 全曲")
+            set_i18n_text(self.subloop_badge_lbl, "循环范围: 全曲")
             set_widget_tone(self.subloop_badge_lbl, "info")
             self.clear_subloop_btn.setEnabled(False)
 
@@ -1016,7 +1017,7 @@ class StemMixerWidget(QtWidgets.QWidget):
                 hud_txt = f"当前和弦: {cur_disp}  |  下一和弦: {nxt}"
                 if hud_txt != self._cached_hud_txt:
                     self._cached_hud_txt = hud_txt
-                    self.live_chord_hud_lbl.setText(hud_txt)
+                    set_i18n_text(self.live_chord_hud_lbl, hud_txt)
                     set_widget_tone(self.live_chord_hud_lbl, "ok")
                 if self.mixer_engine.is_playing and self.chord_timeline_table.currentRow() != active_idx:
                     self.chord_timeline_table.blockSignals(True)
@@ -1284,7 +1285,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.clear_results_btn.setEnabled(bool(self._rows) and not running)
         self.job_progress.set_active(running)
         self.job_progress.setValue(int(round(prog.progress * 100)))
-        self.job_status_lbl.setText(f"[{prog.state.value}] {prog.message}")
+        set_i18n_text(self.job_status_lbl, f"[{prog.state.value}] {prog.message}")
         if running:
             self.oom_banner.setVisible(False)
 
@@ -1294,25 +1295,26 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.job_progress.set_active(False)
         if res.state == AIJobState.COMPLETED:
             self.job_progress.setValue(100)
-            self.job_status_lbl.setText(
-                f"[OK] 分轨完成 ({res.model_id} | {res.device_used} | 用时 {res.elapsed_sec:.2f}s | 峰值 Worker RAM={res.peak_ram_mb:.1f} MB)"
+            set_i18n_text(
+                self.job_status_lbl,
+                f"[OK] 分轨完成 ({res.model_id} | {res.device_used} | 用时 {res.elapsed_sec:.2f}s | 峰值 Worker RAM={res.peak_ram_mb:.1f} MB)",
             )
             self.oom_banner.setVisible(False)
             self.load_stem_paths(res.stem_paths)
         elif res.state == AIJobState.OOM_ERROR:
             self.job_progress.setValue(0)
-            self.job_status_lbl.setText(f"[WARN] GPU OOM: {res.error}")
+            set_i18n_text(self.job_status_lbl, f"[WARN] GPU OOM: {res.error}")
             self.oom_msg_lbl.setText(res.error or "显存/内存不足，请选择安全恢复策略：")
             self.oom_banner.setVisible(True)
         else:
             self.job_progress.setValue(0)
-            self.job_status_lbl.setText(f"[{res.state.value}] {res.error or '已停止'}")
+            set_i18n_text(self.job_status_lbl, f"[{res.state.value}] {res.error or '已停止'}")
 
     def clear_results(self) -> None:
         self.load_stem_paths({})
         self.job_progress.set_active(False)
         self.job_progress.setValue(0)
-        self.job_status_lbl.setText("分轨结果已清除。可在历史时间轴重新选择片段。")
+        set_i18n_text(self.job_status_lbl, "分轨结果已清除。可在历史时间轴重新选择片段。")
 
     def load_stem_paths(self, stem_paths: dict[str, str]) -> None:
         for row in self._rows.values():
@@ -1349,9 +1351,9 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.save_midi_btn.setEnabled(False)
         self.loop_chord_btn.setEnabled(False)
         self.clear_subloop_btn.setEnabled(False)
-        self.subloop_badge_lbl.setText("循环范围: 全曲")
+        set_i18n_text(self.subloop_badge_lbl, "循环范围: 全曲")
         set_widget_tone(self.subloop_badge_lbl, "info")
-        self.live_chord_hud_lbl.setText("实时和弦追踪: -")
+        set_i18n_text(self.live_chord_hud_lbl, "实时和弦追踪: -")
         set_widget_tone(self.live_chord_hud_lbl, "info")
         self._sync_midi_stem_selectors(stem_paths)
         set_widget_tone(self.deep_rhythm_badge_lbl, "info")
