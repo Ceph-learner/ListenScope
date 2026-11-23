@@ -2250,7 +2250,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         else:
             chk_text = "优先 GPU (未检测到可用 NVIDIA GPU)"
         self.ai_gpu_chk.setProperty("_ls_orig_text", chk_text)
-        self.ai_gpu_chk.setText(translate_text(chk_text, get_current_language()))
+        translated = translate_text(chk_text, get_current_language())
+        self.ai_gpu_chk.setToolTip(translated)
+        if self.ai_gpu_chk.width() > 36:
+            avail = max(1, self.ai_gpu_chk.width() - 28)
+            disp = self.ai_gpu_chk.fontMetrics().elidedText(translated, QtCore.Qt.TextElideMode.ElideRight, avail)
+        else:
+            disp = translated
+        self.ai_gpu_chk.setText(disp)
         if auto_sync_gpu_chk:
             self.ai_gpu_chk.setChecked(bool(report.gpu_ai_ready))
 

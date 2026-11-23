@@ -323,7 +323,6 @@ def test_ub31_mixer_header_does_not_overlap_groupbox_and_progress_visible() -> N
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B32")
 def test_ub32_fixed_width_controls_elide_with_ellipsis_and_full_tooltip() -> None:
     """Fixed-width controls (ai_2stem_combo, ai_gpu_chk) at 1093px must elide with ellipsis or fit fully, with full-text tooltip."""
     from audio.playback import StemMixerEngine
