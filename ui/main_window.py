@@ -494,6 +494,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ab_bookmark_select_requested = QtCore.Signal(int)
     ab_bookmark_delete_requested = QtCore.Signal(int)
     restart_requested = QtCore.Signal()
+    close_behavior_changed = QtCore.Signal(str)
 
     def __init__(
         self,
@@ -545,6 +546,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._resize_start_geom: Optional[QtCore.QRect] = None
         self._win11_dwm_rounded: bool = False
         self._force_quit: bool = False
+        self.close_behavior: str = "ask"
         self._tray_icon: Optional[QtWidgets.QSystemTrayIcon] = None
         self._tray_notified: bool = False
         self._telemetry_phase: float = 0.0
@@ -2239,10 +2241,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                     want_tray = True
                     if remember_chk.isChecked():
                         self.close_behavior = "tray"
+                        self.close_behavior_changed.emit(self.close_behavior)
                 elif clicked is btn_quit:
                     want_tray = False
                     if remember_chk.isChecked():
                         self.close_behavior = "quit"
+                        self.close_behavior_changed.emit(self.close_behavior)
                 else:
                     event.ignore()
                     return
@@ -2652,13 +2656,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         perf_records: list[PerformanceRecord],
         logs: list[str],
     ) -> None:
-        self.resource_bar.update_snapshot(snap)
-        if snap.ai_worker_ram_mb < 1.0 and snap.status == ResourceStatus.WARNING:
-            self.resource_bar.status_badge.setText("内存偏低")
-            self.resource_bar.status_badge.setToolTip(
-                f"当前可用内存 {snap.system_ram_available_mb:.0f} MB：实时分析与 A/B 练习正常，"
-                "启动新 AI 分轨前建议关闭占用内存的程序，或在设置中调整 pause_ram_before_ai_mb。"
-            )
+        self.resource_bar.update_snapshot(
+            snap,
+            critical_ram_mb=self._resource_limits.critical_ram_mb,
+            critical_vram_free_mb=self._resource_limits.critical_vram_free_mb,
+        )
         self.resource_panel.update_snapshot(snap)
         self.resource_panel.update_performance_records(perf_records)
         self.resource_panel.update_logs(logs)
@@ -2740,6 +2742,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             ai_python_executable=self._ai_python_executable,
             midi_python_executable=self._midi_python_executable,
             appearance=self.appearance,
+            close_behavior=self.close_behavior,
             acid_variant=self._acid_variant or "",
             parent=self,
         )
@@ -2769,6 +2772,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         try:
             accepted = dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted
             if accepted:
+                close_behavior_changed = dlg.updated_close_behavior != self.close_behavior
+                if close_behavior_changed:
+                    self.close_behavior = dlg.updated_close_behavior
                 if dlg.updated_appearance != self.appearance:
                     self.apply_appearance(dlg.updated_appearance)
                     self.appearance_applied.emit()
@@ -2783,6 +2789,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                     self.segment_spin.setValue(max(4, min(10, int(self._ai_config.demucs_default_segment_sec))))
                     self._refresh_model_combos()
                     self.settings_applied.emit(self._resource_limits, self._ai_config, self._ai_python_executable)
+                elif close_behavior_changed:
+                    self.close_behavior_changed.emit(self.close_behavior)
             else:
                 if self.appearance != initial_appearance:
                     self.apply_appearance(initial_appearance)

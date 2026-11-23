@@ -26,11 +26,19 @@ def _status_to_tone(status: ResourceStatus) -> str:
 class ResourceMonitorBar(QtWidgets.QFrame):
     """Compact top-bar resource health capsule."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        *,
+        critical_ram_mb: float = 2048.0,
+        critical_vram_free_mb: float = 1024.0,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("resourceCapsule")
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self._cached_texts: dict[str, str] = {}
+        self._critical_ram_mb = float(critical_ram_mb)
+        self._critical_vram_free_mb = float(critical_vram_free_mb)
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 4, 2)
         layout.setSpacing(5)
@@ -67,7 +75,13 @@ class ResourceMonitorBar(QtWidgets.QFrame):
             if parent is not None and parent.layout() is not None:
                 parent.layout().activate()
 
-    def update_snapshot(self, snap: ResourceSnapshot) -> None:
+    def update_snapshot(
+        self,
+        snap: ResourceSnapshot,
+        *,
+        critical_ram_mb: Optional[float] = None,
+        critical_vram_free_mb: Optional[float] = None,
+    ) -> None:
         if snap.ai_worker_ram_mb >= 1.0:
             ram_txt = f"RAM {snap.main_ram_mb:.0f}M | AI {snap.ai_worker_ram_mb:.0f}M | Free {snap.system_ram_available_mb:.0f}M"
         else:
@@ -79,8 +93,16 @@ class ResourceMonitorBar(QtWidgets.QFrame):
             else "VRAM N/A"
         )
         self._set_text_if_changed("vram", self.vram_label, vram_txt)
+        crit_ram = self._critical_ram_mb if critical_ram_mb is None else float(critical_ram_mb)
+        crit_vram = self._critical_vram_free_mb if critical_vram_free_mb is None else float(critical_vram_free_mb)
         ai_idle = snap.ai_worker_ram_mb < 1.0
-        if ai_idle and snap.status == ResourceStatus.WARNING:
+        vram_critical = snap.vram_free_mb is not None and snap.vram_free_mb < crit_vram
+        if (
+            ai_idle
+            and snap.status in (ResourceStatus.WARNING, ResourceStatus.CRITICAL)
+            and snap.system_ram_available_mb >= crit_ram
+            and not vram_critical
+        ):
             self._set_text_if_changed("status", self.status_badge, "内存偏低")
             set_widget_tone(self.status_badge, "warn")
             self.status_badge.setToolTip(

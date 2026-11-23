@@ -487,11 +487,40 @@ def test_w14_idle_low_ram_shows_amber_not_red_critical_and_records_report() -> N
     for token in ("1830", "3893", "0.435"):
         assert token in report_txt, f"docs/WINDOWS_TEST_REPORT.md missing measurement {token!r}"
 
-    mw_src = (REPO_ROOT / "ui" / "main_window.py").read_text("utf-8")
-    assert "内存偏低" in mw_src, "ui/main_window.py missing amber '内存偏低' state when AI is idle"
-    assert "pause_ram_before_ai_mb" in mw_src or "pause_ram_before_ai_mb" in (REPO_ROOT / "main.py").read_text("utf-8"), (
+    rw_src = (REPO_ROOT / "ui" / "resource_widget.py").read_text("utf-8")
+    assert "内存偏低" in rw_src, "ui/resource_widget.py missing amber '内存偏低' state when AI is idle"
+    rm_src = (REPO_ROOT / "core" / "resource_manager.py").read_text("utf-8")
+    assert "pause_ram_before_ai_mb" in rm_src, (
         "AI rejection notice missing pause_ram_before_ai_mb setting guidance"
     )
+
+    from core.models import ResourceSnapshot, ResourceStatus
+    from ui.resource_widget import ResourceMonitorBar
+
+    _get_app()
+    bar = ResourceMonitorBar()
+    snap = ResourceSnapshot(
+        timestamp=0.0,
+        main_ram_mb=320.0,
+        ai_worker_ram_mb=0.0,
+        system_ram_total_mb=16384.0,
+        system_ram_available_mb=2600.0,
+        gpu_name=None,
+        vram_total_mb=None,
+        vram_used_mb=None,
+        vram_free_mb=None,
+        gpu_utilization_pct=None,
+        active_ai_jobs=0,
+        loaded_models=0,
+        current_model=None,
+        current_task=None,
+        audio_queue_size=0,
+        audio_queue_maxsize=64,
+        ai_buffer_seconds=0.0,
+        status=ResourceStatus.CRITICAL,
+    )
+    bar.update_snapshot(snap)
+    assert bar.status_badge.text() == "内存偏低"
 
 
 def test_w15_ui_polish_source_combo_stretch_and_smtc_concise_and_footer_spacing() -> None:

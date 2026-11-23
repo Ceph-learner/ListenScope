@@ -135,6 +135,7 @@ class SettingsDialog(QtWidgets.QDialog):
         ai_python_executable: str = "",
         midi_python_executable: str = "",
         appearance: Appearance = Appearance(),
+        close_behavior: str = "ask",
         acid_variant: Optional[str] = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
@@ -160,6 +161,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self._updated_ai_python: str = ai_python_executable
         self._updated_midi_python: str = midi_python_executable
         self._updated_appearance: Appearance = appearance
+        self._updated_close_behavior: str = str(close_behavior or "ask").strip().lower()
+        if self._updated_close_behavior not in ("ask", "tray", "quit"):
+            self._updated_close_behavior = "ask"
         self._verified_ai_probe: Optional[dict[str, Any]] = None
         self._dialog_closed = False
         self._bootstrap_mgr = get_bootstrap_manager()
@@ -342,6 +346,14 @@ class SettingsDialog(QtWidgets.QDialog):
         surface_row.addWidget(self.surface_style_combo)
         surface_row.addWidget(self.close_to_tray_chk, 1)
         appearance_form.addRow("质感与托盘:", surface_row)
+
+        self.close_behavior_combo = QtWidgets.QComboBox()
+        self.close_behavior_combo.addItem("每次询问", "ask")
+        self.close_behavior_combo.addItem("最小化到托盘", "tray")
+        self.close_behavior_combo.addItem("退出程序", "quit")
+        cb_idx = self.close_behavior_combo.findData(self._updated_close_behavior)
+        self.close_behavior_combo.setCurrentIndex(max(0, cb_idx))
+        appearance_form.addRow("关闭按钮行为:", self.close_behavior_combo)
 
         telem_row = QtWidgets.QHBoxLayout()
         telem_row.setSpacing(10)
@@ -1684,6 +1696,9 @@ class SettingsDialog(QtWidgets.QDialog):
                     else self._appearance.music_reactive_animations
                 ),
             )
+            if hasattr(self, "close_behavior_combo"):
+                cb_val = str(self.close_behavior_combo.currentData() or "ask").strip().lower()
+                self._updated_close_behavior = cb_val if cb_val in ("ask", "tray", "quit") else "ask"
             if self._verified_ai_probe is not None and str(self._verified_ai_probe.get("python_executable", "")) != entered_py:
                 self._verified_ai_probe = None
         except ValueError as exc:
@@ -1710,6 +1725,10 @@ class SettingsDialog(QtWidgets.QDialog):
     @property
     def updated_appearance(self) -> Appearance:
         return self._updated_appearance
+
+    @property
+    def updated_close_behavior(self) -> str:
+        return self._updated_close_behavior
 
     @property
     def verified_ai_probe(self) -> Optional[dict[str, Any]]:

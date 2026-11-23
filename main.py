@@ -387,6 +387,7 @@ class ListenScopeController:
             midi_python_executable=self._midi_python_executable,
             appearance=saved_settings.appearance,
         )
+        self.window.close_behavior = str(getattr(saved_settings, "close_behavior", "ask") or "ask")
         if getattr(saved_settings, "window_geometry", ""):
             self.window.restore_saved_geometry(saved_settings.window_geometry)
         self.window.mixer_widget._open_audio_device = not self.use_mock_ai_for_demo
@@ -547,6 +548,7 @@ class ListenScopeController:
         w.live_widget.balance_changed.connect(self.live_separator.set_gains)
         w.settings_applied.connect(self._on_settings_applied)
         w.appearance_applied.connect(self._on_appearance_applied)
+        w.close_behavior_changed.connect(self._on_close_behavior_changed)
         w.ab_bookmark_save_requested.connect(self._on_ab_bookmark_save)
         w.ab_bookmark_select_requested.connect(self._on_ab_bookmark_select)
         w.ab_bookmark_delete_requested.connect(self._on_ab_bookmark_delete)
@@ -1894,7 +1896,14 @@ class ListenScopeController:
             appearance=self.window.appearance,
             progression_mode=self.window.chroma_widget.progression_mode,
             window_geometry=bytes(self.window.saveGeometry().toBase64()).decode("ascii"),
+            close_behavior=str(getattr(self.window, "close_behavior", "ask") or "ask"),
         )
+
+    def _on_close_behavior_changed(self, _behavior: str = "ask") -> None:
+        try:
+            save_settings(self._build_persisted_settings(), self._settings_path)
+        except OSError as exc:
+            logging.getLogger(__name__).warning("Failed to save close_behavior: %s", exc)
 
     def _on_appearance_applied(self) -> None:
         try:

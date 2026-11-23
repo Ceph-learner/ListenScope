@@ -81,8 +81,14 @@ class _StemTrackRow(QtWidgets.QFrame):
         info = QtWidgets.QVBoxLayout(info_box)
         info.setContentsMargins(0, 0, 4, 0)
         info.setSpacing(2)
-        title = QtWidgets.QLabel(stem_name.upper())
+        raw_name = stem_name.upper()
+        title = QtWidgets.QLabel(raw_name)
         title.setObjectName("stemTrackTitle")
+        title.setToolTip(raw_name)
+        elided_name = QtGui.QFontMetrics(title.font()).elidedText(
+            raw_name, QtCore.Qt.TextElideMode.ElideRight, 90
+        )
+        title.setText(elided_name)
         title.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
         dur_lbl = QtWidgets.QLabel(f"{duration_sec:.1f}s")
         dur_lbl.setObjectName("stemMetaDuration")

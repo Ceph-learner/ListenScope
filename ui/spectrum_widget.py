@@ -294,8 +294,24 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         from core.config import AnalysisConfig
 
         spec_hist_sec = int(AnalysisConfig().spectrum_history_seconds)
+        self._wave_gain_btn = QtWidgets.QPushButton("自动增益")
+        self._wave_gain_btn.setObjectName("miniToolbarBtn")
+        self._wave_gain_btn.setCheckable(True)
+        self._wave_gain_btn.setChecked(True)
+        self._wave_gain_btn.setAutoDefault(False)
+        self._wave_gain_btn.setMaximumHeight(18)
+        self._wave_gain_btn.setStyleSheet("QPushButton { padding: 0px 6px; min-height: 16px; max-height: 18px; font-size: 9px; }")
+        self._wave_gain_btn.setToolTip("切换波形自动增益与固定 ±1 振幅范围")
+        self._wave_gain_btn.toggled.connect(self.set_wave_auto_gain)
+
         self._chart_cards = tuple(
-            self._chart_card(tag, name, unit, plot)
+            self._chart_card(
+                tag,
+                name,
+                unit,
+                plot,
+                extra_widget=(self._wave_gain_btn if tag == "CH-01" else None),
+            )
             for tag, name, unit, plot in zip(
                 ("CH-01", "CH-02", "CH-03", "CH-04"),
                 ("实时波形", "FFT 频谱", "频带能量", "最近时频图"),
@@ -527,7 +543,14 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._plot_grid.setColumnStretch(index, weight)
 
     @staticmethod
-    def _chart_card(tag: str, name: str, unit: str, plot: pg.PlotWidget) -> QtWidgets.QFrame:
+    def _chart_card(
+        tag: str,
+        name: str,
+        unit: str,
+        plot: pg.PlotWidget,
+        *,
+        extra_widget: Optional[QtWidgets.QWidget] = None,
+    ) -> QtWidgets.QFrame:
         card = QtWidgets.QFrame()
         card.setObjectName("analysisChart")
         layout = QtWidgets.QVBoxLayout(card)
@@ -544,6 +567,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         caption.setObjectName("telemetryPill")
         header.addWidget(tag_lbl)
         header.addWidget(title, 1)
+        if extra_widget is not None:
+            header.addWidget(extra_widget)
         header.addWidget(caption)
         layout.addLayout(header)
         plot.setMinimumHeight(54)
@@ -575,6 +600,11 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
 
     def set_wave_auto_gain(self, enabled: bool) -> None:
         self._wave_auto_gain = bool(enabled)
+        if hasattr(self, "_wave_gain_btn"):
+            self._wave_gain_btn.blockSignals(True)
+            self._wave_gain_btn.setChecked(self._wave_auto_gain)
+            set_i18n_text(self._wave_gain_btn, "自动增益" if self._wave_auto_gain else "固定 ±1")
+            self._wave_gain_btn.blockSignals(False)
         if not self._wave_auto_gain:
             self._wave_gain_scale = 1.05
             self.wave_plot.setYRange(-1.05, 1.05, padding=0)
@@ -628,7 +658,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                     self.pitch_detail,
                     f"{snap.pitch.frequency_hz:.1f} Hz  ·  {snap.pitch.cents_offset:+.1f} cents",
                 )
-        elif getattr(snap.pitch, "is_polyphonic", False) or snap.pitch.note_name is None:
+        elif getattr(snap.pitch, "is_polyphonic", False):
             self._set_text_cached("pitch", self.pitch_label, "多声部")
             self._set_text_cached("pitch_det", self.pitch_detail, "多声部音频，无单一主音")
         else:

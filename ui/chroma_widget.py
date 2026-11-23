@@ -965,7 +965,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         for ov in self._acid_overlays:
             ov.setVisible(is_acid)
         lang = getattr(appearance, "language", "zh")
-        if is_acid:
+        if self._acid_variant in ("light", "dark"):
             from core.i18n import tr_telemetry
 
             self.practice_chords_btn.setText(
@@ -982,17 +982,17 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 tr("换歌重置 (和弦/调性/BPM)", "Reset Harmony (Chord/Key/BPM)", "화성 리셋 (코드/조성/BPM)", "和声リセット (コード/調性/BPM)", lang=lang)
             )
 
-        if is_acid:
+        if self._acid_variant in ("light", "dark"):
             variant = self._acid_variant or "dark"
             p = get_acid_palette(variant)
             self._chroma_splitter.set_grip_colors(grip=p.text_muted, accent=p.accent, line=p.border)
             if variant == "dark":
-                cross = QtGui.QColor(241, 242, 236, 65)
-                stencil = QtGui.QColor(241, 242, 236, 15)
+                cross = QtGui.QColor(241, 242, 236, 48)
+                stencil = QtGui.QColor(241, 242, 236, 7)
                 checker = QtGui.QColor(206, 255, 24, 190)
             else:
-                cross = QtGui.QColor(9, 13, 20, 52)
-                stencil = QtGui.QColor(9, 13, 20, 12)
+                cross = QtGui.QColor(9, 13, 20, 38)
+                stencil = QtGui.QColor(9, 13, 20, 6)
                 checker = QtGui.QColor(0, 168, 120, 175)
             for ov in self._acid_overlays:
                 ov.set_colors(cross, stencil, checker)
