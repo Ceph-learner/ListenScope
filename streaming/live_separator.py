@@ -420,8 +420,6 @@ class ExperimentalLiveSeparator:
         )
 
         env = prepend_ffmpeg_path_env(os.environ.copy())
-        existing_pp = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
 
         self._subproc_stderr_tail.clear()
         proc = popen_external_python(
@@ -433,7 +431,6 @@ class ExperimentalLiveSeparator:
                 "--config-json",
                 str(cfg_path),
             ],
-            cwd=str(bundle_root),
             env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

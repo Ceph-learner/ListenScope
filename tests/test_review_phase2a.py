@@ -46,6 +46,108 @@ def test_e2_ai_subprocesses_use_popen_external_python_not_raw_popen() -> None:
         assert "subprocess.Popen(" not in src, f"{rel} still calls raw subprocess.Popen instead of popen_external_python"
 
 
+def test_e2_popen_external_python_frozen_win32_isolates_paths_and_restores_dll_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Frozen win32 popen_external_python must rewrite -m, override cwd, strip bundle paths, merge flags, and restore SetDllDirectoryW."""
+    import ctypes
+    from core import paths
+
+    bundle_dir = tmp_path / "dist" / "_internal"
+    bundle_dir.mkdir(parents=True)
+    ai_py = tmp_path / ".venv-ai" / "Scripts" / "python.exe"
+    ai_py.parent.mkdir(parents=True)
+    ai_py.write_text("", encoding="utf-8")
+
+    events: list[str] = []
+    captured: dict[str, object] = {}
+
+    class _FakeSetDllDir:
+        argtypes = None
+
+        def __call__(self, val):
+            events.append(f"dll:{val}")
+            return 1
+
+    class _FakeKernel32:
+        SetDllDirectoryW = _FakeSetDllDir()
+
+    def _fake_windll(name: str, use_last_error: bool = False):
+        assert name == "kernel32"
+        return _FakeKernel32()
+
+    class _FakeProc:
+        pass
+
+    def _fake_popen(cmd, **kwargs):
+        events.append("popen")
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return _FakeProc()
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(paths, "subprocess_no_window_kwargs", lambda: {"creationflags": 0x08000000})
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle_dir), raising=False)
+    monkeypatch.setattr(ctypes, "WinDLL", _fake_windll, raising=False)
+    monkeypatch.setattr(paths.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(paths.subprocess, "Popen", _fake_popen)
+
+    caller_flags = 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    raw_env = {
+        "PYTHONHOME": str(bundle_dir),
+        "PYTHONPATH": f"{bundle_dir}{os.pathsep}{tmp_path / 'extra'}",
+        "PATH": f"{bundle_dir}{os.pathsep}{tmp_path / 'bin'}",
+    }
+    paths.popen_external_python(
+        [str(ai_py), "-m", "ai.worker", "--request-json", "req.json"],
+        cwd=str(bundle_dir),
+        env=raw_env,
+        stdin=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        creationflags=caller_flags,
+    )
+
+    cmd = captured["cmd"]
+    kw = captured["kwargs"]
+    assert isinstance(cmd, list)
+    assert cmd[0] == str(ai_py)
+    assert cmd[1] == "-c"
+    assert "sys.path.append(root)" in cmd[2]
+    assert "sys.path.insert(0" not in cmd[2]
+    assert cmd[3] == str(bundle_dir.resolve())
+    assert cmd[4:] == ["ai.worker", "--request-json", "req.json"]
+
+    assert kw["cwd"] == str(ai_py.resolve().parent)
+    assert kw["cwd"] != str(bundle_dir)
+    assert kw["cwd"] != str(bundle_dir.resolve())
+
+    env_out = kw["env"]
+    assert "PYTHONHOME" not in env_out
+    assert str(bundle_dir) not in env_out.get("PATH", "")
+    assert str(bundle_dir) not in env_out.get("PYTHONPATH", "")
+    assert kw["stdin"] == subprocess.PIPE
+    assert kw["text"] is True
+    assert kw["bufsize"] == 1
+    assert "stdout" not in kw and "stderr" not in kw
+    assert (kw["creationflags"] & 0x08000000) != 0
+    assert (kw["creationflags"] & caller_flags) != 0
+    assert events == ["dll:None", "popen", f"dll:{bundle_dir.resolve()}"]
+
+    # Verify SetDllDirectoryW is also restored when Popen raises
+    events.clear()
+
+    def _failing_popen(cmd, **kwargs):
+        events.append("popen_fail")
+        raise OSError("boom")
+
+    monkeypatch.setattr(paths.subprocess, "Popen", _failing_popen)
+    with pytest.raises(OSError, match="boom"):
+        paths.popen_external_python([str(ai_py), "-m", "ai.worker"], env=raw_env)
+    assert events == ["dll:None", "popen_fail", f"dll:{bundle_dir.resolve()}"]
+
+
 def test_e3_streaming_resampler_matches_whole_signal_without_chunk_boundary_clicks() -> None:
     """Stateful scipy StreamingResampler must match whole-signal 44.1k->48k resample with SNR > 70 dB."""
     from audio import pcm_utils

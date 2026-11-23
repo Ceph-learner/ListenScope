@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -464,6 +465,18 @@ def spawn_worker_entry(
         )
 
 
+def _log_runtime_library_paths() -> None:
+    log = logging.getLogger(__name__)
+    paths: dict[str, str] = {"executable": sys.executable}
+    for mod_name in ("numpy", "soundfile", "onnxruntime"):
+        try:
+            mod = __import__(mod_name)
+            paths[mod_name] = str(getattr(mod, "__file__", "<builtin>"))
+        except Exception as exc:
+            paths[mod_name] = f"<unavailable: {exc}>"
+    log.debug("AI worker runtime library paths: %s", paths)
+
+
 def _cli_main() -> int:
     parser = argparse.ArgumentParser(description="ListenScope isolated AI Worker CLI runner")
     parser.add_argument("--request-json", type=Path, required=True)
@@ -479,6 +492,7 @@ def _cli_main() -> int:
     orig_stdout = sys.stdout
     sys.stdout = sys.stderr
     try:
+        _log_runtime_library_paths()
         req_dict = json.loads(args.request_json.read_text(encoding="utf-8"))
         cfg_dict = json.loads(args.config_json.read_text(encoding="utf-8"))
         req = _deserialize_request(req_dict)

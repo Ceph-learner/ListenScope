@@ -166,10 +166,7 @@ def benchmark_live_model_isolated(
     if not exe_path.exists():
         raise FileNotFoundError(f"找不到 AI Python 解释器: {exe}")
 
-    bundle_root = get_bundle_root()
     env = prepend_ffmpeg_path_env(os.environ.copy())
-    existing_pp = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
 
     ai_cfg_payload = json.dumps(asdict(ai_config or AIConfig()))
     aud_cfg_payload = json.dumps(asdict(audio_config or AudioConfig()))
@@ -196,7 +193,6 @@ def benchmark_live_model_isolated(
 
     proc = popen_external_python(
         cmd,
-        cwd=str(bundle_root),
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

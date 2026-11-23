@@ -339,8 +339,6 @@ class AIJobManager:
             cfg_path.write_text(json.dumps(cfg_dict, ensure_ascii=False), encoding="utf-8")
 
             env = prepend_ffmpeg_path_env(os.environ.copy())
-            existing_pp = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
             if self.ai_config.offload_gui_to_igpu:
                 env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
                 env.setdefault("CUDA_VISIBLE_DEVICES", "0")
@@ -362,7 +360,6 @@ class AIJobManager:
                     "--cancel-flag",
                     str(cancel_path),
                 ],
-                cwd=str(bundle_root),
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
