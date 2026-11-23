@@ -223,21 +223,36 @@ class MDXSeparatorBackend(SeparationBackend):
                 "pitch_shift": 0,
             }
 
+        extra_keys: list[str] = []
         import inspect
         try:
             sig = inspect.signature(Separator.__init__)
-            if "sample_rate" in sig.parameters:
-                kwargs["sample_rate"] = 48000
-            if "normalization_threshold" in sig.parameters:
-                kwargs["normalization_threshold"] = 1.0
-            if "amplification_threshold" in sig.parameters:
-                kwargs["amplification_threshold"] = 0.0
+            for k, v in (
+                ("sample_rate", 48000),
+                ("normalization_threshold", 1.0),
+                ("amplification_threshold", 0.0),
+            ):
+                if k in sig.parameters:
+                    kwargs[k] = v
+                    extra_keys.append(k)
             if self._using_directml and "use_directml" in sig.parameters:
                 kwargs["use_directml"] = True
         except Exception:
             pass
         try:
-            separator = Separator(**kwargs)
+            try:
+                separator = Separator(**kwargs)
+            except TypeError as type_exc:
+                if not extra_keys:
+                    raise
+                logger.warning(
+                    "Separator rejected optional kwargs %s (%s); falling back to legacy defaults",
+                    extra_keys,
+                    type_exc,
+                )
+                for k in extra_keys:
+                    kwargs.pop(k, None)
+                separator = Separator(**kwargs)
             separator.load_model(model_filename=self.model_spec.separator_filename)
             self._separator = separator
             self._loaded = True

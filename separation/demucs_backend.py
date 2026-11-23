@@ -151,17 +151,32 @@ class DemucsSeparatorBackend(SeparationBackend):
                 "segments_enabled": True,
             },
         }
+        extra_keys: list[str] = []
         try:
             sig = inspect.signature(Separator.__init__)
-            if "sample_rate" in sig.parameters:
-                sep_kwargs["sample_rate"] = 48000
-            if "normalization_threshold" in sig.parameters:
-                sep_kwargs["normalization_threshold"] = 1.0
-            if "amplification_threshold" in sig.parameters:
-                sep_kwargs["amplification_threshold"] = 0.0
+            for k, v in (
+                ("sample_rate", 48000),
+                ("normalization_threshold", 1.0),
+                ("amplification_threshold", 0.0),
+            ):
+                if k in sig.parameters:
+                    sep_kwargs[k] = v
+                    extra_keys.append(k)
         except Exception:
             pass
-        self._separator = Separator(**sep_kwargs)
+        try:
+            self._separator = Separator(**sep_kwargs)
+        except TypeError as type_exc:
+            if not extra_keys:
+                raise
+            logger.warning(
+                "Demucs Separator rejected optional kwargs %s (%s); falling back to legacy defaults",
+                extra_keys,
+                type_exc,
+            )
+            for k in extra_keys:
+                sep_kwargs.pop(k, None)
+            self._separator = Separator(**sep_kwargs)
         self._separator.load_model(model_filename=self.model_spec.separator_filename)
         self._mode = "audio_separator"
         self._loaded = True

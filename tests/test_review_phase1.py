@@ -757,3 +757,41 @@ def test_ub29_dark_theme_status_warn_is_amber_not_cyan() -> None:
     col = QtGui.QColor(p.status_warn_fg)
     assert p.status_warn_fg.upper() != p.accent_secondary.upper()
     assert col.red() > col.blue(), f"Dark status_warn_fg {p.status_warn_fg} is cyan instead of amber"
+
+
+def test_e1_separator_typeerror_falls_back_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If audio-separator rejects optional sample_rate/normalization kwargs with TypeError, fall back cleanly with warning."""
+    import logging
+    from ai.models import get_default_model_for_mode
+    from separation.mdx_backend import MDXSeparatorBackend
+
+    calls: list[dict] = []
+
+    class _LegacyTypeErrorSeparator:
+        def __init__(self, sample_rate=None, normalization_threshold=None, amplification_threshold=None, **kwargs):
+            calls.append({"sample_rate": sample_rate, "normalization_threshold": normalization_threshold, **kwargs})
+            if sample_rate is not None or normalization_threshold is not None or amplification_threshold is not None:
+                raise TypeError("unsupported sample_rate/normalization_threshold in this build")
+
+        def load_model(self, model_filename: str = "") -> None:
+            self.loaded_model = model_filename
+
+    fake_pkg = types.ModuleType("audio_separator")
+    fake_sep_mod = types.ModuleType("audio_separator.separator")
+    fake_sep_mod.Separator = _LegacyTypeErrorSeparator  # type: ignore[attr-defined]
+    fake_pkg.separator = fake_sep_mod  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_pkg)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_sep_mod)
+
+    backend = MDXSeparatorBackend(get_default_model_for_mode("2stem"), output_dir=tmp_path, use_gpu=False)
+    with caplog.at_level(logging.WARNING):
+        backend.load_model()
+
+    assert backend.is_loaded is True
+    assert len(calls) == 2
+    assert calls[0]["sample_rate"] == 48000
+    assert calls[1]["sample_rate"] is None
+    assert any("falling back to legacy defaults" in rec.message for rec in caplog.records)
+
