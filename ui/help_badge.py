@@ -644,11 +644,11 @@ class _TooltipOnlyOnHelpBadgeFilter(QtCore.QObject):
         try:
             et = event.type()
             if et == QtCore.QEvent.Type.ToolTip:
-                if isinstance(obj, HelpBadge):
-                    return False
-                QtWidgets.QToolTip.hideText()
-                event.accept()
-                return True
+                if bool(obj.property("lsSuppressTip")):
+                    QtWidgets.QToolTip.hideText()
+                    event.accept()
+                    return True
+                return False
             if _SHARED_POPOVER is not None and _is_qt_valid(_SHARED_POPOVER) and _SHARED_POPOVER.isVisible():
                 if et in (
                     QtCore.QEvent.Type.WindowDeactivate,

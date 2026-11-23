@@ -139,7 +139,6 @@ def test_ub08_set_i18n_text_prevents_dynamic_label_reversion_on_language_switch(
     assert lbl.text() == "正在分析音频", f"Dynamic label reverted to stale original text: {lbl.text()!r}"
 
 
-@pytest.mark.xfail(strict=True, reason="U-B13")
 def test_ub13_tooltip_filter_allows_native_tooltips_unless_lsSuppressTip_set() -> None:
     """Tooltip guard must allow normal native tooltips and only suppress widgets with property('lsSuppressTip') == True."""
     from ui.help_badge import install_tooltip_guard
