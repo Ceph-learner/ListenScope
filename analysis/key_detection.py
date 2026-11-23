@@ -279,8 +279,9 @@ class KeyDetector:
                 and h2_margin >= 0.05
             ):
                 modulation = True
-                primary = self._names[h2_idx]
-                secondary = self._names[h1_idx]
+                if h2_idx != b_idx and (h1_idx != b_idx or h2_corr > h1_corr):
+                    primary = self._names[h2_idx]
+                    secondary = self._names[h1_idx]
                 relation_notes.append(f"疑似转调: {self._names[h1_idx]} -> {self._names[h2_idx]}")
 
         if margin >= 0.08 and b_corr >= 0.65 and not modulation:

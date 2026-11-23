@@ -704,7 +704,11 @@ def analyze_harmony_and_chords(
     spec = SpectrumAnalyzer(sample_rate=CANONICAL_SR, config=cfg)
     hr_stride = 3  # ~15.6 Hz effective HR chroma rate (matches real-time 15 Hz worker & cuts offline CPU ~3x)
     chroma_cfg = AnalysisConfig(analysis_rate_hz=(CANONICAL_SR / float(cfg.hop_size)) / float(hr_stride))
-    chroma_ext = ChromaExtractor(sample_rate=CANONICAL_SR, config=chroma_cfg)
+    chroma_ext = ChromaExtractor(
+        sample_rate=CANONICAL_SR,
+        config=chroma_cfg,
+        fmin_hz=chroma_cfg.harmony_chroma_fmin_hz,
+    )
     chord_det = ChordDetector(ema_alpha=0.55, include_sevenths=include_sevenths)
     key_det = KeyDetector(min_active_frames=12)
 
@@ -722,6 +726,7 @@ def analyze_harmony_and_chords(
     flux_vals: list[float] = []
     prev_mag_like: Optional[np.ndarray] = None
     bucket_chromas: list[np.ndarray] = []
+    bucket_basses: list[np.ndarray] = []
     bucket_silent = 0
     bucket_count = 0
     bucket_start = 0.0
@@ -729,6 +734,7 @@ def analyze_harmony_and_chords(
     hr_buf = np.zeros(hr_window, dtype=np.float32)
     hr_filled = 0
     last_c12 = np.zeros(12, dtype=np.float32)
+    last_b12 = np.zeros(12, dtype=np.float32)
 
     for idx, (center_sec, frame) in enumerate(frames_iter):
         if not np.all(np.isfinite(frame)):
@@ -748,8 +754,11 @@ def analyze_harmony_and_chords(
         _fft_mag, _fft_db, log_db = spec.analyze_frame(frame, record=False)
         if idx % hr_stride == 0:
             hr_view = hr_buf[hr_window - hr_filled :] if hr_filled < hr_window else hr_buf
-            last_c12 = chroma_ext.extract_from_pcm(hr_view, record_history=True, is_silent=is_silent)
+            last_c12, last_b12 = chroma_ext.extract_with_bass_from_pcm(
+                hr_view, record_history=True, is_silent=is_silent
+            )
         c12 = np.zeros(12, dtype=np.float32) if is_silent else last_c12
+        b12 = np.zeros(12, dtype=np.float32) if is_silent else last_b12
 
         log_safe = np.clip(np.nan_to_num(log_db, nan=-120.0, posinf=20.0, neginf=-120.0), -120.0, 20.0)
         mag_like = np.power(10.0, log_safe / 20.0)
@@ -763,14 +772,16 @@ def analyze_harmony_and_chords(
         if bucket_count == 0:
             bucket_start = max(0.0, center_sec - hop_sec * 0.5)
         bucket_chromas.append(c12)
+        bucket_basses.append(b12)
         if is_silent:
             bucket_silent += 1
         bucket_count += 1
 
         if bucket_count >= win_frames:
             mean_c = np.mean(np.stack(bucket_chromas, axis=0), axis=0)
+            mean_b = np.mean(np.stack(bucket_basses, axis=0), axis=0)
             win_silent = bucket_silent > (bucket_count * 0.75)
-            est = chord_det.update(mean_c, is_silent=win_silent)
+            est = chord_det.update(mean_c, is_silent=win_silent, bass_chroma=mean_b)
             end_t = min(duration_sec, bucket_start + bucket_count * hop_sec)
             raw_segments.append(
                 ChordTimelineSegment(
@@ -783,13 +794,15 @@ def analyze_harmony_and_chords(
                 )
             )
             bucket_chromas.clear()
+            bucket_basses.clear()
             bucket_silent = 0
             bucket_count = 0
 
     if bucket_count > 0:
         mean_c = np.mean(np.stack(bucket_chromas, axis=0), axis=0)
+        mean_b = np.mean(np.stack(bucket_basses, axis=0), axis=0)
         win_silent = bucket_silent > (bucket_count * 0.75)
-        est = chord_det.update(mean_c, is_silent=win_silent)
+        est = chord_det.update(mean_c, is_silent=win_silent, bass_chroma=mean_b)
         end_t = min(duration_sec, bucket_start + bucket_count * hop_sec)
         if end_t - bucket_start >= 0.15:
             raw_segments.append(

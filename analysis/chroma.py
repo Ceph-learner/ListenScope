@@ -197,6 +197,18 @@ class ChromaExtractor:
         record_history: bool = True,
         is_silent: bool = False,
     ) -> np.ndarray:
+        chroma, _bass = self.extract_with_bass_from_pcm(
+            mono, record_history=record_history, is_silent=is_silent
+        )
+        return chroma
+
+    def extract_with_bass_from_pcm(
+        self,
+        mono: np.ndarray,
+        *,
+        record_history: bool = True,
+        is_silent: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
         if is_silent or mono is None or mono.size == 0 or not np.all(np.isfinite(mono)):
             chroma = np.zeros(12, dtype=np.float32)
             bass_chroma = np.zeros(12, dtype=np.float32)
@@ -246,7 +258,7 @@ class ChromaExtractor:
         if record_history:
             with self._lock:
                 self._append_history_locked(chroma, weight, bass_chroma)
-        return chroma
+        return chroma, bass_chroma
 
     def _ordered_slice_locked(self, buf: np.ndarray, take: Optional[int]) -> np.ndarray:
         n = self._hist_len

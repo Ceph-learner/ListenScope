@@ -246,25 +246,37 @@ def test_al3_bass_modulation_does_not_false_positive_on_diatonic_verse_chorus() 
     assert mod is False, f"Diatonic C major vi-IV -> I-V falsely flagged as modulation: {note}"
 
 
-@pytest.mark.xfail(strict=True, reason="A-M4")
 def test_am4_first_inversion_chords_not_misclassified_as_relative_minor() -> None:
     """C/E and F/A with prominent bass must not be misclassified as Em or Am."""
-    from analysis.chords import ChordDetector
+    from analysis.chord_practice import chord_midi_notes
+    from analysis.chords import (
+        ChordDetector,
+        chord_scale_degree,
+        spell_chord_tones,
+        transpose_chord_symbol,
+    )
     from analysis.chroma import ChromaExtractor
     from tests.bench.algo_benchmark import _synth_chord_segment
 
     ce = ChromaExtractor(sample_rate=SR)
     # C/E: bass=E2 (40), upper=C4,E4,G4 (60,64,67)
     pcm_ce = _synth_chord_segment(40, [60, 64, 67], 0.8, bass_gain=0.60)
-    c_ce = ce.extract_from_pcm(pcm_ce[-16384:], record_history=False)
-    est_ce = ChordDetector().update(c_ce, is_silent=False)
+    c_ce, b_ce = ce.extract_with_bass_from_pcm(pcm_ce[-16384:], record_history=False)
+    est_ce = ChordDetector().update(c_ce, is_silent=False, bass_chroma=b_ce)
     assert est_ce.primary in ("C", "C/E"), f"C/E misclassified as {est_ce.primary}"
 
     # F/A: bass=A2 (45), upper=F4,A4,C5 (65,69,72)
     pcm_fa = _synth_chord_segment(45, [65, 69, 72], 0.8, bass_gain=0.60)
-    c_fa = ce.extract_from_pcm(pcm_fa[-16384:], record_history=False)
-    est_fa = ChordDetector().update(c_fa, is_silent=False)
+    c_fa, b_fa = ce.extract_with_bass_from_pcm(pcm_fa[-16384:], record_history=False)
+    est_fa = ChordDetector().update(c_fa, is_silent=False, bass_chroma=b_fa)
     assert est_fa.primary in ("F", "F/A"), f"F/A misclassified as {est_fa.primary}"
+
+    # Downstream slash-chord consumers must handle C/E cleanly
+    assert chord_scale_degree("C/E", "C major") == "I"
+    assert transpose_chord_symbol("C/E", 2) == "D/F#"
+    assert spell_chord_tones("C/E") == "C · E · G"
+    notes = chord_midi_notes("C/E")
+    assert notes[0] % 12 == 4  # E bass
 
 
 @pytest.mark.xfail(strict=True, reason="A-L10")

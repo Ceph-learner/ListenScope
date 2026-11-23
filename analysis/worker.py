@@ -40,7 +40,11 @@ class AnalysisWorker:
 
         sr = self.audio_config.sample_rate
         self.spectrum = SpectrumAnalyzer(sample_rate=sr, config=self.config)
-        self.chroma = ChromaExtractor(sample_rate=sr, config=self.config)
+        self.chroma = ChromaExtractor(
+            sample_rate=sr,
+            config=self.config,
+            fmin_hz=self.config.harmony_chroma_fmin_hz,
+        )
         self.chords = ChordDetector()
         self.key_detector = KeyDetector()
         self.tempo = TempoEstimator(config=self.config, sample_rate=sr)
@@ -152,8 +156,10 @@ class AnalysisWorker:
 
         self._last_analyzed_frame = end_abs
         record_hist = not (pcm.shape[0] == 0 and self._reset_boundary is not None)
-        chroma_12 = self.chroma.extract_from_pcm(mono_recent, record_history=record_hist, is_silent=is_silent)
-        chord_est = self.chords.update(chroma_12, is_silent=is_silent)
+        chroma_12, bass_12 = self.chroma.extract_with_bass_from_pcm(
+            mono_recent, record_history=record_hist, is_silent=is_silent
+        )
+        chord_est = self.chords.update(chroma_12, is_silent=is_silent, bass_chroma=bass_12)
 
         self._frame_count += 1
         # Update key every ~8 cycles (~0.5s) to keep CPU overhead negligible

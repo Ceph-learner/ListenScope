@@ -249,6 +249,25 @@ def _build_chord_templates(*, include_sevenths: bool = False) -> tuple[list[str]
     return names, np.stack(templates, axis=0)
 
 
+_QUALITY_INTERVALS: dict[str, set[int]] = {
+    "": {0, 4, 7},
+    "m": {0, 3, 7},
+    "dim": {0, 3, 6},
+    "aug": {0, 4, 8},
+    "maj7": {0, 4, 7, 11},
+    "m7": {0, 3, 7, 10},
+    "7": {0, 4, 7, 10},
+    "sus4": {0, 5, 7},
+}
+
+
+def _split_chord_root_quality(symbol: str) -> tuple[int | None, str]:
+    for idx, name in sorted(enumerate(PITCH_CLASSES), key=lambda kv: len(kv[1]), reverse=True):
+        if symbol.startswith(name):
+            return idx, symbol[len(name):]
+    return None, ""
+
+
 class ChordDetector:
     """Template-based chord estimator with EMA smoothing, silence gating, and Unknown fallback."""
 
@@ -262,15 +281,24 @@ class ChordDetector:
     ) -> None:
         self._include_sevenths = bool(include_sevenths)
         self._names, self._templates = _build_chord_templates(include_sevenths=self._include_sevenths)
+        self._name_to_idx: dict[str, int] = {name: i for i, name in enumerate(self._names)}
         self._ema_alpha = ema_alpha
         self._min_correlation = min_correlation
         self._min_margin_for_high = min_margin_for_high
         self._smoothed_chroma: np.ndarray | None = None
+        self._smoothed_bass: np.ndarray | None = None
 
     def reset(self) -> None:
         self._smoothed_chroma = None
+        self._smoothed_bass = None
 
-    def update(self, chroma_12: np.ndarray, *, is_silent: bool) -> ChordEstimate:
+    def update(
+        self,
+        chroma_12: np.ndarray,
+        *,
+        is_silent: bool,
+        bass_chroma: np.ndarray | None = None,
+    ) -> ChordEstimate:
         arr = np.asarray(chroma_12, dtype=np.float32)
         if (
             is_silent
@@ -281,6 +309,8 @@ class ChordDetector:
             # Decay smoother slightly on silence or invalid frames so stale chords do not linger
             if self._smoothed_chroma is not None:
                 self._smoothed_chroma *= 0.5
+            if self._smoothed_bass is not None:
+                self._smoothed_bass *= 0.5
             return ChordEstimate(
                 primary="N (静音)",
                 secondary="-",
@@ -297,6 +327,16 @@ class ChordDetector:
                 self._ema_alpha * arr + (1.0 - self._ema_alpha) * self._smoothed_chroma
             ).astype(np.float32)
 
+        if bass_chroma is not None:
+            bass_arr = np.asarray(bass_chroma, dtype=np.float32)
+            if bass_arr.shape == (12,) and np.all(np.isfinite(bass_arr)) and float(np.linalg.norm(bass_arr)) >= 1e-6:
+                if self._smoothed_bass is None:
+                    self._smoothed_bass = bass_arr.copy()
+                else:
+                    self._smoothed_bass = (
+                        self._ema_alpha * bass_arr + (1.0 - self._ema_alpha) * self._smoothed_bass
+                    ).astype(np.float32)
+
         norm = float(np.linalg.norm(self._smoothed_chroma))
         vec = self._smoothed_chroma / max(norm, 1e-9)
         scores = self._templates @ vec
@@ -304,6 +344,23 @@ class ChordDetector:
         best_idx, second_idx = int(order[0]), int(order[1])
         best_score = float(scores[best_idx])
         second_score = float(scores[second_idx])
+
+        # Disambiguate first-inversion major triad (e.g. C/E) vs relative minor (Em)
+        # when the bass's 2nd/3rd harmonics inflate the 3rd/7th pitch classes.
+        best_root, best_quality = _split_chord_root_quality(self._names[best_idx])
+        if best_root is not None and best_quality == "m":
+            maj_root = (best_root - 4) % 12
+            maj_idx = self._name_to_idx.get(PITCH_CLASSES[maj_root])
+            if (
+                maj_idx is not None
+                and float(vec[maj_root]) > float(vec[(best_root + 7) % 12])
+                and float(scores[maj_idx]) >= best_score - 0.08
+            ):
+                second_idx = best_idx
+                second_score = best_score
+                best_idx = maj_idx
+                best_score = float(scores[maj_idx])
+
         margin = best_score - second_score
 
         if best_score < self._min_correlation:
@@ -323,8 +380,17 @@ class ChordDetector:
         else:
             stability = "Low"
 
+        primary = self._names[best_idx]
+        if bass_chroma is not None and self._smoothed_bass is not None:
+            if float(np.max(self._smoothed_bass)) > 0.25:
+                bass_pc = int(np.argmax(self._smoothed_bass))
+                root_pc, quality = _split_chord_root_quality(primary)
+                intervals = _QUALITY_INTERVALS.get(quality, {0})
+                if root_pc is not None and bass_pc != root_pc and (bass_pc - root_pc) % 12 in intervals:
+                    primary = f"{primary}/{PITCH_CLASSES[bass_pc]}"
+
         return ChordEstimate(
-            primary=self._names[best_idx],
+            primary=primary,
             secondary=self._names[second_idx],
             stability=stability,
             correlation=best_score,
