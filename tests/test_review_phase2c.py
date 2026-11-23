@@ -42,7 +42,8 @@ def test_ub02_fft_display_uses_log_frequency_resampling_with_dense_bass_bins() -
 
 @pytest.mark.xfail(strict=True, reason="U-B03")
 def test_ub03_main_window_fits_small_screens_1093x566_and_1024x528() -> None:
-    """NEEDS_TARGET contract: minimumSize must allow <=780x540 and all visible bottom buttons must stay inside 1093x566."""
+    """CONFIRMED: minimumSize <=780x540, realtime PlotWidgets >=120px (>=100px at 1024x528), buttons inside window, collapsible bottom A/B panel."""
+    import pyqtgraph as pg
     from audio.playback import StemMixerEngine
     from core.config import AIConfig, ResourceLimits
     from core.system_probe import probe_system
@@ -60,10 +61,33 @@ def test_ub03_main_window_fits_small_screens_1093x566_and_1024x528() -> None:
         assert win.minimumWidth() <= 780 and win.minimumHeight() <= 540, (
             f"minimumSize too large for small screens: {win.minimumWidth()}x{win.minimumHeight()}"
         )
-        win.resize(1024, 528)
         win.show()
+        for w_px, h_px, min_plot_h in ((1093, 566, 120), (1024, 528, 100), (1366, 768, 120)):
+            win.resize(w_px, h_px)
+            app.processEvents()
+            assert win.width() <= w_px and win.height() <= h_px
+            plots = [p for p in win.spectrum_widget.findChildren(pg.PlotWidget) if p.isVisible()]
+            assert len(plots) >= 1
+            for p in plots:
+                assert p.height() >= min_plot_h, f"PlotWidget squished to {p.height()}px at {w_px}x{h_px} (need >= {min_plot_h}px)"
+            win_rect = win.rect()
+            for btn in win.findChildren(QtWidgets.QAbstractButton):
+                if btn.isVisible() and btn.width() > 0 and btn.height() > 0:
+                    tl = btn.mapTo(win, QtCore.QPoint(0, 0))
+                    br = btn.mapTo(win, QtCore.QPoint(btn.width() - 1, btn.height() - 1))
+                    assert win_rect.contains(tl) and win_rect.contains(br), (
+                        f"Button {btn.text()!r} clipped outside {w_px}x{h_px}"
+                    )
+
+        # Collapsing bottom A/B panel must increase realtime chart area height
+        win.resize(1093, 566)
         app.processEvents()
-        assert win.width() <= 1024 and win.height() <= 528
+        h_before = win.spectrum_widget.height()
+        toggle_fn = getattr(win, "set_bottom_panel_collapsed", None) or getattr(win, "toggle_bottom_panel", None)
+        assert callable(toggle_fn), "Missing collapsible bottom A/B panel API (set_bottom_panel_collapsed / toggle_bottom_panel)"
+        toggle_fn(True)
+        app.processEvents()
+        assert win.spectrum_widget.height() > h_before, "Collapsing bottom A/B panel did not increase chart height"
     finally:
         win.close()
         mixer.close()
@@ -268,3 +292,105 @@ def test_am6_ui_tempo_half_double_buttons_present_in_chroma_widget() -> None:
     has_double = any("×2" in t or "x2" in t.lower() or "2x" in t.lower() for t in btn_texts)
     has_half = any("÷2" in t or "/2" in t or "0.5x" in t.lower() for t in btn_texts)
     assert has_double and has_half, f"Missing tempo ×2/÷2 buttons in ChromaChordWidget (found: {btn_texts})"
+
+
+@pytest.mark.xfail(strict=True, reason="U-B31")
+def test_ub31_mixer_header_does_not_overlap_groupbox_and_progress_visible() -> None:
+    """In main window at 1120x680, mixer header must not overlap AI SEPARATION groupbox and job_status_lbl must be readable."""
+    from audio.playback import StemMixerEngine
+    from core.config import AIConfig, ResourceLimits
+    from core.models import AIJobProgress, AIJobState
+    from core.system_probe import probe_system
+    from ui.main_window import ListenScopeMainWindow
+
+    app = _get_app()
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    try:
+        win.resize(1120, 680)
+        win.show()
+        win.tabs.setCurrentWidget(win.mixer_widget)
+        w = win.mixer_widget
+        w.update_ai_progress(
+            AIJobProgress(task_id="t1", state=AIJobState.INFERRING, progress=0.42, current_chunk=5, total_chunks=12, message="推理第 5/12 块")
+        )
+        app.processEvents()
+        hdr = getattr(w, "_header", None)
+        assert hdr is not None
+        job_boxes = [gb for gb in w.findChildren(QtWidgets.QGroupBox) if "AI SEPARATION" in gb.title() or "分轨" in gb.title()]
+        assert job_boxes
+        hdr_rect = QtCore.QRect(hdr.mapTo(w, QtCore.QPoint(0, 0)), hdr.size())
+        box_rect = QtCore.QRect(job_boxes[0].mapTo(w, QtCore.QPoint(0, 0)), job_boxes[0].size())
+        assert not hdr_rect.intersects(box_rect), f"Mixer header {hdr_rect} overlaps AI groupbox {box_rect}"
+        lbl = w.job_status_lbl
+        assert lbl.isVisible() and lbl.height() >= lbl.fontMetrics().height(), (
+            f"Progress label squished/invisible: visible={lbl.isVisible()}, h={lbl.height()}, font_h={lbl.fontMetrics().height()}"
+        )
+        assert "5/12" in lbl.text() or "推理" in lbl.text(), f"Progress stage text not shown: {lbl.text()!r}"
+        assert "[INFERRING]" not in lbl.text(), f"Raw enum still shown: {lbl.text()!r}"
+    finally:
+        win.close()
+        mixer.close()
+
+
+@pytest.mark.xfail(strict=True, reason="U-B32")
+def test_ub32_fixed_width_controls_elide_with_ellipsis_and_full_tooltip() -> None:
+    """Fixed-width controls (ai_2stem_combo, ai_gpu_chk) at 1093px must elide with ellipsis or fit fully, with full-text tooltip."""
+    from audio.playback import StemMixerEngine
+    from core.config import AIConfig, ResourceLimits
+    from core.system_probe import probe_system
+    from ui.main_window import ListenScopeMainWindow
+
+    app = _get_app()
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    try:
+        win.resize(1093, 620)
+        win.show()
+        app.processEvents()
+        for widget, text in ((win.ai_2stem_combo, win.ai_2stem_combo.currentText()), (win.ai_gpu_chk, win.ai_gpu_chk.text())):
+            tip = widget.toolTip().strip()
+            assert tip and len(tip) >= len(text.rstrip("….")), f"{widget.objectName() or type(widget).__name__} missing full-text toolTip"
+            fm = widget.fontMetrics()
+            avail = max(1, widget.width() - 28)
+            if fm.horizontalAdvance(text) > avail:
+                assert text.endswith("…") or text.endswith("..."), (
+                    f"{type(widget).__name__} text hard-truncated without ellipsis at width {widget.width()}: {text!r}"
+                )
+    finally:
+        win.close()
+        mixer.close()
+
+
+@pytest.mark.xfail(strict=True, reason="P2C-PERF")
+def test_p2c_perf_analyze_latest_once_cpu_within_5ms_median() -> None:
+    """A-H1 CPU regression (+3.69ms median over e4c49e8 3.11ms): steady-state analyze_latest_once median must be <= 5.0 ms."""
+    import time
+    from analysis.worker import AnalysisWorker
+    from audio.ring_buffer import FixedRingBuffer
+    from core.config import AnalysisConfig, AudioConfig
+
+    acfg = AudioConfig(ring_buffer_seconds=20)
+    rb = FixedRingBuffer(acfg)
+    w = AnalysisWorker(rb, audio_config=acfg, analysis_config=AnalysisConfig())
+    chunk = (0.3 * np.sin(2.0 * np.pi * 440.0 * np.arange(3200) / 48000.0)).astype(np.float32)
+    chunk2 = np.stack([chunk, chunk], axis=1)
+    times = []
+    for _ in range(120):
+        rb.write(chunk2)
+        t0 = time.perf_counter()
+        w.analyze_latest_once()
+        times.append((time.perf_counter() - t0) * 1000.0)
+    med_ms = float(np.median(times[20:]))
+    assert med_ms <= 5.0, f"analyze_latest_once steady median CPU is {med_ms:.2f} ms (must be <= 5.0 ms)"
+
