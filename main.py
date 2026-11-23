@@ -199,6 +199,46 @@ def _read_wav_excerpt_f32(wav_path: Path, *, max_seconds: float = 30.0) -> tuple
         return arr, sr, ch
 
 
+def prune_old_stem_job_dirs(
+    work_root: Path,
+    keep_recent: int = 5,
+    active_dirs: Optional[set[Path]] = None,
+) -> int:
+    """Prune old stem job subdirectories under `work_root`, keeping the most recent `keep_recent` and `active_dirs`."""
+    if not work_root.exists() or not work_root.is_dir():
+        return 0
+    active_resolved: set[Path] = set()
+    for p in active_dirs or ():
+        try:
+            active_resolved.add(Path(p).resolve())
+        except OSError:
+            pass
+    subdirs: list[tuple[float, Path]] = []
+    for entry in work_root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        subdirs.append((mtime, entry))
+    subdirs.sort(key=lambda item: item[0], reverse=True)
+    keep_n = max(0, int(keep_recent))
+    removed = 0
+    for idx, (_mtime, d) in enumerate(subdirs):
+        if idx < keep_n:
+            continue
+        try:
+            if d.resolve() in active_resolved:
+                continue
+        except OSError:
+            pass
+        shutil.rmtree(d, ignore_errors=True)
+        logger.info("Pruned old stem job directory: %s", d)
+        removed += 1
+    return removed
+
+
 class ListenScopeController:
     """Owns background threads/subprocesses and bridges immutable snapshots to the Qt UI thread."""
 
@@ -238,6 +278,7 @@ class ListenScopeController:
 
         # Rotating file + bounded diagnostic logging
         setup_application_file_logging(resolve_log_dir(self.work_dir))
+        prune_old_stem_job_dirs(self.work_dir / "stems", keep_recent=5)
         self.log_handler = BoundedMemoryLogHandler(maxlen=500)
         self.log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
         logging.getLogger().addHandler(self.log_handler)
@@ -1170,8 +1211,7 @@ class ListenScopeController:
 
         a_frame, b_frame = self.ab_player.loop_range
         task_id = f"job_{uuid.uuid4().hex[:8]}"
-        task_dir = self.work_dir / "stems" / task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
+        task_dir = self._prepare_stem_work_dir(task_id)
         in_wav = task_dir / "excerpt_input.wav"
         try:
             _, dur = self.ring_buffer.export_wav_streaming(in_wav, a_frame, b_frame)
@@ -1210,6 +1250,22 @@ class ListenScopeController:
             self.window.tabs.setCurrentWidget(self.window.mixer_widget)
             self.window.show_banner_message(msg)
 
+    def _active_stem_dirs(self) -> set[Path]:
+        active: set[Path] = set()
+        if self._last_ai_request is not None and self._last_ai_request.output_dir:
+            active.add(Path(self._last_ai_request.output_dir))
+        for track in getattr(self.mixer_engine, "_tracks", {}).values():
+            if getattr(track, "path", None) is not None:
+                active.add(Path(track.path).parent)
+        return active
+
+    def _prepare_stem_work_dir(self, task_id: str) -> Path:
+        stems_root = self.work_dir / "stems"
+        prune_old_stem_job_dirs(stems_root, keep_recent=5, active_dirs=self._active_stem_dirs())
+        task_dir = stems_root / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        return task_dir
+
     def _on_cancel_ai(self) -> None:
         threading.Thread(target=self.ai_job_manager.cancel_job, name="ListenScope-AICancel", daemon=True).start()
 
@@ -1238,10 +1294,11 @@ class ListenScopeController:
         prev = self._last_ai_request
         action = OOMRecoveryAction(action_val)
         new_id = f"job_{uuid.uuid4().hex[:8]}"
+        new_dir = self._prepare_stem_work_dir(new_id)
         new_req = AIJobRequest(
             task_id=new_id,
             input_wav_path=prev.input_wav_path,
-            output_dir=str(self.work_dir / "stems" / new_id),
+            output_dir=str(new_dir),
             stem_mode=prev.stem_mode,
             model_id=prev.model_id,
             use_gpu=prev.use_gpu,

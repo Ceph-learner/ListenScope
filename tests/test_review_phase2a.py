@@ -140,7 +140,6 @@ def test_e7_heavy_export_and_import_handlers_dispatch_off_gui_thread() -> None:
     assert "threading.Thread(" in m2.group(0), "_on_export_mix still blocks GUI thread synchronously"
 
 
-@pytest.mark.xfail(strict=True, reason="E8")
 def test_e8_stem_work_dir_prunes_old_job_directories(tmp_path: Path) -> None:
     """Stems work directory must provide bounded cleanup keeping only recent jobs."""
     import main as main_mod
