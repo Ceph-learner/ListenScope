@@ -531,6 +531,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._system_is_dark = detect_system_is_dark()
         self._acid_variant: Optional[str] = None
         self._static_lock: bool = False
+        self._freeze_screen: bool = False
         self._bottom_panel_collapsed: bool = False
         self._ab_more_user_override: Optional[bool] = None
         self._compact_window_mode: bool = False
@@ -733,6 +734,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._skin_badge = QtWidgets.QLabel("ACID // CLINICAL_LIGHT")
         self._skin_badge.setObjectName("telemetryPill")
 
+        self.freeze_screen_btn = QtWidgets.QPushButton("⏸ 冻结画面")
+        self.freeze_screen_btn.setCheckable(True)
+        self.freeze_screen_btn.setToolTip("冻结/恢复实时频谱、和弦、调性与音准画面刷新 (快捷键 F)")
+        self.freeze_screen_btn.toggled.connect(self.set_freeze_screen)
+
         row_io.addWidget(self._src_pill)
         row_io.addWidget(self.source_combo)
         row_io.addWidget(
@@ -746,6 +752,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_io.addWidget(self.capture_btn)
         row_io.addWidget(self._capture_dot)
         row_io.addWidget(self.capture_status_lbl)
+        row_io.addWidget(self.freeze_screen_btn)
         row_io.addStretch(1)
         row_io.addWidget(self._shortcut_pill)
         row_io.addWidget(self._skin_badge)
@@ -1505,6 +1512,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             ("0", lambda: self.ab_speed_combo.setCurrentIndex(4) if hasattr(self, "ab_speed_combo") and self.ab_speed_combo.count() > 4 else None),
             ("T", lambda: self.chroma_widget.tap_tempo_btn.click() if hasattr(self, "chroma_widget") and hasattr(self.chroma_widget, "tap_tempo_btn") else None),
             ("M", lambda: self.chroma_widget.metronome_standalone_btn.click() if hasattr(self, "chroma_widget") and hasattr(self.chroma_widget, "metronome_standalone_btn") else None),
+            ("F", lambda: self.freeze_screen_btn.toggle() if hasattr(self, "freeze_screen_btn") else self.toggle_freeze_screen()),
             ("Ctrl+B", lambda: self.ab_bookmark_save_requested.emit(self.bookmark_label_edit.text().strip()) if hasattr(self, "bookmark_label_edit") else None),
         ]
         for seq, slot in bindings:
@@ -2568,13 +2576,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.resource_panel.update_performance_records(perf_records)
         self.resource_panel.update_logs(logs)
 
-    def update_analysis_snapshot(
-        self,
-        snap: AnalysisSnapshot,
-        spectrogram: Optional[np.ndarray],
-        chroma_history: Optional[np.ndarray],
-    ) -> None:
-        if self._static_lock:
+    def set_freeze_screen(self, frozen: bool) -> None:
+        self._freeze_screen = bool(frozen)
+        if hasattr(self, "freeze_screen_btn"):
+            self.freeze_screen_btn.blockSignals(True)
+            self.freeze_screen_btn.setChecked(self._freeze_screen)
+            self.freeze_screen_btn.setText("▶ 恢复画面" if self._freeze_screen else "⏸ 冻结画面")
+            self.freeze_screen_btn.blockSignals(False)
+
+    def toggle_freeze_screen(self) -> None:
+        self.set_freeze_screen(not self._freeze_screen)
+
+    def update_analysis_snapshot(self, snap: AnalysisSnapshot, spectrogram: Optional[np.ndarray], chroma_history: Optional[np.ndarray]) -> None:
+        if self._freeze_screen:
             return
         self.spectrum_widget.update_analysis(snap, spectrogram=spectrogram)
         self.chroma_widget.update_analysis(snap, chroma_history=chroma_history)

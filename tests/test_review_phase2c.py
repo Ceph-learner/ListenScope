@@ -171,7 +171,6 @@ def test_ub15_focus_ring_uses_2px_accent_secondary_even_when_animation_disabled(
     )
 
 
-@pytest.mark.xfail(strict=True, reason="U-B17")
 def test_ub17_static_lock_split_from_freeze_screen() -> None:
     """Static decoration lock must not freeze real-time spectrum/chord/key/pitch data updates; separate freeze_screen toggle required."""
     src = (REPO_ROOT / "ui" / "main_window.py").read_text("utf-8")
