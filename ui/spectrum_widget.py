@@ -76,9 +76,21 @@ class _FftFrequencyAxis(pg.AxisItem):
 class SpectrumAnalysisWidget(QtWidgets.QWidget):
     """Lightweight GPU/CPU-friendly PyQtGraph display consuming precomputed AnalysisSnapshot only."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        *,
+        analysis_config: Optional["AnalysisConfig"] = None,
+    ) -> None:
         super().__init__(parent)
-        self._cached_wave_x: Optional[np.ndarray] = None
+        from core.config import AnalysisConfig
+
+        cfg = analysis_config or AnalysisConfig()
+        self._waveform_window_seconds: float = float(cfg.waveform_window_seconds)
+        self._waveform_display_points: int = max(1, int(cfg.waveform_display_points))
+        self._cached_wave_x: np.ndarray = np.linspace(
+            -self._waveform_window_seconds, 0.0, self._waveform_display_points, dtype=np.float32
+        )
         self._cached_fft_freqs: Optional[list[float]] = None
         self._fft_x: Optional[np.ndarray] = None
         self._fft_slope_offset: Optional[np.ndarray] = None
@@ -219,6 +231,12 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.wave_plot.showGrid(x=True, y=True, alpha=0.22)
         self._wave_max_curve = self.wave_plot.plot(pen=pg.mkPen("#0F766E", width=1.2))
         self._wave_min_curve = self.wave_plot.plot(pen=pg.mkPen("#0F766E", width=1.2))
+        self._wave_fill = pg.FillBetweenItem(
+            self._wave_min_curve,
+            self._wave_max_curve,
+            brush=pg.mkBrush(15, 118, 110, 72),
+        )
+        self.wave_plot.addItem(self._wave_fill)
         for wc in (self._wave_max_curve, self._wave_min_curve):
             wc.setClipToView(True)
             wc.setDownsampling(auto=True, method="peak")
@@ -335,6 +353,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             wave_pen = pg.mkPen(p.plot_wave, width=1.2)
             self._wave_max_curve.setPen(wave_pen)
             self._wave_min_curve.setPen(wave_pen)
+            wqc = QtGui.QColor(p.plot_wave)
+            self._wave_fill.setBrush(pg.mkBrush(wqc.red(), wqc.green(), wqc.blue(), 64 if acid_variant == "light" else 76))
             self._fft_curve.setPen(pg.mkPen(p.plot_fft, width=1.5))
             qc = QtGui.QColor(p.plot_log)
             self._log_curve.setPen(pg.mkPen(p.plot_log, width=1.8))
@@ -353,6 +373,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         wave_pen = pg.mkPen(accent, width=1.2)
         self._wave_max_curve.setPen(wave_pen)
         self._wave_min_curve.setPen(wave_pen)
+        wqc = QtGui.QColor(accent)
+        self._wave_fill.setBrush(pg.mkBrush(wqc.red(), wqc.green(), wqc.blue(), 64 if mode == "light" else 76))
         fft_color = "#0D9488" if mode == "light" else "#2EC27E"
         self._fft_curve.setPen(pg.mkPen(fft_color, width=1.5))
         log_color = "#C2410C" if mode == "light" else "#F5A623"
@@ -539,8 +561,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
 
         if snap.waveform_min and snap.waveform_max:
             n_w = len(snap.waveform_min)
-            if self._cached_wave_x is None or len(self._cached_wave_x) != n_w:
-                self._cached_wave_x = np.linspace(-4.0, 0.0, n_w, dtype=np.float32)
+            if self._cached_wave_x.shape[0] != n_w:
+                self._cached_wave_x = np.linspace(-self._waveform_window_seconds, 0.0, n_w, dtype=np.float32)
             self._wave_max_curve.setData(
                 self._cached_wave_x, np.asarray(snap.waveform_max, dtype=np.float32), skipFiniteCheck=True
             )

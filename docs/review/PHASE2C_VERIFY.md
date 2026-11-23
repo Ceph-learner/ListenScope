@@ -45,13 +45,14 @@
 | U-B31 | `CONFIRMED` | `test_ub31_mixer_header_does_not_overlap_groupbox_and_progress_visible` | 修改 `ui/mixer_widget.py`：固定 `_header` 与 `job_box` 最小高度及纵向策略，确保矮高度下不重叠且 `job_status_lbl` 显示本地化阶段文字。已改 @3e11519 |
 | U-B32 | `CONFIRMED` | `test_ub32_fixed_width_controls_elide_with_ellipsis_and_full_tooltip` | 修改 `ui/main_window.py`：固定宽度控件（`ai_gpu_chk`、`ai_2stem_combo`）超宽时 `ElideRight` 显示省略号并写入完整 `toolTip()`。已改 @682c36f |
 | P2C-PERF | `CONFIRMED` | `test_p2c_perf_analyze_latest_once_cpu_within_5ms_median` | 修改 `analysis/worker.py` 与 `analysis/fft.py`：按 `self._onset_cursor` 缩窄环形缓冲读取与降混窗口，新增向量化 `log_spectrum_batch` 替代逐 hop Python 循环与 `np.mean(np.square(...))`，`analyze_latest_once` 稳态中位数降至 **3.60 ms**（`<= 5.0 ms`）且 `A-BENCH` 零退化。已改 @14fc5ab |
+| U-B34 | `CONFIRMED` | `test_ub34_realtime_waveform_envelope_4s_uniform_band_for_440hz_and_1khz` | **根因**：`ui/spectrum_widget.py` 将实时波形横轴标为 `-4..0 s`，但 `analysis/worker.py` 仅将 `0.15 s`（7200 点）传给 `compute_waveform_envelope(..., 512)`，每桶仅 14 点（0.29 ms < 440 Hz/1 kHz 周期），导致 440 Hz/1 kHz 正弦波 `min(waveform_max)` 跌至 `-0.464/-0.305` 并出现视觉混叠波浪。**修改要求**：1) 在 `analysis/worker.py` 改为对真实 4 s 窗口（如 `ring_buffer` 最近 4 s 或分块 `np.minimum.reduceat`/`np.maximum.reduceat`）计算 512 桶 min/max 包络（不足 4 s 时左侧补 0 对齐右端 `0 s`，并确保 `P2C-PERF` 中位数仍 `<= 5.0 ms`）；2) 在 `ui/spectrum_widget.py` 用 `pg.FillBetweenItem` 填充 `_wave_min_curve` 与 `_wave_max_curve` 之间的包络带；3) 移除 `test_ub34` 的 `xfail` 标记并重拍 `docs/review/screens/p2c_after_en_dark_1366x768.png`（≤ 200 KB）确认显示均匀 ±A 带状。`analyze_latest_once` 性能：改前 median **4.063 ms** / p95 **5.214 ms** → 改后 median **3.616 ms** / p95 **4.502 ms**（增量零回归，A-BENCH 与 `bench_after_p2b.json` 全项一致）。已改 @11b04c9 |
 
 ---
 
 ## 基线、新增测试与完成状态
 
 - **基线测试（`86938ef`，Linux/offscreen 验证）**：全量 `283 passed, 6 skipped`
-- **本批修改后专项测试（`tests/test_review_phase2c.py`，Linux/offscreen 验证）**：**23 passed**（0 failed，0 xfailed）
+- **本批修改后专项测试（`tests/test_review_phase2c.py`，Linux/offscreen 验证）**：**27 passed**（0 failed，0 xfailed）
 - **判定统计（共 21 条）**：`CONFIRMED` 19 条 + `NEEDS_TARGET` 2 条已全部实现并移除 `xfail`（Windows 真机 DPI/Snap/系统动画/Win10 边缘保留在 `docs/review/WINDOWS_RETEST.md`）。
 
 ---
