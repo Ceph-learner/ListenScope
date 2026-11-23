@@ -1049,7 +1049,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.sep_4stem_btn = QtWidgets.QPushButton("AI 4-Stem 分轨 (HTDemucs)")
         self.sep_4stem_btn.clicked.connect(self._on_sep_4stem)
 
-        row_b.addWidget(QtWidgets.QLabel("2-Stem 模型:"))
+        self._ai_model_lbl = QtWidgets.QLabel("2-Stem 模型:")
+        row_b.addWidget(self._ai_model_lbl)
         row_b.addWidget(self.ai_2stem_combo)
         row_b.addWidget(self.ai_gpu_chk)
         row_b.addWidget(
@@ -1386,7 +1387,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             practice = getattr(self.appearance, "layout", "split") == "practice"
             narrow_compact = compact_h and w < 1150 and not practice
             self.recent_60_btn.setVisible(not narrow_compact)
-            self.ai_2stem_combo.setMaximumWidth(190 if narrow_compact else 240)
+            self._ai_model_lbl.setVisible(not narrow_compact)
+            self.ai_2stem_combo.setMaximumWidth(170 if narrow_compact else 240)
+            self._bottom_dock.setMinimumHeight(0)
             if compact_h and not practice:
                 self.history_overview_plot.setMinimumHeight(34)
                 self.history_overview_plot.setMaximumHeight(44)
@@ -1397,20 +1400,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self.history_overview_plot.setMaximumHeight(140 if practice else 70)
                 self._bottom_l.setContentsMargins(8, 4, 8, 4)
                 self._bottom_l.setSpacing(3)
-            self._bottom_l.activate()
-            dock_w = max(300, self._bottom_dock.width() if self._bottom_dock.width() > 0 else w - 16)
-            box_hfw = self._history_box.heightForWidth(dock_w) if self._history_box.hasHeightForWidth() else 0
-            min_dock_h = max(0, self._history_box.sizeHint().height(), box_hfw) + 4
-            if self._bottom_dock.height() > 0 and self._bottom_dock.height() < min_dock_h:
-                sizes = self._main_splitter.sizes()
-                if len(sizes) == 2 and sum(sizes) > min_dock_h + 120:
-                    dock_idx = self._main_splitter.indexOf(self._bottom_dock)
-                    other_idx = 1 - dock_idx
-                    total = sum(sizes)
-                    new_sizes = [0, 0]
-                    new_sizes[dock_idx] = min_dock_h
-                    new_sizes[other_idx] = max(120, total - min_dock_h)
-                    self._main_splitter.setSizes(new_sizes)
 
         if hasattr(self, "spectrum_widget"):
             self.spectrum_widget.set_compact_mode(compact_h or (self.isVisible() and self.spectrum_widget.height() < 420))
