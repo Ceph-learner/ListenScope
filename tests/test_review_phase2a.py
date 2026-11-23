@@ -69,7 +69,6 @@ def test_e3_streaming_resampler_matches_whole_signal_without_chunk_boundary_clic
     assert snr_db > 70.0, f"Chunked resampling SNR too low: {snr_db:.1f} dB"
 
 
-@pytest.mark.xfail(strict=True, reason="E4")
 def test_e4_stem_mixer_44k_stem_playback_has_no_callback_boundary_clicks(tmp_path: Path) -> None:
     """Loading a 44.1kHz stem into StemMixerEngine must render cleanly without ~94Hz boundary clicks."""
     from audio.playback import StemMixerEngine
@@ -90,7 +89,9 @@ def test_e4_stem_mixer_44k_stem_playback_has_no_callback_boundary_clicks(tmp_pat
         seg = y[4096 : 4096 + 16384]
         spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
         peak_idx = int(np.argmax(spec))
-        sig_pow = float(np.sum(spec[max(0, peak_idx - 4) : peak_idx + 5] ** 2))
+        # Pure 440Hz@48kHz sine with 16384-pt Hanning window caps +-4 bins at 53.32 dB due to non-integer bin leakage;
+        # +-6 bins yields ~61.4 dB for a pure sine while still catching 94Hz boundary clicks (<30 dB).
+        sig_pow = float(np.sum(spec[max(0, peak_idx - 6) : peak_idx + 7] ** 2))
         tot_pow = float(np.sum(spec ** 2))
         noise_pow = max(tot_pow - sig_pow, 1e-12)
         snr_db = 10.0 * np.log10(sig_pow / noise_pow)
