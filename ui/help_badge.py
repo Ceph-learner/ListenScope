@@ -787,8 +787,13 @@ class FocusRingAnimator(QtCore.QObject):
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = bool(enabled)
-        if not self._enabled:
-            self._reset_focus_state()
+        if not self._enabled and self._current_target is not None and _is_qt_valid(self._overlay):
+            if _is_qt_valid(self._anim):
+                self._anim.stop()
+            if _is_qt_valid(self._fade_anim):
+                self._fade_anim.stop()
+            self._alpha = 1.0
+            self._overlay.set_state(self._end_rect, 1.0)
 
     def set_style(self, style: str) -> None:
         if not self._torn_down and _is_qt_valid(self._overlay):
@@ -844,7 +849,7 @@ class FocusRingAnimator(QtCore.QObject):
     def _focus_widget(self, w: QtWidgets.QWidget) -> None:
         if self._torn_down or not _is_qt_valid(self) or not _is_qt_valid(self._root) or not _is_qt_valid(w):
             return
-        if not self._enabled or not self._root.isVisible() or not w.isVisible() or not w.isEnabled():
+        if not self._root.isVisible() or not w.isVisible() or not w.isEnabled():
             return
         if w.objectName() in (
             "winCloseBtn",
@@ -866,6 +871,18 @@ class FocusRingAnimator(QtCore.QObject):
         if target_rect.width() < 16 or target_rect.height() < 14:
             return
         self._current_target = w
+        if not self._enabled:
+            self._start_rect = target_rect
+            self._end_rect = target_rect
+            self._alpha = 1.0
+            if _is_qt_valid(self._anim):
+                self._anim.stop()
+            if _is_qt_valid(self._fade_anim):
+                self._fade_anim.stop()
+            if _is_qt_valid(self._overlay):
+                self._overlay.set_state(target_rect, 1.0)
+            return
+
         if _is_qt_valid(self._overlay) and self._overlay.isVisible() and not self._overlay._rect.isEmpty():
             self._start_rect = QtCore.QRectF(self._overlay._rect)
         else:
@@ -888,6 +905,11 @@ class FocusRingAnimator(QtCore.QObject):
         if self._torn_down or self._current_target is not w:
             return
         self._current_target = None
+        if not self._enabled:
+            self._alpha = 0.0
+            if _is_qt_valid(self._overlay):
+                self._overlay.set_state(QtCore.QRectF(), 0.0)
+            return
         if _is_qt_valid(self._fade_anim):
             self._fade_anim.stop()
             self._fade_anim.setStartValue(self._alpha)

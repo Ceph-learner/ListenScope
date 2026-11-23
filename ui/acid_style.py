@@ -2516,8 +2516,12 @@ QLineEdit:focus,
 QSpinBox:focus,
 QDoubleSpinBox:focus,
 QTableWidget:focus,
+QCheckBox:focus,
+QRadioButton:focus,
+QSlider:focus,
+QTabBar::tab:focus,
 QToolButton#helpBadge:focus {{
-    border: 1px solid {p.accent};
+    border: 2px solid {p.accent_secondary};
     outline: none;
 }}
 

@@ -165,7 +165,6 @@ def test_ub14_help_badge_is_keyboard_focusable_and_at_least_24px() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="U-B15")
 def test_ub15_focus_ring_uses_2px_accent_secondary_even_when_animation_disabled() -> None:
     """QSS focus outline must be >=2px using accent_secondary distinct from hover, and remain visible without animation."""
     src = (REPO_ROOT / "ui" / "acid_style.py").read_text("utf-8")
