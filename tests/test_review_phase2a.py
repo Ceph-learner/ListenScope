@@ -182,7 +182,6 @@ def test_e14_corrupt_settings_backed_up_and_save_uses_unique_temp_with_fsync(tmp
     assert "os.fsync(" in src, "save_settings does not call os.fsync before replace"
 
 
-@pytest.mark.xfail(strict=True, reason="E15")
 def test_e15_live_separator_does_not_reuse_cleared_stop_event() -> None:
     """LiveTwoStemSeparator.start() must create a per-run stop Event instead of clearing a shared _stop_event."""
     src = (REPO_ROOT / "streaming" / "live_separator.py").read_text("utf-8")

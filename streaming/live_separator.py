@@ -446,13 +446,14 @@ class ExperimentalLiveSeparator:
         )
         req_q: queue.Queue[Any] = queue.Queue(maxsize=2)
         res_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=4)
+        run_stop = self._stop_event
 
         def _write_stdin() -> None:
             pipe = proc.stdin
             if pipe is None:
                 return
             try:
-                while not self._stop_event.is_set() and proc.poll() is None:
+                while not run_stop.is_set() and proc.poll() is None:
                     try:
                         item = req_q.get(timeout=0.08)
                     except queue.Empty:
@@ -629,7 +630,9 @@ class ExperimentalLiveSeparator:
 
             self._starting = True
             self._cancel_start_requested = False
-            self._stop_event.clear()
+            self._stop_event.set()
+            run_stop = threading.Event()
+            self._stop_event = run_stop
             self._status_message = "正在运行基准测试与启动实时分轨..."
 
         try:
@@ -775,6 +778,7 @@ class ExperimentalLiveSeparator:
                     )
                     self._feed_thread = threading.Thread(
                         target=self._run_loop,
+                        args=(run_stop,),
                         name="ListenScope-LiveSepCoordinator",
                         daemon=True,
                     )
@@ -895,7 +899,8 @@ class ExperimentalLiveSeparator:
             self._output_primed = self._out_available >= frames
             self._fill_mixed_locked(out, self._vocals_gain, self._inst_gain)
 
-    def _run_loop(self) -> None:
+    def _run_loop(self, stop_event: Optional[threading.Event] = None) -> None:
+        ev = stop_event if stop_event is not None else self._stop_event
         sr = self.audio_config.sample_rate
         hop_duration = self._hop_frames / sr
         seq = 0
@@ -903,7 +908,7 @@ class ExperimentalLiveSeparator:
         last_result_seq = -1
         last_request_start: int | None = None
 
-        while not self._stop_event.is_set():
+        while not ev.is_set():
             snap = self.resource_manager.sample()
             if snap.status in (ResourceStatus.WARNING, ResourceStatus.CRITICAL):
                 reason = "；".join(snap.status_reasons) or f"资源状态进入 {snap.status.value}"
