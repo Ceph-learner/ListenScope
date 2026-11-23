@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 import re
-from PySide6 import QtWidgets
+from PySide6 import QtGui, QtWidgets
 
 from .i18n_catalog import DYNAMIC_REGEX_RULES, EXTRA_PHRASE_MAP, HELP_TRANSLATIONS
 
@@ -185,7 +185,7 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
     "停止捕获": {"en": "Stop Capture", "ko": "캡처 중지", "ja": "キャプチャ停止"},
     "模拟音频 (开发测试)": {"en": "Synthetic Audio (Dev Test)", "ko": "가상 오디오 (테스트)", "ja": "擬似オーディオ (テスト)"},
     "系统混音 (全部声音)": {"en": "System Loopback (All Audio)", "ko": "시스템 루프백 (전체 소리)", "ja": "システムループバック (全音声)"},
-    "节拍器": {"en": "Metronome", "ko": "메트로놈", "ja": "メ트로ノーム"},
+    "节拍器": {"en": "Metronome", "ko": "메트로놈", "ja": "メトロノーム"},
     "外观": {"en": "Theme", "ko": "테마", "ja": "外観"},
     "设置": {"en": "Settings", "ko": "설정", "ja": "設定"},
     "紧急停止 AI": {"en": "E-Stop AI", "ko": "AI 긴급 중지", "ja": "AI 緊急停止"},
@@ -452,7 +452,7 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
     "移调/Capo:": {"en": "Transpose/Capo:", "ko": "조옮김/Capo:", "ja": "移調/Capo:"},
     "自动切歌重置": {"en": "Auto Track Reset", "ko": "곡 변경 자동 리셋", "ja": "曲変更自動リセット"},
     "12-BIN CHROMA // 实时色度分布": {"en": "12-BIN CHROMA", "ko": "12-BIN CHROMA // 실시간 크로마 분포", "ja": "12-BIN CHROMA // リアルタイムクロマ分布"},
-    "CHROMA HEATMAP // 有界时序热图 (120s)": {"en": "CHROMA HEATMAP (120S)", "ko": "CHROMA HEATMAP // 시계열 히트맵 (120s)", "ja": "CHROMA HEATMAP // 時系列ヒートマップ (120s)"},
+    "CHROMA HEATMAP // 有界时序热图 (30s)": {"en": "CHROMA HEATMAP (30S)", "ko": "CHROMA HEATMAP // 시계열 히트맵 (30s)", "ja": "CHROMA HEATMAP // 時系列ヒートマップ (30s)"},
     "选最近 10s": {"en": "Last 10s", "ko": "최근 10초", "ja": "直近 10秒"},
     "选最近 30s": {"en": "Last 30s", "ko": "최근 30초", "ja": "直近 30秒"},
     "选最近 60s": {"en": "Last 60s", "ko": "최근 60초", "ja": "直近 60秒"},
@@ -683,11 +683,21 @@ def translate_widget_tree(root: QtWidgets.QWidget, lang: str) -> None:
     if isinstance(root, (QtWidgets.QDialog, QtWidgets.QMainWindow)):
         _translate_cached(root, root.windowTitle(), "_ls_orig_wintitle", code, apply_fn=root.setWindowTitle)
 
+    for act in root.findChildren(QtGui.QAction):
+        if act.text():
+            _translate_cached(act, act.text(), "_ls_orig_text", code, apply_fn=act.setText)
+        if act.toolTip():
+            _translate_cached(act, act.toolTip(), "_ls_orig_tip", code, apply_fn=act.setToolTip)
+
     widgets = [root, *root.findChildren(QtWidgets.QWidget)]
     for w in widgets:
         if HelpBadge is not None and isinstance(w, HelpBadge):
             w.apply_language(code)
             continue
+        if w.accessibleName():
+            _translate_cached(w, w.accessibleName(), "_ls_orig_an", code, apply_fn=w.setAccessibleName)
+        if w.toolTip():
+            _translate_cached(w, w.toolTip(), "_ls_orig_tip", code, apply_fn=w.setToolTip)
         if isinstance(w, (QtWidgets.QLabel, QtWidgets.QAbstractButton)):
             _translate_cached(w, w.text(), "_ls_orig_text", code, apply_fn=w.setText)
         elif isinstance(w, QtWidgets.QGroupBox):

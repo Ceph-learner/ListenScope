@@ -220,38 +220,44 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 logger.warning("WASAPI system loopback read error (device switch?): %s", exc)
                 self._stats.record_underrun(1)
                 self._close_stream()
-                reconnects += 1
                 clean_chunks_since_reconnect = 0
-                if reconnects > self._max_device_reconnects:
-                    has_transient_reconnect_notice = False
-                    self._stats.set_error(f"播放设备中断且重连超过 {self._max_device_reconnects} 次: {exc}")
-                    break
-                if self._stop_event.wait(timeout=0.35):
-                    break
-                if self._stop_event.is_set():
-                    break
-                try:
-                    new_pa, new_stream, new_dev, frames_per_buffer, src_dtype = self._open_default_loopback()
-                    if self._stop_event.is_set():
-                        self._close_pa_pair(new_pa, new_stream)
+                reconnected = False
+                while reconnects < self._max_device_reconnects and not self._stop_event.is_set():
+                    reconnects += 1
+                    if self._stop_event.wait(timeout=0.35 * reconnects):
                         break
-                    with self._lock:
+                    if self._stop_event.is_set():
+                        break
+                    try:
+                        new_pa, new_stream, new_dev, frames_per_buffer, src_dtype = self._open_default_loopback()
                         if self._stop_event.is_set():
                             self._close_pa_pair(new_pa, new_stream)
                             break
-                        self._pa = new_pa
-                        self._stream = new_stream
-                    src_rate = int(new_dev["defaultSampleRate"])
-                    new_ch = int(new_dev.get("maxInputChannels") or 0) or int(new_dev.get("maxOutputChannels") or 0)
-                    src_channels = max(1, new_ch)
-                    self._device_name = str(new_dev.get("name", self._device_name))
-                    self._stats.set_process_name(self._device_name)
-                    self._stats.set_error(f"检测到播放设备切换，已重连至: {self._device_name}")
-                    has_transient_reconnect_notice = True
-                    clean_chunks_since_reconnect = 0
-                except Exception as rec_exc:
+                        with self._lock:
+                            if self._stop_event.is_set():
+                                self._close_pa_pair(new_pa, new_stream)
+                                break
+                            self._pa = new_pa
+                            self._stream = new_stream
+                        src_rate = int(new_dev["defaultSampleRate"])
+                        new_ch = int(new_dev.get("maxInputChannels") or 0) or int(new_dev.get("maxOutputChannels") or 0)
+                        src_channels = max(1, new_ch)
+                        self._device_name = str(new_dev.get("name", self._device_name))
+                        self._stats.set_process_name(self._device_name)
+                        self._stats.set_error(f"检测到播放设备切换，已重连至: {self._device_name}")
+                        has_transient_reconnect_notice = True
+                        clean_chunks_since_reconnect = 0
+                        reconnected = True
+                        break
+                    except Exception as rec_exc:
+                        has_transient_reconnect_notice = False
+                        self._stats.set_error(f"播放设备重连失败 ({reconnects}/{self._max_device_reconnects}): {rec_exc}")
+                if self._stop_event.is_set():
+                    break
+                if not reconnected:
                     has_transient_reconnect_notice = False
-                    self._stats.set_error(f"播放设备重连失败 ({reconnects}/{self._max_device_reconnects}): {rec_exc}")
+                    self._stats.set_error(f"播放设备中断且重连超过 {self._max_device_reconnects} 次: {exc}")
+                    break
 
         self._close_stream()
         self.queue.close()

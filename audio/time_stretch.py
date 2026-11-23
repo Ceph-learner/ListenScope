@@ -19,17 +19,19 @@ class StreamingTimeStretcher:
         *,
         sample_rate: int = 48000,
         channels: int = 2,
-        win_size: int = 2048,
-        syn_hop: int = 512,
-        search_radius: int = 384,
-        cmp_len: int = 512,
+        win_size: int = 4096,
+        syn_hop: int = 1024,
+        search_radius: int | None = None,
+        cmp_len: int | None = None,
     ) -> None:
         self.sample_rate = max(8000, int(sample_rate))
         self.channels = max(1, int(channels))
         self.win_size = max(512, int(win_size))
         self.syn_hop = max(128, min(self.win_size // 2, int(syn_hop)))
-        self.search_radius = max(64, int(search_radius))
-        self.cmp_len = max(128, min(self.win_size - self.syn_hop, int(cmp_len)))
+        default_radius = int(round(self.sample_rate / 75.0))
+        self.search_radius = max(64, default_radius if search_radius is None else int(search_radius))
+        default_cmp = int(round(self.sample_rate / 47.0))
+        self.cmp_len = max(128, min(self.win_size - self.syn_hop, default_cmp if cmp_len is None else int(cmp_len)))
 
         # Symmetric nonzero-endpoint Hann window for exact COLA weight normalization
         phase = 2.0 * np.pi * (np.arange(self.win_size, dtype=np.float32) + 0.5) / float(self.win_size)

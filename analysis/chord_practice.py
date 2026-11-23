@@ -128,8 +128,10 @@ def chord_midi_notes(chord_name: str, *, root_octave: int = 4) -> tuple[int, ...
     if match is None:
         raise ValueError(f"不支持的和弦符号: {chord_name!r}")
     norm_root = _normalize_pitch_token(match[1] + match[2])
+    from .chords import _normalize_chord_quality
+
     suffix = match[3].strip()
-    quality = "maj" if suffix == "M" else suffix.lower()
+    quality = _normalize_chord_quality(suffix)
     if suffix in _PRACTICE_EXTRA_INTERVALS:
         intervals = _PRACTICE_EXTRA_INTERVALS[suffix]
     elif quality in _PRACTICE_EXTRA_INTERVALS:

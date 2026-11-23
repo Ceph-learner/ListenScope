@@ -562,6 +562,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._play_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Space"), self)
         self._play_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
         self._play_shortcut.activated.connect(self.toggle_playback_requested.emit)
+        self._setup_practice_shortcuts()
 
         self._shell_frame = _MainShellFrame(self)
         self._shell_frame.setMouseTracking(True)
@@ -723,7 +724,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_status_lbl.setObjectName("captureStatus")
         set_widget_tone(self.capture_status_lbl, "info")
 
-        self._shortcut_pill = QtWidgets.QLabel("CTRL+SPACE // 播放控制")
+        self._shortcut_pill = QtWidgets.QLabel("SPACE // 快捷键")
         self._shortcut_pill.setObjectName("telemetryPill")
         self._skin_badge = QtWidgets.QLabel("ACID // CLINICAL_LIGHT")
         self._skin_badge.setObjectName("telemetryPill")
@@ -996,7 +997,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ai_2stem_combo.setMinimumContentsLength(18)
         self.ai_2stem_combo.setMaximumWidth(300)
         self._refresh_model_combos()
-        self.ai_gpu_chk = QtWidgets.QCheckBox("优先 GPU (需通过 RTX 5060 Ti 检查)")
+        self.ai_gpu_chk = QtWidgets.QCheckBox("优先 GPU")
         self.update_hardware_report(hardware_report, auto_sync_gpu_chk=True)
 
         self.segment_spin = QtWidgets.QSpinBox()
@@ -1020,7 +1021,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             HelpBadge(
                 "8GB 显存防护与分轨模型",
                 "AI 分轨全部在独立子进程执行，按 6s 分块逐段流式推理并自动清理中间缓存；"
-                "若 RTX 5060 Ti (8GB VRAM) 或 16GB 系统内存接近保护阈值，将自动拦截或停止以保护播放器不卡顿。",
+                "若 GPU 显存或系统内存接近保护阈值，将自动拦截或停止以保护播放器不卡顿。",
             )
         )
         row_b.addStretch(1)
@@ -1122,20 +1123,25 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         # Re-apply explicit Win32 WM_SETICON so frameless windows still render the taskbar emblem crisp & non-generic
         try:
             user32 = ctypes.windll.user32
-            assets_dir = get_bundle_root() / "ui" / "assets"
-            ico_path = assets_dir / "listenscope.ico"
-            if not ico_path.exists():
-                ico_path = Path(__file__).resolve().parent / "assets" / "listenscope.ico"
-            if ico_path.exists():
-                lr_loadfromfile = 0x0010
-                image_icon = 1
-                h_big = user32.LoadImageW(None, str(ico_path), image_icon, 48, 48, lr_loadfromfile)
-                h_small = user32.LoadImageW(None, str(ico_path), image_icon, 16, 16, lr_loadfromfile)
+            hicons = getattr(self, "_win32_hicons", None)
+            if not hicons:
+                assets_dir = get_bundle_root() / "ui" / "assets"
+                ico_path = assets_dir / "listenscope.ico"
+                if not ico_path.exists():
+                    ico_path = Path(__file__).resolve().parent / "assets" / "listenscope.ico"
+                if ico_path.exists():
+                    lr_loadfromfile = 0x0010
+                    image_icon = 1
+                    h_big = user32.LoadImageW(None, str(ico_path), image_icon, 48, 48, lr_loadfromfile)
+                    h_small = user32.LoadImageW(None, str(ico_path), image_icon, 16, 16, lr_loadfromfile)
+                    hicons = (h_big, h_small)
+                    self._win32_hicons = hicons
+            if hicons:
+                h_big, h_small = hicons
                 if h_big:
                     user32.SendMessageW(hwnd, 0x0080, 1, h_big)
                 if h_small:
                     user32.SendMessageW(hwnd, 0x0080, 0, h_small)
-                self._win32_hicons = (h_big, h_small)
         except Exception:
             pass
         # Enable native Windows 11 DWM rounded corners (DWMWCP_ROUND=2) when available
@@ -1313,6 +1319,79 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if not getattr(self, "_tearing_down", False):
             self.unsetCursor()
         super().mouseReleaseEvent(event)
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.WindowStateChange:
+            m = self.isMaximized()
+            if hasattr(self, "win_max_btn"):
+                self.win_max_btn.set_maximized(m)
+                self.win_max_btn.setText("❐" if m else "□")
+            if hasattr(self, "_update_rounded_mask"):
+                self._update_rounded_mask()
+
+    def restore_saved_geometry(self, b64_geometry: str) -> None:
+        raw = (b64_geometry or "").strip()
+        if not raw:
+            return
+        try:
+            ba = QtCore.QByteArray.fromBase64(raw.encode("ascii"))
+            if not ba.isEmpty() and self.restoreGeometry(ba):
+                fg = self.frameGeometry()
+                if any(s.availableGeometry().intersects(fg) for s in QtWidgets.QApplication.screens()):
+                    return
+        except Exception:
+            pass
+        self.center_on_screen()
+
+    def _step_ab_speed(self, delta: int) -> None:
+        if not hasattr(self, "ab_speed_combo"):
+            return
+        idx = self.ab_speed_combo.currentIndex()
+        new_idx = max(0, min(self.ab_speed_combo.count() - 1, idx + delta))
+        if new_idx != idx:
+            self.ab_speed_combo.setCurrentIndex(new_idx)
+
+    def _setup_practice_shortcuts(self) -> None:
+        class _TextInputGuard(QtCore.QObject):
+            def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+                if event.type() == QtCore.QEvent.Type.ShortcutOverride:
+                    fw = QtWidgets.QApplication.focusWidget()
+                    if isinstance(fw, (QtWidgets.QLineEdit, QtWidgets.QAbstractSpinBox, QtWidgets.QPlainTextEdit)):
+                        kev = event  # type: ignore[assignment]
+                        mods = kev.modifiers()
+                        if not (mods & (QtCore.Qt.KeyboardModifier.ControlModifier | QtCore.Qt.KeyboardModifier.AltModifier)):
+                            event.accept()
+                            return True
+                return super().eventFilter(watched, event)
+
+        self._text_input_guard = _TextInputGuard(self)
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self._text_input_guard)
+
+        self._practice_shortcuts: list[QtGui.QShortcut] = []
+        bindings = [
+            ("Space", self.toggle_playback_requested.emit),
+            ("L", lambda: self.ab_loop_chk.toggle() if hasattr(self, "ab_loop_chk") else None),
+            ("[", lambda: self.start_ago_spin.setValue(min(120.0, self.start_ago_spin.value() + 0.5)) if hasattr(self, "start_ago_spin") else None),
+            ("]", lambda: self.end_ago_spin.setValue(max(0.0, self.end_ago_spin.value() - 0.5)) if hasattr(self, "end_ago_spin") else None),
+            ("Alt+Left", lambda: self.start_ago_spin.setValue(min(120.0, self.start_ago_spin.value() + 0.25)) if hasattr(self, "start_ago_spin") else None),
+            ("Alt+Right", lambda: self.start_ago_spin.setValue(max(0.5, self.start_ago_spin.value() - 0.25)) if hasattr(self, "start_ago_spin") else None),
+            ("Shift+Alt+Left", lambda: self.end_ago_spin.setValue(min(119.5, self.end_ago_spin.value() + 0.25)) if hasattr(self, "end_ago_spin") else None),
+            ("Shift+Alt+Right", lambda: self.end_ago_spin.setValue(max(0.0, self.end_ago_spin.value() - 0.25)) if hasattr(self, "end_ago_spin") else None),
+            ("-", lambda: self._step_ab_speed(-1)),
+            ("=", lambda: self._step_ab_speed(1)),
+            ("0", lambda: self.ab_speed_combo.setCurrentIndex(4) if hasattr(self, "ab_speed_combo") and self.ab_speed_combo.count() > 4 else None),
+            ("T", lambda: self.chroma_widget.tap_tempo_btn.click() if hasattr(self, "chroma_widget") and hasattr(self.chroma_widget, "tap_tempo_btn") else None),
+            ("M", lambda: self.chroma_widget.metronome_standalone_btn.click() if hasattr(self, "chroma_widget") and hasattr(self.chroma_widget, "metronome_standalone_btn") else None),
+            ("Ctrl+B", lambda: self.ab_bookmark_save_requested.emit(self.bookmark_label_edit.text().strip()) if hasattr(self, "bookmark_label_edit") else None),
+        ]
+        for seq, slot in bindings:
+            sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
+            sc.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
+            sc.activated.connect(slot)
+            self._practice_shortcuts.append(sc)
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
         if getattr(self, "_tearing_down", False) or not _is_qt_valid(self) or not _is_qt_valid(watched):
@@ -1555,7 +1634,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._acid_hero_echo_lbl.setVisible(False)
             self._acid_hero_sub_lbl.setVisible(False)
             self._src_pill.setText(tr_telemetry("AUDIO_IN", lang, zh="音源", ko="오디오 입력", ja="音声入力"))
-            self._shortcut_pill.setText(tr_telemetry("CTRL+SPACE", lang, zh="播放控制", ko="재생 제어", ja="再生制御"))
+            self._shortcut_pill.setText(tr_telemetry("SPACE", lang, zh="快捷键", ko="단축키", ja="ショートカット"))
             self._pill_dark.setText(tr_telemetry("VOID", lang, zh="黑夜", ko="다크", ja="ダーク"))
             self._pill_light.setText(tr_telemetry("LIGHT", lang, zh="白天", ko="라이트", ja="ライト"))
             self.settings_btn.setText(tr_telemetry("CONFIG", lang, zh="设置", ko="설정", ja="設定"))
@@ -1589,7 +1668,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._acid_hero_echo_lbl.setVisible(False)
             self._acid_hero_sub_lbl.setVisible(False)
             self._src_pill.setText(tr_telemetry("AUDIO INPUT", lang, zh="音源", ko="오디오 입력", ja="音声入力"))
-            self._shortcut_pill.setText(tr_telemetry("CTRL+SPACE", lang, zh="播放控制", ko="재생 제어", ja="再生制御"))
+            self._shortcut_pill.setText(tr_telemetry("SPACE", lang, zh="快捷键", ko="단축키", ja="ショートカット"))
             self.settings_btn.setText(tr("btn_settings", lang))
             self.emergency_stop_btn.setText(tr("btn_estop", lang))
             self._history_box.setTitle(
@@ -1794,6 +1873,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             )
         install_focus_animations(self)
         translate_widget_tree(self, appearance.language)
+        if self._tray_icon is not None and self._tray_icon.contextMenu() is not None:
+            translate_widget_tree(self._tray_icon.contextMenu(), appearance.language)
         # Re-apply Acid telemetry tab/header labels so fixed English + single localized caption stays crisp
         self._sync_acid_chrome(variant in ("light", "dark"), variant)
         if was_visible and saved_geom is not None and saved_geom.isValid() and not self.isMaximized():
@@ -1859,11 +1940,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             on_preview=self.apply_appearance,
             system_is_dark=self._system_is_dark,
         )
-        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            appearance = dialog.values()
-            self.apply_appearance(appearance)
-            if appearance != initial:
-                self.appearance_applied.emit()
+        try:
+            if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                appearance = dialog.values()
+                self.apply_appearance(appearance)
+                if appearance != initial:
+                    self.appearance_applied.emit()
+        finally:
+            dialog.setParent(None)
+            dialog.deleteLater()
 
     @property
     def last_verified_ai_probe(self) -> Optional[dict[str, Any]]:
@@ -1987,7 +2072,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 try:
                     self._tray_icon.showMessage(
                         "ListenScope",
-                        "已最小化到系统托盘，双击图标可恢复主窗口（可在「外观与字体」中关闭此项）。",
+                        translate_text(
+                            "已最小化到系统托盘，双击图标可恢复主窗口（可在「外观与字体」中关闭此项）。",
+                            get_current_language(),
+                        ),
                         QtWidgets.QSystemTrayIcon.MessageIcon.Information,
                         2500,
                     )
@@ -1999,6 +2087,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if isinstance(app_q, QtWidgets.QApplication):
             app_q.setQuitOnLastWindowClosed(True)
         self.prepare_for_shutdown()
+        hicons = getattr(self, "_win32_hicons", None)
+        if hicons and sys.platform == "win32":
+            try:
+                user32 = ctypes.windll.user32
+                for h in hicons:
+                    if h:
+                        user32.DestroyIcon(h)
+            except Exception:
+                pass
+            self._win32_hicons = None
         if self._closing_handler is not None:
             try:
                 self._closing_handler()
@@ -2018,10 +2116,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         auto_sync_gpu_chk: bool = False,
     ) -> None:
         self._hardware_report = report
-        if report.gpu_ai_ready:
-            self.ai_gpu_chk.setText("优先 GPU")
+        gpus = getattr(report, "gpus", None) or []
+        if gpus:
+            gpu = gpus[0]
+            vram_gb = gpu.total_vram_mb / 1024.0
+            chk_text = f"优先 GPU ({gpu.name} · {vram_gb:.0f} GB)"
         else:
-            self.ai_gpu_chk.setText("优先 GPU（未就绪）")
+            chk_text = "优先 GPU (未检测到可用 NVIDIA GPU)"
+        self.ai_gpu_chk.setProperty("_ls_orig_text", chk_text)
+        self.ai_gpu_chk.setText(translate_text(chk_text, get_current_language()))
         if auto_sync_gpu_chk:
             self.ai_gpu_chk.setChecked(bool(report.gpu_ai_ready))
 
@@ -2253,7 +2356,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
     def set_capture_active_ui(self, active: bool) -> None:
         is_acid = self._acid_variant in ("light", "dark")
-        lang = getattr(getattr(self, "appearance", Appearance()), "language", "zh")
+        lang = get_current_language()
         self.capture_btn.blockSignals(True)
         self.capture_btn.setChecked(active)
         self._capture_dot.set_active(active)
@@ -2264,15 +2367,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 else tr_telemetry("CAPTURE_START", lang, zh="开始捕获", ko="캡처 시작", ja="キャプチャ開始")
             )
         else:
-            self.capture_btn.setText("停止捕获" if active else "开始捕获")
+            self.capture_btn.setText(translate_text("停止捕获" if active else "开始捕获", lang))
         self.capture_btn.blockSignals(False)
         if not active:
             self._last_capture_banner = None
             set_widget_tone(self.capture_status_lbl, "info")
-            idle_txt = translate_text("未捕获", lang)
-            self.capture_status_lbl.setProperty("_ls_orig_text", "未捕获")
-            _set_label_cached(self.capture_status_lbl, idle_txt)
-            self._last_capture_status_txt = idle_txt
+            _set_label_cached(self.capture_status_lbl, "未捕获")
+            self._last_capture_status_txt = self.capture_status_lbl.text()
 
     def dismiss_banner(self) -> None:
         self._last_capture_banner = None
@@ -2293,8 +2394,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             resolved_tone = tone if tone is not None else _infer_banner_tone(text)
             set_widget_tone(self._notice_bar, resolved_tone)
             set_widget_tone(self.notice_banner, resolved_tone)
-            self.notice_banner.setProperty("_ls_orig_text", text)
-            _set_label_cached(self.notice_banner, translate_text(text, get_current_language()))
+            _set_label_cached(self.notice_banner, text)
             if not self.notice_banner.isVisible():
                 self.notice_banner.setVisible(True)
             if not self._notice_bar.isVisible():
@@ -2434,25 +2534,27 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._active_settings_dialog = dlg
         try:
             accepted = dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted
+            if accepted:
+                if dlg.updated_appearance != self.appearance:
+                    self.apply_appearance(dlg.updated_appearance)
+                    self.appearance_applied.emit()
+                if dlg.updated_limits is not None and dlg.updated_ai_config is not None:
+                    self._resource_limits = dlg.updated_limits
+                    self._ai_config = dlg.updated_ai_config
+                    self._ai_python_executable = dlg.updated_ai_python
+                    self._midi_python_executable = dlg.updated_midi_python
+                    self._last_verified_ai_probe = dlg.verified_ai_probe
+                    if dlg.verified_ai_probe is not None:
+                        self.update_hardware_report(dlg.verified_report, auto_sync_gpu_chk=True)
+                    self.segment_spin.setValue(max(4, min(10, int(self._ai_config.demucs_default_segment_sec))))
+                    self._refresh_model_combos()
+                    self.settings_applied.emit(self._resource_limits, self._ai_config, self._ai_python_executable)
+            else:
+                if self.appearance != initial_appearance:
+                    self.apply_appearance(initial_appearance)
+                    self.appearance_applied.emit()
         finally:
             self._active_settings_dialog = None
-        if accepted:
-            if dlg.updated_appearance != self.appearance:
-                self.apply_appearance(dlg.updated_appearance)
-                self.appearance_applied.emit()
-            if dlg.updated_limits is not None and dlg.updated_ai_config is not None:
-                self._resource_limits = dlg.updated_limits
-                self._ai_config = dlg.updated_ai_config
-                self._ai_python_executable = dlg.updated_ai_python
-                self._midi_python_executable = dlg.updated_midi_python
-                self._last_verified_ai_probe = dlg.verified_ai_probe
-                if dlg.verified_ai_probe is not None:
-                    self.update_hardware_report(dlg.verified_report, auto_sync_gpu_chk=True)
-                self.segment_spin.setValue(max(4, min(10, int(self._ai_config.demucs_default_segment_sec))))
-                self._refresh_model_combos()
-                self.settings_applied.emit(self._resource_limits, self._ai_config, self._ai_python_executable)
-        else:
-            if self.appearance != initial_appearance:
-                self.apply_appearance(initial_appearance)
-                self.appearance_applied.emit()
+            dlg.setParent(None)
+            dlg.deleteLater()
 

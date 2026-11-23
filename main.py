@@ -341,6 +341,9 @@ class ListenScopeController:
             midi_python_executable=self._midi_python_executable,
             appearance=saved_settings.appearance,
         )
+        if getattr(saved_settings, "window_geometry", ""):
+            self.window.restore_saved_geometry(saved_settings.window_geometry)
+        self.window.mixer_widget._open_audio_device = not self.use_mock_ai_for_demo
         self.metronome.set_bpm(saved_settings.metronome_bpm)
         self.metronome.set_beats_per_bar(saved_settings.metronome_beats_per_bar)
         self.metronome.set_volume(saved_settings.metronome_volume)
@@ -951,7 +954,7 @@ class ListenScopeController:
             self.ab_player.pause()
             self.mixer_engine.pause()
             self.live_separator.close_output_stream()
-            self.metronome.start_standalone(open_audio_device=True)
+            self.metronome.start_standalone(open_audio_device=not self.use_mock_ai_for_demo)
             self.window.chroma_widget.sync_metronome_ui(standalone_playing=True)
             self.window.show_banner_message(
                 f"✅ 纯 CPU 独立练习节拍器已开启 ({self.metronome.bpm:.1f} BPM, {self.metronome.beats_per_bar} 拍/小节)。"
@@ -1074,7 +1077,7 @@ class ListenScopeController:
                 self.mixer_engine.pause()
             elif self.mixer_engine.max_frames > 0:
                 self._on_mixer_before_play()
-                self.mixer_engine.play(open_audio_device=True)
+                self.mixer_engine.play(open_audio_device=not self.use_mock_ai_for_demo)
         else:
             if self.ab_player.is_playing:
                 self.ab_player.pause()
@@ -1700,6 +1703,7 @@ class ListenScopeController:
             auto_reset_on_track_change=self._auto_reset_on_track_change,
             appearance=self.window.appearance,
             progression_mode=self.window.chroma_widget.progression_mode,
+            window_geometry=bytes(self.window.saveGeometry().toBase64()).decode("ascii"),
         )
 
     def _on_appearance_applied(self) -> None:
@@ -1845,7 +1849,7 @@ class ListenScopeController:
                     self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)
                     if self.hardware_report.gpu_ai_ready:
                         self.window.show_banner_message(
-                            f"✅ 独立 AI 环境已通过 RTX 5060 Ti / CUDA / ONNX 检测，GPU AI 推理已解锁。"
+                            "✅ 独立 AI 环境已通过 GPU / CUDA / ONNX 检测，GPU AI 推理已解锁。"
                         )
             except queue.Empty:
                 break

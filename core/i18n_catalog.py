@@ -16,9 +16,29 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ja": "CHORD PRACTICE // コード練習",
     },
     "设置 / 系统状态": {"en": "Settings / Status", "ko": "설정 / 시스템 상태", "ja": "設定 / システム状態"},
-    "紧急停止 AI": {"en": "E-Stop AI", "ko": "AI 긴급 정지", "ja": "AI 緊急停止"},
+    "SPACE // 快捷键": {"en": "SPACE // SHORTCUTS", "ko": "SPACE // 단축키", "ja": "SPACE // ショートカット"},
+    "快捷键: Space 播放/暂停 | L 循环 | [/] 设A/B | -/=/0 调速 | T 测速 | M 节拍器 | Ctrl+B 书签": {
+        "en": "Shortcuts: Space Play/Pause | L Loop | [/] Set A/B | -/=/0 Speed | T Tap BPM | M Metronome | Ctrl+B Bookmark",
+        "ko": "단축키: Space 재생/일시정지 | L 루프 | [/] A/B 설정 | -/=/0 배속 | T 탭 템포 | M 메트로놈 | Ctrl+B 북마크",
+        "ja": "ショートカット: Space 再生/一時停止 | L ループ | [/] A/B設定 | -/=/0 速度 | T タップ | M メトロノーム | Ctrl+B ブックマーク",
+    },
     "优先 GPU（未就绪）": {"en": "Prefer GPU (Not Ready)", "ko": "GPU 우선 (미준비)", "ja": "GPU 優先 (未準備)"},
     "优先 GPU（已就绪）": {"en": "Prefer GPU (Ready)", "ko": "GPU 우선 (준비됨)", "ja": "GPU 優先 (準備完了)"},
+    "优先 GPU (未检测到可用 NVIDIA GPU)": {
+        "en": "Prefer GPU (No NVIDIA GPU Detected)",
+        "ko": "GPU 우선 (사용 가능한 NVIDIA GPU 없음)",
+        "ja": "GPU 優先 (利用可能な NVIDIA GPU 未検出)",
+    },
+    "✅ 独立 AI 环境已通过 GPU / CUDA / ONNX 检测，GPU AI 推理已解锁。": {
+        "en": "✅ Isolated AI env passed GPU / CUDA / ONNX check; GPU AI inference unlocked.",
+        "ko": "✅ 독립 AI 환경이 GPU / CUDA / ONNX 검사를 통과하여 GPU AI 추론이 잠금 해제되었습니다.",
+        "ja": "✅ 独立 AI 環境の GPU / CUDA / ONNX 検証に合格し、GPU AI 推論が有効になりました。",
+    },
+    "已最小化到系统托盘，双击图标可恢复主窗口（可在「外观与字体」中关闭此项）。": {
+        "en": "Minimized to system tray. Double-click the icon to restore (toggle in Appearance & Fonts).",
+        "ko": "시스템 트레이로 최소화되었습니다. 아이콘을 더블클릭하면 복원됩니다 (테마 및 글꼴에서 설정 가능).",
+        "ja": "システムトレイに最小化しました。アイコンをダブルクリックで復元できます（「外観とフォント」で変更可）。",
+    },
     "扩展和弦 (maj7/m7/7/sus4)": {
         "en": "Extended Chords (maj7/m7/7/sus4)",
         "ko": "확장 코드 (maj7/m7/7/sus4)",
@@ -63,20 +83,12 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
     "FFT 频谱": {"en": "FFT Spectrum", "ko": "FFT 스펙트럼", "ja": "FFT スペクトル"},
     "频带能量": {"en": "Band Energy", "ko": "대역 에너지", "ja": "帯域エネルギー"},
     "最近时频图": {"en": "Recent Spectrogram", "ko": "최근 스펙트로그램", "ja": "直近スペクトログラム"},
+    "时间 (s)": {"en": "Time (s)", "ko": "시간 (s)", "ja": "時間 (s)"},
+    "频率 (Hz)": {"en": "Frequency (Hz)", "ko": "주파수 (Hz)", "ja": "周波数 (Hz)"},
     "平均电平 · RMS": {"en": "AVG LEVEL · RMS", "ko": "평균 레벨 · RMS", "ja": "平均レベル · RMS"},
     "峰值电平": {"en": "PEAK LEVEL", "ko": "피크 레벨", "ja": "ピークレベル"},
     "主音高": {"en": "MAIN PITCH", "ko": "기본 음고", "ja": "基本ピッチ"},
     "历史缓冲": {"en": "RING BUFFER", "ko": "히스토리 버퍼", "ja": "履歴バッファ"},
-    "12-BIN CHROMA // 实时色度分布": {
-        "en": "12-BIN CHROMA // LIVE DISTRIBUTION",
-        "ko": "12-BIN CHROMA // 실시간 크로마 분포",
-        "ja": "12-BIN CHROMA // リアルタイムクロマ分布",
-    },
-    "CHROMA HEATMAP // 有界时序热图 (120s)": {
-        "en": "CHROMA HEATMAP // BOUNDED TIMELINE (120s)",
-        "ko": "CHROMA HEATMAP // 유계 시계열 히트맵 (120s)",
-        "ja": "CHROMA HEATMAP // 有界時系列ヒートマップ (120s)",
-    },
     "N (静音)": {"en": "N (Silent)", "ko": "N (무음)", "ja": "N (無音)"},
     "说明: 调性中心(Key)与调号(Key Signature)并不完全等同，关系大小调/调式混合可能共用调号。": {
         "en": "Note: Key center differs from Key Signature; relative major/minor and modal interchange share signatures.",
@@ -604,6 +616,14 @@ DYNAMIC_REGEX_RULES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
             "en": "[Fallback] System WASAPI Loopback (captures all system audio)",
             "ko": "[폴백] 시스템 WASAPI 루프백 (다른 앱 소리 포함)",
             "ja": "[フォールバック] システム WASAPI ループバック (他アプリ音混入)",
+        },
+    ),
+    (
+        re.compile(r"^优先 GPU \((.+?) · (\d+(?:\.\d+)?) GB\)$"),
+        {
+            "en": r"Prefer GPU (\1 · \2 GB)",
+            "ko": r"GPU 우선 (\1 · \2 GB)",
+            "ja": r"GPU 優先 (\1 · \2 GB)",
         },
     ),
     (

@@ -364,7 +364,9 @@ class PracticeMetronome:
                 return
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
-        except ImportError:
+        except (ImportError, OSError):
+            with self._lock:
+                self._standalone_playing = False
             return
 
         def _callback(outdata, frames, _time_info, _status) -> None:

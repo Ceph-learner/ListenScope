@@ -23,10 +23,19 @@ def _sanitize_text(text: str) -> str:
     if not home_str:
         return text
     sanitized = text
-    variants = []
-    for v in (home_str, home_str.replace("\\", "/"), home_str.replace("/", "\\")):
+    variants: list[str] = []
+    json_escaped = json.dumps(home_str)[1:-1]
+    for v in (
+        home_str,
+        json_escaped,
+        home_str.replace("\\", "\\\\"),
+        home_str.replace("/", "\\\\"),
+        home_str.replace("\\", "/"),
+        home_str.replace("/", "\\"),
+    ):
         if v and v not in variants:
             variants.append(v)
+    variants.sort(key=len, reverse=True)
     for variant in variants:
         if len(variant) >= 3:
             sanitized = re.sub(re.escape(variant), "~", sanitized, flags=re.IGNORECASE)

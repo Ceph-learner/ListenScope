@@ -257,9 +257,14 @@ def test_diagnostic_bundle_export_sanitized_and_bounded(tmp_path: Path) -> None:
             assert summary["target_hardware"]["ram_gb"] == 16
             assert "live_separation" not in summary
             if len(home_str) >= 3:
-                assert home_str not in zf.read("diagnostic_summary.json").decode("utf-8")
+                json_home = json.dumps(home_str)[1:-1]
+                diag_summary_txt = zf.read("diagnostic_summary.json").decode("utf-8")
+                settings_san_txt = zf.read("settings_sanitized.json").decode("utf-8")
+                assert home_str not in diag_summary_txt
+                assert json_home not in diag_summary_txt
                 assert home_str not in zf.read("recent_logs.txt").decode("utf-8")
-                assert home_str not in zf.read("settings_sanitized.json").decode("utf-8")
+                assert home_str not in settings_san_txt
+                assert json_home not in settings_san_txt
 
             tail_raw = zf.read("perf_jsonl/ai_perf_20261113.jsonl")
             assert len(tail_raw) <= 65536 + 128

@@ -66,6 +66,9 @@ class TempoEstimator:
         min_samples = max(24, int(4.0 * self._rate_hz))
         if env.shape[0] < min_samples or float(np.max(env)) < 1e-4:
             return TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0)
+        peakiness = float(np.percentile(env, 95)) / (float(np.median(env)) + 1e-9)
+        if peakiness < 4.0:
+            return TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0)
 
         # Light temporal smoothing bridges fractional-frame beat intervals cleanly for ACF
         if env.size >= 3:

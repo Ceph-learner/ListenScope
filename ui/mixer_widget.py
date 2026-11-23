@@ -873,7 +873,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
     def _on_play_clicked(self) -> None:
         self.before_play_requested.emit()
-        self.mixer_engine.play(open_audio_device=True)
+        self.mixer_engine.play(open_audio_device=bool(getattr(self, "_open_audio_device", True)))
 
     def _on_speed_changed(self) -> None:
         speed = float(self.speed_combo.currentData() or 1.0)

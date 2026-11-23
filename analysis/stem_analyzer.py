@@ -294,7 +294,7 @@ def _yin_bass_frame_f0(
             spec_med = float(np.median(mag[1 : min(mag.shape[0], int(round(max_hz / bin_hz)) + 2)])) + 1e-9
             lo_b = max(1, sub_bin - 1)
             hi_b = min(mag.shape[0], sub_bin + 2)
-            if float(np.max(mag[lo_b:hi_b])) > 1.8 * spec_med:
+            if float(np.max(mag[lo_b:hi_b])) > max(1.8 * spec_med, 0.1 * float(np.max(mag))):
                 tau = c2
 
     if tau_min < tau < tau_max:
@@ -480,6 +480,9 @@ def _estimate_offline_bpm_from_flux(flux: np.ndarray, rate_hz: float) -> TempoEs
     if flux.size > 0 and not np.all(np.isfinite(flux)):
         flux = np.nan_to_num(flux, nan=0.0, posinf=0.0, neginf=0.0)
     if flux.size < max(16, int(round(1.8 * rate_hz))) or float(np.max(flux)) < 1e-4:
+        return TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0)
+    peakiness = float(np.percentile(flux, 95)) / (float(np.median(flux)) + 1e-9)
+    if peakiness < 4.0:
         return TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0)
     smoothed = np.convolve(flux, np.array([0.25, 0.5, 0.25], dtype=np.float32), mode="same")
     centered = smoothed - float(np.mean(smoothed))

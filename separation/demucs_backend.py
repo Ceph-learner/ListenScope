@@ -137,18 +137,46 @@ class DemucsSeparatorBackend(SeparationBackend):
         self._tmp_root = tempfile.TemporaryDirectory(prefix="ls_demucs_", dir=self.output_dir)
         chunk_out_dir = Path(self._tmp_root.name) / "out"
         chunk_out_dir.mkdir(parents=True, exist_ok=True)
-        self._separator = Separator(
-            output_dir=str(chunk_out_dir),
-            output_format="WAV",
-            use_soundfile=True,
-            use_autocast=bool(self.use_gpu),
-            demucs_params={
+        import inspect
+
+        sep_kwargs: dict[str, Any] = {
+            "output_dir": str(chunk_out_dir),
+            "output_format": "WAV",
+            "use_soundfile": True,
+            "use_autocast": bool(self.use_gpu),
+            "demucs_params": {
                 "segment_size": int(self.segment_seconds),
                 "shifts": int(self.ai_config.demucs_shifts),  # Strict shifts=1
                 "overlap": float(self.overlap),
                 "segments_enabled": True,
             },
-        )
+        }
+        extra_keys: list[str] = []
+        try:
+            sig = inspect.signature(Separator.__init__)
+            for k, v in (
+                ("sample_rate", 48000),
+                ("normalization_threshold", 1.0),
+                ("amplification_threshold", 0.0),
+            ):
+                if k in sig.parameters:
+                    sep_kwargs[k] = v
+                    extra_keys.append(k)
+        except Exception:
+            pass
+        try:
+            self._separator = Separator(**sep_kwargs)
+        except TypeError as type_exc:
+            if not extra_keys:
+                raise
+            logger.warning(
+                "Demucs Separator rejected optional kwargs %s (%s); falling back to legacy defaults",
+                extra_keys,
+                type_exc,
+            )
+            for k in extra_keys:
+                sep_kwargs.pop(k, None)
+            self._separator = Separator(**sep_kwargs)
         self._separator.load_model(model_filename=self.model_spec.separator_filename)
         self._mode = "audio_separator"
         self._loaded = True
@@ -302,8 +330,11 @@ class DemucsSeparatorBackend(SeparationBackend):
                 matched = next((p for p in resolved if stem.lower() in p.name.lower()), None)
                 if matched is None or not matched.exists():
                     raise RuntimeError(f"Demucs 分块输出缺少 '{stem}': {resolved}")
-                arr, _ = _read_wav_f32(matched, target_frames=target_frames)
-                stems[stem] = arr
+                arr, out_sr = _read_wav_f32(matched)
+                if out_sr != sample_rate:
+                    arr = _resample_chunk(arr, out_sr, sample_rate)
+                from .mdx_backend import _fit_frames
+                stems[stem] = _fit_frames(arr, target_frames)
             return stems
         finally:
             in_wav.unlink(missing_ok=True)
