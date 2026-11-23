@@ -264,7 +264,6 @@ def test_ub30_telemetry_pulse_strip_accepts_real_level_or_is_static_by_default()
     )
 
 
-@pytest.mark.xfail(strict=True, reason="A-M6-UI")
 def test_am6_ui_tempo_half_double_buttons_present_in_chroma_widget() -> None:
     """Merged from Phase 2B A-M6: Chroma/Tempo UI must provide ×2 and ÷2 quick tempo multiplier buttons."""
     from ui.chroma_widget import ChromaChordWidget
