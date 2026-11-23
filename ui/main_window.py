@@ -1170,10 +1170,17 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
     def force_quit(self) -> None:
         self._force_quit = True
+        if getattr(self, "_tray_icon", None) is not None:
+            try:
+                self._tray_icon.hide()
+            except Exception:
+                pass
         app = QtWidgets.QApplication.instance()
         if isinstance(app, QtWidgets.QApplication):
             app.setQuitOnLastWindowClosed(True)
         self.close()
+        if isinstance(app, QtWidgets.QApplication):
+            app.quit()
 
     def _apply_windows_taskbar_and_rounding(self) -> None:
         if sys.platform != "win32":
@@ -1377,6 +1384,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         if not self._bottom_panel_collapsed:
             practice = getattr(self.appearance, "layout", "split") == "practice"
+            self.recent_60_btn.setVisible(not (compact_h and w < 1150 and not practice))
             if compact_h and not practice:
                 self.history_overview_plot.setMinimumHeight(34)
                 self.history_overview_plot.setMaximumHeight(44)
@@ -1387,6 +1395,18 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self.history_overview_plot.setMaximumHeight(140 if practice else 70)
                 self._bottom_l.setContentsMargins(8, 4, 8, 4)
                 self._bottom_l.setSpacing(3)
+            self._bottom_l.activate()
+            min_dock_h = max(0, self._history_box.sizeHint().height() + 4)
+            if self._bottom_dock.height() > 0 and self._bottom_dock.height() < min_dock_h:
+                sizes = self._main_splitter.sizes()
+                if len(sizes) == 2 and sum(sizes) > min_dock_h + 120:
+                    dock_idx = self._main_splitter.indexOf(self._bottom_dock)
+                    other_idx = 1 - dock_idx
+                    total = sum(sizes)
+                    new_sizes = [0, 0]
+                    new_sizes[dock_idx] = min_dock_h
+                    new_sizes[other_idx] = max(120, total - min_dock_h)
+                    self._main_splitter.setSizes(new_sizes)
 
         if hasattr(self, "spectrum_widget"):
             self.spectrum_widget.set_compact_mode(compact_h or (self.isVisible() and self.spectrum_widget.height() < 420))
@@ -1845,7 +1865,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.appearance = appearance
         self.mixer_widget.plot_appearance = appearance
         set_help_mode_enabled(appearance.help_mode)
-        set_focus_animations_enabled(appearance.focus_animations)
+        from ui.help_badge import system_animations_enabled
+        set_focus_animations_enabled(bool(appearance.focus_animations) and system_animations_enabled())
         set_focus_ring_style(appearance.focus_style)
         set_help_language(appearance.language)
         self._apply_frameless_mode(appearance.frameless)

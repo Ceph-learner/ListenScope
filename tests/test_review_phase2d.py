@@ -23,7 +23,6 @@ def _get_app() -> QtWidgets.QApplication:
     return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
-@pytest.mark.xfail(strict=True, reason="W1")
 def test_w1_system_loopback_follows_default_device_change_without_stream_error() -> None:
     """W1 (NEEDS_TARGET contract): WasapiSystemLoopbackBackend must switch when default loopback ID changes even if old stream doesn't error."""
     from audio.system_loopback import WasapiSystemLoopbackBackend
@@ -46,7 +45,6 @@ def test_w1_system_loopback_follows_default_device_change_without_stream_error()
     )
 
 
-@pytest.mark.xfail(strict=True, reason="W2")
 def test_w2_force_quit_from_hidden_tray_quits_app_hides_tray_and_has_exit_watchdog(tmp_path: Path) -> None:
     """W2: force_quit() from hidden tray must hide tray, invoke app.quit(), and main.py must have exit watchdog."""
     from main import ListenScopeController
@@ -72,27 +70,45 @@ def test_w2_force_quit_from_hidden_tray_quits_app_hides_tray_and_has_exit_watchd
     assert "os._exit(0)" in main_src, "main() missing 5s exit watchdog calling os._exit(0) on stubborn threads/subprocesses"
 
 
-@pytest.mark.xfail(strict=True, reason="W2")
 def test_w2_guard_all_source_threads_are_daemon() -> None:
     """W2 guard: every threading.Thread(...) in production source must set daemon=True."""
+    import ast
+
+    def _check_file(py_path: Path, label: str) -> list[str]:
+        tree = ast.parse(py_path.read_text("utf-8"), filename=str(py_path))
+        bad: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                is_thread = (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "Thread"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "threading"
+                )
+                if is_thread:
+                    has_daemon_true = any(
+                        kw.arg == "daemon"
+                        and isinstance(kw.value, ast.Constant)
+                        and kw.value.value is True
+                        for kw in node.keywords
+                    )
+                    if not has_daemon_true:
+                        bad.append(f"{label}:{node.lineno}")
+        return bad
+
     offenders: list[str] = []
     for folder in ("ai", "analysis", "audio", "core", "separation", "streaming", "ui"):
         for py in (REPO_ROOT / folder).rglob("*.py"):
-            text = py.read_text("utf-8")
-            for m in re.finditer(r"threading\.Thread\((.*?)\)", text, re.DOTALL):
-                if "daemon=True" not in m.group(1):
-                    offenders.append(f"{py.relative_to(REPO_ROOT)}: {m.group(0)[:80]}")
-    # Also check main.py
-    main_text = (REPO_ROOT / "main.py").read_text("utf-8")
-    for m in re.finditer(r"threading\.Thread\((.*?)\)", main_text, re.DOTALL):
-        if "daemon=True" not in m.group(1):
-            offenders.append(f"main.py: {m.group(0)[:80]}")
+            offenders.extend(_check_file(py, str(py.relative_to(REPO_ROOT))))
+    main_py = REPO_ROOT / "main.py"
+    offenders.extend(_check_file(main_py, "main.py"))
     assert offenders == [], f"Non-daemon threads found: {offenders}"
     # Also ensure shutdown cancels bootstrap_manager
+    main_text = main_py.read_text("utf-8")
     assert "get_bootstrap_manager().cancel()" in main_text, "shutdown() does not cancel running bootstrap_manager subprocess"
 
 
-@pytest.mark.xfail(strict=True, reason="W3")
 def test_w3_bass_midi_postprocess_removes_simultaneous_octave_ghost_notes() -> None:
     """W3: Bass MIDI transcription must strip simultaneous +12/+24 semitone octave ghost notes (<=40ms) and constrain Basic Pitch freq range."""
     from analysis import midi_transcription as mt
@@ -106,7 +122,6 @@ def test_w3_bass_midi_postprocess_removes_simultaneous_octave_ghost_notes() -> N
     )
 
 
-@pytest.mark.xfail(strict=True, reason="W4")
 def test_w4_system_animations_disabled_zeroes_tab_underline_duration(monkeypatch: pytest.MonkeyPatch) -> None:
     """W4: When system_animations_enabled() is False, AcidTabBar underline animation must jump immediately (duration==0)."""
     from ui import acid_style, help_badge
@@ -130,7 +145,6 @@ def test_w4_system_animations_disabled_zeroes_tab_underline_duration(monkeypatch
     bar.close()
 
 
-@pytest.mark.xfail(strict=True, reason="W5")
 def test_w5_spectrogram_axis_ticks_adapt_to_available_height() -> None:
     """W5: Spectrogram/FFT Y-axis ticks must thin out dynamically when height is small so adjacent ticks >= 1.6x font height."""
     src = (REPO_ROOT / "ui" / "spectrum_widget.py").read_text("utf-8")
@@ -139,11 +153,10 @@ def test_w5_spectrogram_axis_ticks_adapt_to_available_height() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="W6")
 def test_w6_startup_broad_scan_test_isolates_home_and_root() -> None:
     """W6 #6: test_startup_help_bootstrap_fixes must isolate ROOT and Path.home() so real .venv-ai on Windows does not leak."""
     src = (REPO_ROOT / "tests" / "test_startup_help_bootstrap_fixes.py").read_text("utf-8")
-    m = re.search(r"def test_startup_skips_broad_pytorch_scan.*?\n(?=def )", src, re.DOTALL)
+    m = re.search(r"def test_nonblocking_startup_pytorch_scan_and_ui_tick_drain.*?\n(?=def )", src, re.DOTALL)
     assert m is not None
     body = m.group(0)
     assert "monkeypatch.setattr(main_mod, \"ROOT\"" in body or "monkeypatch.setattr(Path, \"home\"" in body, (
@@ -151,14 +164,12 @@ def test_w6_startup_broad_scan_test_isolates_home_and_root() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="W7")
 def test_w7_readme_documents_win11_snap_layouts_known_limitation() -> None:
     """W7: README must explicitly note Win11 Snap Layouts is deferred to Phase 3 (P3-WIN)."""
     readme = (REPO_ROOT / "README.md").read_text("utf-8")
     assert "Snap" in readme, "README.md missing known limitation note for Win11 Snap Layouts (DEFER -> #33 P3-WIN)"
 
 
-@pytest.mark.xfail(strict=True, reason="W8")
 def test_w8_windows_retest_checklist_includes_w1_w2_w3_w5_and_safe_audio_spec() -> None:
     """W8: WINDOWS_RETEST.md must include W1, W2, W3, W5 and specify -20 dBFS / 50 ms fade / <=5s non-fatiguing audio."""
     txt = (REPO_ROOT / "docs" / "review" / "WINDOWS_RETEST.md").read_text("utf-8")
@@ -166,7 +177,6 @@ def test_w8_windows_retest_checklist_includes_w1_w2_w3_w5_and_safe_audio_spec() 
         assert token in txt, f"docs/review/WINDOWS_RETEST.md missing {token!r}"
 
 
-@pytest.mark.xfail(strict=True, reason="W9")
 def test_w9_dev_build_displays_real_version_with_git_short_sha() -> None:
     """W9: Untagged dev builds must display '<version>-dev+<shortSHA>' in footer/about (reading git or env) without altering pyproject.toml."""
     import tomllib

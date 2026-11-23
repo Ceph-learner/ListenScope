@@ -33,6 +33,7 @@ from core.paths import (
     prepend_ffmpeg_path_env,
     run_external_python,
     subprocess_no_window_kwargs,
+    terminate_all_active_subprocesses,
 )
 
 ROOT = get_bundle_root()
@@ -2213,6 +2214,10 @@ class ListenScopeController:
             get_bootstrap_manager().completed.disconnect(self._on_bootstrap_completed)
         except (RuntimeError, TypeError):
             pass
+        try:
+            get_bootstrap_manager().cancel()
+        except Exception:
+            pass
         if getattr(self, "_practice_dirty", False) and hasattr(self, "window") and self.window is not None:
             try:
                 save_settings(self._build_persisted_settings(), self._settings_path)
@@ -2231,6 +2236,7 @@ class ListenScopeController:
         if self.live_separator.is_active or self.live_separator.is_starting:
             self.live_separator.stop()
         self.ai_job_manager.shutdown()
+        terminate_all_active_subprocesses(timeout=1.0)
         self.resource_manager.close()
         logging.getLogger().removeHandler(self.log_handler)
         teardown_application_file_logging()
@@ -2277,11 +2283,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.headless_smoke:
         QtCore.QTimer.singleShot(300, ctrl.window.force_quit)
     ret = app.exec()
-    ctrl.shutdown()
-    del ctrl
-    app.processEvents()
-    gc.collect()
-    app.processEvents()
+    shutdown_done = threading.Event()
+
+    def _exit_watchdog() -> None:
+        if not shutdown_done.wait(timeout=5.0):
+            os._exit(0)
+
+    threading.Thread(
+        target=_exit_watchdog,
+        name="ListenScope-ExitWatchdog",
+        daemon=True,
+    ).start()
+    try:
+        ctrl.shutdown()
+        del ctrl
+        app.processEvents()
+        gc.collect()
+        app.processEvents()
+    finally:
+        shutdown_done.set()
     return int(ret)
 
 

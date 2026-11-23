@@ -271,16 +271,9 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.spec_plot.setLabel("bottom", "时间 (s)", **{"font-size": "9pt"})
         self.spec_plot.setLabel("left", "频率 (Hz)", **{"font-size": "9pt"})
         self.spec_plot.setYRange(0, n_bins, padding=0)
-        bin_freqs = np.geomspace(27.5, 16000.0, n_bins)
-        tick_freqs = (31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
-        ticks = [
-            (
-                float(np.interp(np.log(f), np.log(bin_freqs), np.arange(n_bins))),
-                f"{int(f // 1000)}k" if f >= 1000.0 else (f"{f:g}"),
-            )
-            for f in tick_freqs
-        ]
-        self.spec_plot.getAxis("left").setTicks([ticks])
+        self._spec_n_bins = n_bins
+        self._spec_bin_freqs = np.geomspace(27.5, 16000.0, n_bins)
+        self._refresh_axis_ticks()
         self._spec_img = pg.ImageItem()
         try:
             cmap = pg.colormap.get("inferno") if hasattr(pg, "colormap") else None
@@ -449,6 +442,42 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                 lay.setContentsMargins(8 if compact else 11, 1 if compact else 7, 8 if compact else 11, 1 if compact else 7)
                 lay.setSpacing(0 if compact else 2)
         self._arrange_plots()
+        self._refresh_axis_ticks()
+
+    def _refresh_axis_ticks(self) -> None:
+        """Adapt spectrogram and FFT Y-axis ticks to available pixel height (>= 1.6x font height)."""
+        font_h = max(10.0, float(self.fontMetrics().height()))
+        min_px_gap = 1.6 * font_h
+
+        # 1. Spectrogram left axis (frequency bins)
+        spec_h = float(max(40, self.spec_plot.height() - 28))
+        n_bins = max(2, int(getattr(self, "_spec_n_bins", 96)))
+        bin_freqs = getattr(self, "_spec_bin_freqs", np.geomspace(27.5, 16000.0, n_bins))
+        tick_freqs = (31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
+        kept_spec: list[tuple[float, str]] = []
+        last_px: Optional[float] = None
+        for f in tick_freqs:
+            y_val = float(np.interp(np.log(f), np.log(bin_freqs), np.arange(n_bins)))
+            px_y = (y_val / float(n_bins - 1)) * spec_h
+            if last_px is None or (px_y - last_px) >= min_px_gap:
+                lbl = f"{int(f // 1000)}k" if f >= 1000.0 else f"{f:g}"
+                kept_spec.append((y_val, lbl))
+                last_px = px_y
+        self.spec_plot.getAxis("left").setTicks([kept_spec])
+        self.spec_plot.setLabel("left", "" if spec_h < 90.0 else "频率 (Hz)", **{"font-size": "9pt"})
+
+        # 2. FFT & Log-band Y-axis (-105..5 dBFS)
+        db_candidates = (-100.0, -80.0, -60.0, -40.0, -20.0, 0.0)
+        for plot in (self.fft_plot, self.log_plot):
+            ph = float(max(40, plot.height() - 28))
+            kept_db: list[tuple[float, str]] = []
+            prev_db_px: Optional[float] = None
+            for db in db_candidates:
+                px_y = ((db - (-105.0)) / 110.0) * ph
+                if prev_db_px is None or (px_y - prev_db_px) >= min_px_gap:
+                    kept_db.append((db, f"{int(db)}"))
+                    prev_db_px = px_y
+            plot.getAxis("left").setTicks([kept_db])
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -459,6 +488,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             compact = self.height() < 460
         self.set_compact_mode(compact)
         self._header.setVisible(self.height() >= 255)
+        self._refresh_axis_ticks()
 
     def _arrange_plots(self) -> None:
         for card in self._chart_cards:

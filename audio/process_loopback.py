@@ -54,6 +54,7 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
         self._tap: Any = None
         self._cached_fmt: dict[str, Any] = {}
         self._stop_event = threading.Event()
+        self._closing = threading.Event()
         self._watchdog_thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
         self._timing_lock = threading.Lock()
@@ -208,7 +209,7 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
 
     def _on_proctap_data(self, pcm_bytes: bytes, _frames_ignored: int) -> None:
         """Callback invoked from ProcTap worker thread. Must never crash or allocate unbounded memory."""
-        if self._stop_event.is_set() or not pcm_bytes:
+        if self._closing.is_set() or self._stop_event.is_set() or not pcm_bytes:
             return
 
         try:
@@ -359,6 +360,7 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
             self._stats.set_error(None)
 
     def stop(self) -> None:
+        self._closing.set()
         self._stop_internal(clear_error=False)
         thread = self._watchdog_thread
         self._watchdog_thread = None

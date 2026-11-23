@@ -209,8 +209,8 @@ def test_e6_resource_manager_caches_nvidia_smi_outside_lock(monkeypatch: pytest.
     from core.resource_manager import ResourceManager
 
     rm = ResourceManager()
-    rm._nvml_handle = None
-    rm._nvml_mod = None
+    rm._nvml_initialized = False
+    rm._pynvml = None
     calls = {"n": 0, "lock_held": False}
 
     def _fake_smi():

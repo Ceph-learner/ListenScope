@@ -13,6 +13,42 @@ from typing import Any, Optional
 
 
 _external_launch_lock = Lock()
+_active_subprocs_lock = Lock()
+_ACTIVE_SUBPROCS: set[subprocess.Popen[Any]] = set()
+
+
+def register_active_subprocess(proc: subprocess.Popen[Any]) -> subprocess.Popen[Any]:
+    with _active_subprocs_lock:
+        _ACTIVE_SUBPROCS.add(proc)
+    return proc
+
+
+def unregister_active_subprocess(proc: subprocess.Popen[Any]) -> None:
+    with _active_subprocs_lock:
+        _ACTIVE_SUBPROCS.discard(proc)
+
+
+def terminate_all_active_subprocesses(timeout: float = 1.0) -> None:
+    """Terminate and reap all tracked external subprocesses during shutdown."""
+    with _active_subprocs_lock:
+        procs = list(_ACTIVE_SUBPROCS)
+        _ACTIVE_SUBPROCS.clear()
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+        except Exception:
+            pass
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                proc.wait(timeout=max(0.1, float(timeout)))
+        except Exception:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+            except Exception:
+                pass
 
 
 def _strip_bundle_from_path_var(raw_val: str, bundle_paths: tuple[Path, ...]) -> str:
@@ -115,24 +151,29 @@ def run_external_python(
         if not set_dll_directory(None):
             raise ctypes.WinError(ctypes.get_last_error())
         try:
-            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+            proc = register_active_subprocess(
+                subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+            )
         finally:
             set_dll_directory(bundle)
 
-    with proc:
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            proc.kill()
-            exc.stdout, exc.stderr = proc.communicate()
-            raise
-        except BaseException:
-            proc.kill()
-            raise
-        result = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
-        if check:
-            result.check_returncode()
-        return result
+    try:
+        with proc:
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                proc.kill()
+                exc.stdout, exc.stderr = proc.communicate()
+                raise
+            except BaseException:
+                proc.kill()
+                raise
+            result = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
+            if check:
+                result.check_returncode()
+            return result
+    finally:
+        unregister_active_subprocess(proc)
 
 
 def popen_external_python(cmd: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
@@ -159,7 +200,7 @@ def popen_external_python(cmd: list[str], **kwargs: Any) -> subprocess.Popen[Any
             if not set_dll_directory(None):
                 raise ctypes.WinError(ctypes.get_last_error())
             try:
-                return subprocess.Popen(command, env=env, cwd=cwd, **kwargs)
+                return register_active_subprocess(subprocess.Popen(command, env=env, cwd=cwd, **kwargs))
             finally:
                 set_dll_directory(bundle)
 
@@ -205,7 +246,7 @@ def popen_external_python(cmd: list[str], **kwargs: Any) -> subprocess.Popen[Any
     if merged_flags:
         kwargs["creationflags"] = merged_flags
 
-    return subprocess.Popen(cmd, env=env, **kwargs)
+    return register_active_subprocess(subprocess.Popen(cmd, env=env, **kwargs))
 
 
 def get_bundle_root() -> Path:

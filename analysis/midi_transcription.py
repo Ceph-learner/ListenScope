@@ -164,6 +164,46 @@ def _fallback_monophonic_stem_to_notes(audio_path: Path, *, max_seconds: float =
     return notes
 
 
+def suppress_bass_octave_ghosts(
+    notes: list[MidiNoteCandidate],
+    *,
+    max_onset_diff_sec: float = 0.040,
+) -> list[MidiNoteCandidate]:
+    """Remove simultaneous +12/+24 semitone octave ghost notes in monophonic bass transcriptions."""
+    if len(notes) < 2:
+        return list(notes)
+    ordered = sorted(notes, key=lambda n: (n.start_sec, n.pitch_midi))
+    drop = [False] * len(ordered)
+    for i in range(len(ordered)):
+        if drop[i]:
+            continue
+        low = ordered[i]
+        for j in range(i + 1, len(ordered)):
+            if drop[j]:
+                continue
+            high = ordered[j]
+            if high.start_sec - low.start_sec > max_onset_diff_sec:
+                break
+            diff = high.pitch_midi - low.pitch_midi
+            if diff in (12, 24):
+                if (
+                    high.velocity <= low.velocity
+                    or high.confidence <= low.confidence
+                    or high.end_sec <= low.end_sec + max_onset_diff_sec
+                ):
+                    drop[j] = True
+            elif diff in (-12, -24):
+                # In case higher pitch was ordered slightly earlier within <=40ms
+                if (
+                    low.velocity <= high.velocity
+                    or low.confidence <= high.confidence
+                    or low.end_sec <= high.end_sec + max_onset_diff_sec
+                ):
+                    drop[i] = True
+                    break
+    return [n for idx, n in enumerate(ordered) if not drop[idx]]
+
+
 def transcribe_stem_to_midi(
     audio_path: Path | str,
     output_midi_path: Path | str,
@@ -208,15 +248,22 @@ def transcribe_stem_to_midi(
             warning=(warning or "") + "（当前使用测试/Core 轻量单音追踪 fallback，非 Spotify Basic Pitch 模型）",
         )
 
+    is_bass = stem_name.strip().lower() == "bass"
+    predict_kwargs: dict[str, object] = {"model_or_model_path": ICASSP_2022_MODEL_PATH}
+    if is_bass:
+        import inspect
+
+        try:
+            sig = inspect.signature(predict)
+            accepts_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            if accepts_var_kw or ("minimum_frequency" in sig.parameters and "maximum_frequency" in sig.parameters):
+                predict_kwargs["minimum_frequency"] = 30.0
+                predict_kwargs["maximum_frequency"] = 400.0
+        except (TypeError, ValueError):
+            pass
+
     # Always pass model_or_model_path explicitly so basic-pitch 0.3.x and 0.4.x+ both work
-    _model_output, midi_data, note_events = predict(str(src), model_or_model_path=ICASSP_2022_MODEL_PATH)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    midi_data.write(str(out))
-    normalize_midi_file_for_cubase(
-        out,
-        track_name=f"ListenScope {stem_name or 'Stem'}",
-        stem_name=stem_name,
-    )
+    _model_output, midi_data, note_events = predict(str(src), **predict_kwargs)
 
     candidates: list[MidiNoteCandidate] = []
     for start_s, end_s, pitch_midi, amplitude, _bends in note_events:
@@ -231,6 +278,19 @@ def transcribe_stem_to_midi(
                 confidence=round(float(amplitude), 3),
             )
         )
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if is_bass:
+        candidates = suppress_bass_octave_ghosts(candidates)
+        _write_notes_to_midi(candidates, out, stem_name=stem_name)
+    else:
+        midi_data.write(str(out))
+        normalize_midi_file_for_cubase(
+            out,
+            track_name=f"ListenScope {stem_name or 'Stem'}",
+            stem_name=stem_name,
+        )
+
     return MidiTranscriptionResult(
         source_stem_name=stem_name,
         output_midi_path=out,
