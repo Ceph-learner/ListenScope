@@ -216,7 +216,6 @@ def test_ub19_marquee_combobox_does_not_scroll_infinitely_at_rest() -> None:
     cb.close()
 
 
-@pytest.mark.xfail(strict=True, reason="U-FX3")
 def test_ufx3_system_animations_helper_help_badge_delay_and_explicit_banner_tone() -> None:
     """NEEDS_TARGET contract: system_animations_enabled() exists, HelpBadge hover delay >=400ms, show_banner_message uses explicit tone."""
     from ui.help_badge import HelpBadge

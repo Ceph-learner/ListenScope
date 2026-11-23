@@ -6,8 +6,24 @@ Zero QGraphicsEffect usage for minimal RAM and smooth 60fps interaction.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 import weakref
 from typing import Optional
+
+
+def system_animations_enabled() -> bool:
+    """Return False when Windows 'Show animations in Windows' (SPI_GETCLIENTAREAANIMATION=0x1042) is off."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        val = ctypes.c_int(1)
+        ok = ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(val), 0)
+        if ok:
+            return bool(val.value)
+    except Exception:
+        pass
+    return True
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -339,7 +355,7 @@ class HelpBadge(QtWidgets.QAbstractButton):
 
         self._hover_show_timer = QtCore.QTimer(self)
         self._hover_show_timer.setSingleShot(True)
-        self._hover_show_timer.setInterval(110)
+        self._hover_show_timer.setInterval(450)
         self._hover_show_timer.timeout.connect(self._show_help_popup)
 
         self.clicked.connect(self._show_help_popup)
@@ -412,12 +428,16 @@ class HelpBadge(QtWidgets.QAbstractButton):
             and (win is None or (self.isVisibleTo(win) and win.isVisible() and win.isActiveWindow()))
         )
         if can_show:
+            already_open = _SHARED_POPOVER is not None and _is_qt_valid(_SHARED_POPOVER) and _SHARED_POPOVER.isVisible()
             if _SHARED_POPOVER is not None:
                 try:
                     _SHARED_POPOVER.cancel_hide()
                 except RuntimeError:
                     pass
-            self._hover_show_timer.start()
+            if already_open:
+                self._show_help_popup()
+            else:
+                self._hover_show_timer.start()
         super().enterEvent(event)
 
     def leaveEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]

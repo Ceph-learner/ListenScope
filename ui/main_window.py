@@ -2518,6 +2518,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
     def show_banner_message(self, text: str, *, tone: Optional[str] = None) -> None:
         if not text:
+            if hasattr(self, "_banner_auto_timer"):
+                self._banner_auto_timer.stop()
             if self._notice_bar.isVisible():
                 self._notice_bar.setVisible(False)
             if self.notice_banner.isVisible():
@@ -2532,6 +2534,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self.notice_banner.setVisible(True)
             if not self._notice_bar.isVisible():
                 self._notice_bar.setVisible(True)
+            timer = getattr(self, "_banner_auto_timer", None)
+            if timer is None:
+                timer = QtCore.QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self.dismiss_banner)
+                self._banner_auto_timer = timer
+            if resolved_tone in ("ok", "info"):
+                timer.start(6000)
+            else:
+                timer.stop()
 
     def update_capture_stats(self, stats: CaptureStats, ring_available_sec: float) -> None:
         if self.capture_btn.isChecked() != stats.is_running:
