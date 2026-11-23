@@ -524,12 +524,18 @@ def analyze_drums_stem(drums_wav_path: Path | str, *, max_seconds: float = 120.0
     k_flux: list[float] = []
     s_flux: list[float] = []
     h_flux: list[float] = []
+    e_k: list[float] = []
+    e_s: list[float] = []
+    e_h: list[float] = []
     times: list[float] = []
 
     for center_sec, frame in frames_iter:
         if not np.all(np.isfinite(frame)):
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         mag = np.abs(np.fft.rfft(frame * win)).astype(np.float32)
+        e_k.append(float(np.sum(np.square(mag[kick_mask]))))
+        e_s.append(float(np.sum(np.square(mag[snare_mask]))))
+        e_h.append(float(np.sum(np.square(mag[hat_mask]))))
         log_mag = np.log1p(mag)
         mk = log_mag[kick_mask]
         ms = log_mag[snare_mask]
@@ -550,10 +556,27 @@ def analyze_drums_stem(drums_wav_path: Path | str, *, max_seconds: float = 120.0
     kf = np.asarray(k_flux, dtype=np.float32)
     sf_arr = np.asarray(s_flux, dtype=np.float32)
     hf = np.asarray(h_flux, dtype=np.float32)
+    ek_arr = np.asarray(e_k, dtype=np.float64)
+    es_arr = np.asarray(e_s, dtype=np.float64)
+    eh_arr = np.asarray(e_h, dtype=np.float64)
 
-    kicks = _pick_band_onsets(kf, t_arr, hop_sec=hop_sec, min_gap_sec=0.085, k_std=1.55)
+    raw_kicks = _pick_band_onsets(kf, t_arr, hop_sec=hop_sec, min_gap_sec=0.085, k_std=1.55)
     snares = _pick_band_onsets(sf_arr, t_arr, hop_sec=hop_sec, min_gap_sec=0.085, k_std=1.7)
-    hihats = _pick_band_onsets(hf, t_arr, hop_sec=hop_sec, min_gap_sec=0.055, k_std=1.5)
+    raw_hihats = _pick_band_onsets(hf, t_arr, hop_sec=hop_sec, min_gap_sec=0.055, k_std=1.5)
+
+    def _frame_idx(t_hit: float) -> int:
+        if t_arr.size == 0:
+            return 0
+        return min(int(t_arr.size - 1), max(0, int(np.searchsorted(t_arr, t_hit))))
+
+    kicks = [
+        t for t in raw_kicks
+        if (i := _frame_idx(t)) >= 0 and (ek_arr[i] / (ek_arr[i] + es_arr[i] + 1e-9)) > 0.35
+    ]
+    hihats = [
+        t for t in raw_hihats
+        if (i := _frame_idx(t)) >= 0 and (eh_arr[i] / (es_arr[i] + eh_arr[i] + 1e-9)) > 0.25
+    ]
 
     combined = kf * 1.4 + sf_arr * 1.1 + hf * 0.4
     tempo_est = _estimate_offline_bpm_from_flux(combined, rate_hz=rate_hz)

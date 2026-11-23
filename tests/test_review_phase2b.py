@@ -288,7 +288,6 @@ def test_al10_sevenths_enabled_preserves_triad_accuracy_and_supports_dim() -> No
     assert est.primary == "Bdim", f"Bdim classified as {est.primary}"
 
 
-@pytest.mark.xfail(strict=True, reason="A-M5")
 def test_am5_drum_band_crosstalk_1500hz_click_does_not_trigger_kick(tmp_path: Path) -> None:
     """Pure 1.5 kHz clicks (snare band) must not trigger false Kick hits."""
     from analysis.stem_analyzer import analyze_drums_stem
