@@ -1381,13 +1381,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self._bottom_l.setContentsMargins(6, 2, 6, 2)
                 self._bottom_l.setSpacing(2)
             else:
-                self.history_overview_plot.setMinimumHeight(112 if practice else 48)
-                self.history_overview_plot.setMaximumHeight(140 if practice else 64)
+                self.history_overview_plot.setMinimumHeight(112 if practice else 56)
+                self.history_overview_plot.setMaximumHeight(140 if practice else 70)
                 self._bottom_l.setContentsMargins(8, 4, 8, 4)
                 self._bottom_l.setSpacing(3)
 
         if hasattr(self, "spectrum_widget"):
-            self.spectrum_widget.set_compact_mode(compact_h or self.spectrum_widget.height() < 420)
+            self.spectrum_widget.set_compact_mode(compact_h or (self.isVisible() and self.spectrum_widget.height() < 420))
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if (

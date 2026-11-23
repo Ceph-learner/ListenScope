@@ -1126,7 +1126,7 @@ class AppearanceDialog(QtWidgets.QDialog):
             timer = QtCore.QTimer(self)
             timer.setSingleShot(True)
             timer.setInterval(120)
-            timer.timeout.connect(lambda: self._refresh_sample(emit_preview=False, sample_only=True))
+            timer.timeout.connect(lambda: self._refresh_sample(emit_preview=True, sample_only=False))
             self._debounce_timer = timer
         timer.start(120)
 

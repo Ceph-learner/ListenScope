@@ -431,8 +431,11 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         win = self.window()
-        win_h = win.height() if win is not None else self.height()
-        self.set_compact_mode(win_h <= 780 or self.height() < 460)
+        if win is not None and win is not self:
+            compact = win.height() < 760 or (win.isVisible() and self.height() < 420)
+        else:
+            compact = self.height() < 460
+        self.set_compact_mode(compact)
         self._header.setVisible(self.height() >= 255)
 
     def _arrange_plots(self) -> None:

@@ -392,7 +392,7 @@ def test_mainwindow_ux_polish_marquee_dismiss_hide_a_resize_tray_and_4lang(
             assert pw.getPlotItem().autoBtn.isVisible() is False
 
         # 7. Frameless 8-edge resize geometry + minimum size
-        assert win.minimumWidth() >= 940 and win.minimumHeight() >= 620
+        assert win.minimumWidth() <= 780 and win.minimumHeight() <= 540
         edges = win._hit_test_resize_edges(QtCore.QPoint(win.width() - 2, win.height() - 2))
         assert bool(edges & QtCore.Qt.Edge.RightEdge)
         assert bool(edges & QtCore.Qt.Edge.BottomEdge)

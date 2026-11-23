@@ -76,8 +76,8 @@ def test_native_layouts_keep_ab_selection_and_zoom(tmp_path):
         mixer.analysis_tabs.setCurrentIndex(2)
         for layout in ("workbench", "practice", "split"):
             window.apply_appearance(replace(window.appearance, layout=layout))
-            workspace = window._workspace_layout
-            assert (workspace.indexOf(window._history_box) < workspace.indexOf(window.tabs)) == (layout == "practice")
+            splitter_main = window._main_splitter
+            assert (splitter_main.indexOf(window._bottom_dock) < splitter_main.indexOf(window.tabs)) == (layout == "practice")
             splitter = mixer._workspace_splitter
             expected = QtCore.Qt.Orientation.Vertical if layout == "workbench" else QtCore.Qt.Orientation.Horizontal
             assert splitter.orientation() == expected
@@ -101,6 +101,9 @@ def test_analysis_views_keep_live_plot_data_and_show_real_frequency(tmp_path):
     controller = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path)
     try:
         window = controller.window
+        window.resize(1280, 860)
+        window._apply_responsive_layout()
+        app.processEvents()
         panel = window.spectrum_widget
         controller.analysis_worker.stop()
         snap = controller.analysis_worker.analyze_latest_once()

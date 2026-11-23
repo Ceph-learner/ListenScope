@@ -556,6 +556,13 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "[OK] 환경 구성 및 검증 완료(GPU AI 준비됨). 아래 저장을 누르면 바로 사용할 수 있습니다!",
         "ja": "[OK] 環境構築と検証が完了しました（GPU AI 準備完了）。「設定を保存」を押してすぐ利用できます！",
     },
+    "⏸ 冻结画面": {"en": "⏸ Freeze View", "ko": "⏸ 화면 고정", "ja": "⏸ 画面固定"},
+    "▶ 恢复画面": {"en": "▶ Resume View", "ko": "▶ 화면 재개", "ja": "▶ 画面再開"},
+    "⋯ 更多": {"en": "⋯ More", "ko": "⋯ 더보기", "ja": "⋯ その他"},
+    "波形与 FFT 频谱": {"en": "Waveform & FFT", "ko": "파형 및 FFT 스펙트럼", "ja": "波形と FFT スペクトル"},
+    "频带能量与声谱图": {"en": "Bands & Spectrogram", "ko": "대역 에너지 및 스펙트로그램", "ja": "帯域エネルギーとスペクトログラム"},
+    "▾ 收起 A/B": {"en": "▾ Collapse A/B", "ko": "▾ A/B 접기", "ja": "▾ A/B を折りたたむ"},
+    "▸ 展开 A/B": {"en": "▸ Expand A/B", "ko": "▸ A/B 펼치기", "ja": "▸ A/B を展開"},
 }
 
 _PREFIX_REPLACEMENTS: tuple[tuple[str, dict[str, str]], ...] = (

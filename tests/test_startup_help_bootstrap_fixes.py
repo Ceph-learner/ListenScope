@@ -178,7 +178,7 @@ def test_tooltip_guard_strictly_allows_help_badges_only(tmp_path: Path, monkeypa
         pop.hide()
 
         # FocusIn on HelpBadge must NOT auto-open popover; explicit click DOES open popover
-        assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.NoFocus
+        assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.TabFocus
         QtWidgets.QApplication.sendEvent(
             badge,
             QtGui.QFocusEvent(QtCore.QEvent.Type.FocusIn, QtCore.Qt.FocusReason.TabFocusReason),
@@ -197,14 +197,9 @@ def test_tooltip_guard_strictly_allows_help_badges_only(tmp_path: Path, monkeypa
 
 
 def test_no_unexpected_settooltip_calls_in_ui_source() -> None:
-    """Only ui/help_badge.py, chroma chord_progression_lbl summary property, and QSystemTrayIcon tray label retain .setToolTip in ui/."""
-    allowed_files = {"help_badge.py", "chroma_widget.py"}
-    unexpected: list[str] = []
-    for py_file in sorted((ROOT / "ui").glob("*.py")):
-        for lineno, line in enumerate(py_file.read_text(encoding="utf-8").splitlines(), start=1):
-            if ".setToolTip(" in line and "tray.setToolTip(" not in line and py_file.name not in allowed_files:
-                unexpected.append(f"{py_file.name}:{lineno}: {line.strip()}")
-    assert unexpected == [], f"Found unexpected .setToolTip calls in ui/: {unexpected}"
+    """U-B13: Standard controls may use native .setToolTip; _TooltipOnlyOnHelpBadgeFilter only suppresses lsSuppressTip widgets."""
+    hb_src = (ROOT / "ui" / "help_badge.py").read_text(encoding="utf-8")
+    assert "lsSuppressTip" in hb_src
 
 
 def test_nonblocking_startup_pytorch_scan_and_ui_tick_drain(

@@ -2137,7 +2137,9 @@ class ListenScopeController:
         target_interval = 250 if hidden else 45
         if self._timer.interval() != target_interval:
             self._timer.setInterval(target_interval)
-        if hidden:
+        if self.window.isMinimized():
+            return
+        if (not self.window.isVisible()) and (self._tick_counter % 4 != 0):
             return
 
         cur_tab = self.window.tabs.currentWidget()
