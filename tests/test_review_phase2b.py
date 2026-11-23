@@ -226,7 +226,6 @@ def test_al7_key_modulation_returns_second_half_key_not_third_key() -> None:
     assert est.primary == "D# major", f"C->Eb modulation returned {est.primary} ({est.relation_note})"
 
 
-@pytest.mark.xfail(strict=True, reason="A-L3")
 def test_al3_bass_modulation_does_not_false_positive_on_diatonic_verse_chorus() -> None:
     """A diatonic C major verse (A-F) -> chorus (C-G) bass line must not false-positive as modulation."""
     from analysis.stem_analyzer import _detect_bass_modulation

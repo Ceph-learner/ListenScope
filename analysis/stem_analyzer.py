@@ -276,32 +276,44 @@ def _coalesce_note_frames(
 
 
 def _detect_bass_modulation(events: list[StemNoteEvent]) -> tuple[bool, str]:
-    """Compare first-half vs second-half bass pitch-class weightings to surface key shift / modulation hints."""
+    """Compare first-half vs second-half bass key estimates to surface genuine modulation hints."""
     if len(events) < 4:
         return False, ""
     span = events[-1].end_sec - events[0].start_sec
     if span < 1.6:
         return False, ""
+
+    rows: list[np.ndarray] = []
+    weights: list[float] = []
+    for ev in events:
+        vec = np.zeros(12, dtype=np.float32)
+        vec[ev.pitch_midi % 12] = 1.0
+        rows.append(vec)
+        weights.append(max(0.05, ev.end_sec - ev.start_sec))
+
+    mat = np.stack(rows, axis=0)
+    w = np.asarray(weights, dtype=np.float32)
     mid = len(events) // 2
-    first_half = events[:mid]
-    second_half = events[mid:]
+    kd = KeyDetector(min_active_frames=1, min_correlation=0.65)
+    h1_idx, _, h1_corr, h1_margin = kd._score_mean_chroma(mat[:mid], frame_weights=w[:mid], bass_mat=mat[:mid])
+    h2_idx, _, h2_corr, h2_margin = kd._score_mean_chroma(mat[mid:], frame_weights=w[mid:], bass_mat=mat[mid:])
 
-    vec_a = np.zeros(12, dtype=np.float64)
-    vec_b = np.zeros(12, dtype=np.float64)
-    for ev in first_half:
-        vec_a[ev.pitch_midi % 12] += max(0.05, ev.end_sec - ev.start_sec)
-    for ev in second_half:
-        vec_b[ev.pitch_midi % 12] += max(0.05, ev.end_sec - ev.start_sec)
+    if (
+        h1_idx != h2_idx
+        and h1_corr >= 0.65
+        and h2_corr >= 0.65
+        and h1_margin >= 0.04
+        and h2_margin >= 0.04
+    ):
+        def _scale_pcs(idx: int) -> set[int]:
+            root = idx // 2
+            intervals = (0, 2, 4, 5, 7, 9, 11) if idx % 2 == 0 else (0, 2, 3, 5, 7, 8, 10)
+            return {(root + iv) % 12 for iv in intervals}
 
-    na = float(np.linalg.norm(vec_a))
-    nb = float(np.linalg.norm(vec_b))
-    if na <= 1e-6 or nb <= 1e-6:
-        return False, ""
-    cos_sim = float(np.dot(vec_a, vec_b) / (na * nb))
-    pc_a = PITCH_CLASSES[int(np.argmax(vec_a))]
-    pc_b = PITCH_CLASSES[int(np.argmax(vec_b))]
-    if cos_sim < 0.45 and pc_a != pc_b:
-        return True, f"前半段根音重心 {pc_a} → 后半段 {pc_b} (可能发生转调，最低音按实音 MIDI 标定)"
+        h1_pcs = {ev.pitch_midi % 12 for ev in events[:mid]}
+        h2_pcs = {ev.pitch_midi % 12 for ev in events[mid:]}
+        if not h1_pcs.issubset(_scale_pcs(h2_idx)) or not h2_pcs.issubset(_scale_pcs(h1_idx)):
+            return True, f"前半段调性 {kd._names[h1_idx]} → 后半段 {kd._names[h2_idx]} (可能发生转调，最低音按实音 MIDI 标定)"
     return False, ""
 
 
