@@ -517,7 +517,6 @@ def test_ub03_dark_dock_contrast_header_no_clip_1093_no_overflow_and_tab05_acces
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B34")
 def test_ub34_realtime_waveform_envelope_4s_uniform_band_for_440hz_and_1khz() -> None:
     """U-B34: 4s realtime waveform min/max envelope for 440Hz & 1kHz sine must form a uniform +/-A band (no aliasing)."""
     from analysis.worker import AnalysisWorker
@@ -542,6 +541,93 @@ def test_ub34_realtime_waveform_envelope_4s_uniform_band_for_440hz_and_1khz() ->
         assert float(np.max(wmin)) <= -0.9 * amp, (
             f"{freq} Hz waveform_min rose to {float(np.max(wmin)):.3f} (need <= {-0.9 * amp:.3f})"
         )
+
+
+def test_ub34_8khz_sine_uniform_band_no_aliasing() -> None:
+    """U-B34: 8 kHz high-frequency sine over 4s window must also form a uniform +/-A band without subsampling loss."""
+    from analysis.worker import AnalysisWorker
+    from audio.ring_buffer import FixedRingBuffer
+    from core.config import AnalysisConfig, AudioConfig
+
+    acfg = AudioConfig(sample_rate=48000, channels=2, ring_buffer_seconds=10)
+    amp = 0.5
+    t = np.arange(48000 * 4, dtype=np.float32) / 48000.0
+    rb = FixedRingBuffer(acfg)
+    sig = (amp * np.sin(2.0 * np.pi * 8003.0 * t)).astype(np.float32)
+    rb.write(np.stack([sig, sig], axis=1))
+    w = AnalysisWorker(rb, audio_config=acfg, analysis_config=AnalysisConfig())
+    snap = w.analyze_latest_once()
+    wmin = np.asarray(snap.waveform_min, dtype=np.float32)
+    wmax = np.asarray(snap.waveform_max, dtype=np.float32)
+    assert wmax.size == 512 and wmin.size == 512
+    assert float(np.min(wmax)) >= 0.9 * amp
+    assert float(np.max(wmin)) <= -0.9 * amp
+
+
+def test_ub34_clear_or_generation_change_resets_waveform_ring() -> None:
+    """U-B34: RingBuffer clear/generation change resets bucket ring to zeros; partial <4s audio pads left with zeros."""
+    from analysis.worker import AnalysisWorker
+    from audio.ring_buffer import FixedRingBuffer
+    from core.config import AnalysisConfig, AudioConfig
+
+    acfg = AudioConfig(sample_rate=48000, channels=2, ring_buffer_seconds=10)
+    rb = FixedRingBuffer(acfg)
+    w = AnalysisWorker(rb, audio_config=acfg, analysis_config=AnalysisConfig())
+
+    # 1s of audio -> left 3/4 (384 buckets) must be 0.0, right 1/4 (128 buckets) non-zero
+    t1 = np.arange(48000, dtype=np.float32) / 48000.0
+    sig1 = (0.4 * np.sin(2.0 * np.pi * 440.0 * t1)).astype(np.float32)
+    rb.write(np.stack([sig1, sig1], axis=1))
+    snap1 = w.analyze_latest_once()
+    wmax1 = np.asarray(snap1.waveform_max, dtype=np.float32)
+    assert wmax1.size == 512
+    assert np.all(wmax1[:384] == 0.0)
+    assert float(np.min(wmax1[384:])) >= 0.36
+
+    # clear() bumps generation -> bucket ring must reset to all zeros
+    rb.clear()
+    snap_cleared = w.analyze_latest_once()
+    assert np.all(np.asarray(snap_cleared.waveform_min, dtype=np.float32) == 0.0)
+    assert np.all(np.asarray(snap_cleared.waveform_max, dtype=np.float32) == 0.0)
+
+
+def test_ub34_incremental_chunks_match_direct_reduceat_bucket_by_bucket() -> None:
+    """U-B34: Incremental 1s/3s/1s chunks match direct reduceat over latest 4s, and UI uses FillBetweenItem + AnalysisConfig."""
+    import pyqtgraph as pg
+    from analysis.worker import AnalysisWorker
+    from audio.ring_buffer import FixedRingBuffer
+    from core.config import AnalysisConfig, AudioConfig
+    from ui.spectrum_widget import SpectrumAnalysisWidget
+
+    acfg = AudioConfig(sample_rate=48000, channels=2, ring_buffer_seconds=10)
+    cfg = AnalysisConfig()
+    assert cfg.waveform_window_seconds == 4.0
+    rb = FixedRingBuffer(acfg)
+    w = AnalysisWorker(rb, audio_config=acfg, analysis_config=cfg)
+
+    rng = np.random.default_rng(42)
+    full_mono = rng.uniform(-0.8, 0.8, size=48000 * 5).astype(np.float32)
+
+    # Feed 1s, then 3s, then 1s (total 5s -> latest 4s is full_mono[48000:])
+    for s_start, s_end in ((0, 48000), (48000, 48000 * 4), (48000 * 4, 48000 * 5)):
+        chunk = full_mono[s_start:s_end]
+        rb.write(np.stack([chunk, chunk], axis=1))
+        snap = w.analyze_latest_once()
+
+    latest_4s = full_mono[48000:]
+    cuts = np.arange(0, 48000 * 4, 375, dtype=np.intp)
+    ref_min = np.minimum.reduceat(latest_4s, cuts)
+    ref_max = np.maximum.reduceat(latest_4s, cuts)
+    assert np.allclose(snap.waveform_min, ref_min, atol=1e-6)
+    assert np.allclose(snap.waveform_max, ref_max, atol=1e-6)
+
+    _get_app()
+    sw = SpectrumAnalysisWidget(analysis_config=cfg)
+    fills = [item for item in sw.wave_plot.listDataItems() + sw.wave_plot.getPlotItem().items if isinstance(item, pg.FillBetweenItem)]
+    assert len(fills) == 1
+    assert float(sw._cached_wave_x[0]) == pytest.approx(-cfg.waveform_window_seconds, abs=1e-4)
+    assert float(sw._cached_wave_x[-1]) == pytest.approx(0.0, abs=1e-6)
+
 
 
 

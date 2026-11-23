@@ -133,12 +133,15 @@ class AnalysisConfig:
     tempo_window_seconds: int = 24          # Sliding onset window for BPM estimation
     analysis_rate_hz: float = 15.0          # ~66ms cadence on CPU worker
     silence_threshold_dbfs: float = -60.0
+    waveform_window_seconds: float = 4.0
     waveform_display_points: int = 512
     harmony_chroma_fmin_hz: float = 130.81
 
     def __post_init__(self) -> None:
         if self.fft_size < 512:
             raise ValueError("fft_size too small")
+        if self.waveform_window_seconds <= 0:
+            raise ValueError("waveform_window_seconds must be positive")
         if self.spectrum_history_seconds > 60:
             raise ValueError("spectrum_history_seconds must remain bounded <= 60s")
         if self.chroma_history_seconds > 120:

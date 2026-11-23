@@ -63,6 +63,20 @@ class AnalysisWorker:
         self._reset_boundary: tuple[int, int] | None = None
         self._dropped_cycles: int = 0
 
+        # Incremental 512-bucket waveform min/max ring (U-B34)
+        self._wf_num_buckets: int = max(1, int(self.config.waveform_display_points))
+        self._wf_bucket_frames: int = max(
+            1,
+            int(round(float(self.config.waveform_window_seconds) * self.audio_config.sample_rate / self._wf_num_buckets)),
+        )
+        self._wf_window_frames: int = self._wf_num_buckets * self._wf_bucket_frames
+        self._wf_min_ring = np.zeros(self._wf_num_buckets, dtype=np.float32)
+        self._wf_max_ring = np.zeros(self._wf_num_buckets, dtype=np.float32)
+        self._wf_head_bucket: int = -1
+        self._wf_last_abs: int = 0
+        self._wf_generation: Optional[int] = None
+        self._wf_reset_boundary: tuple[int, int] | None = None
+
         # 1/24-octave log-frequency FFT display grid (27.5 Hz .. 16 kHz, 221 bins)
         self._disp_f = np.geomspace(
             max(20.0, float(self.config.min_freq_hz)),
@@ -123,8 +137,164 @@ class AnalysisWorker:
             self._last_analyzed_frame = -1
             self._onset_cursor = None
             self._onset_generation = None
+            self._reset_waveform_ring()
             with self._lock:
                 self._latest_snapshot = None
+
+    def _reset_waveform_ring(self) -> None:
+        self._wf_min_ring.fill(0.0)
+        self._wf_max_ring.fill(0.0)
+        self._wf_head_bucket = -1
+        self._wf_last_abs = 0
+        self._wf_generation = None
+        self._wf_reset_boundary = None
+
+    def _update_waveform_buckets(self, mono_new: np.ndarray, abs_start: int) -> None:
+        n = int(mono_new.shape[0])
+        if n <= 0:
+            return
+        bf = self._wf_bucket_frames
+        nb = self._wf_num_buckets
+        b0 = abs_start // bf
+        b1 = (abs_start + n - 1) // bf
+
+        first_boundary = bf - (abs_start % bf)
+        if first_boundary < n:
+            boundaries = np.arange(first_boundary, n, bf, dtype=np.intp)
+            cuts = np.empty(boundaries.size + 1, dtype=np.intp)
+            cuts[0] = 0
+            cuts[1:] = boundaries
+        else:
+            cuts = np.array([0], dtype=np.intp)
+
+        b_mins = np.minimum.reduceat(mono_new, cuts)
+        b_maxs = np.maximum.reduceat(mono_new, cuts)
+
+        if self._wf_head_bucket < 0:
+            self._wf_min_ring.fill(0.0)
+            self._wf_max_ring.fill(0.0)
+            first_is_continuation = False
+        else:
+            first_is_continuation = (b0 == self._wf_head_bucket)
+            gap = b0 - self._wf_head_bucket - 1
+            if gap > 0:
+                if gap >= nb:
+                    self._wf_min_ring.fill(0.0)
+                    self._wf_max_ring.fill(0.0)
+                else:
+                    g_start = (self._wf_head_bucket + 1) % nb
+                    g_end = g_start + gap
+                    if g_end <= nb:
+                        self._wf_min_ring[g_start:g_end] = 0.0
+                        self._wf_max_ring[g_start:g_end] = 0.0
+                    else:
+                        first_part = nb - g_start
+                        self._wf_min_ring[g_start:] = 0.0
+                        self._wf_min_ring[: gap - first_part] = 0.0
+                        self._wf_max_ring[g_start:] = 0.0
+                        self._wf_max_ring[: gap - first_part] = 0.0
+
+        slot0 = b0 % nb
+        if first_is_continuation:
+            if b_mins[0] < self._wf_min_ring[slot0]:
+                self._wf_min_ring[slot0] = b_mins[0]
+            if b_maxs[0] > self._wf_max_ring[slot0]:
+                self._wf_max_ring[slot0] = b_maxs[0]
+            rem_mins = b_mins[1:]
+            rem_maxs = b_maxs[1:]
+            rem_start = (b0 + 1) % nb
+        else:
+            rem_mins = b_mins
+            rem_maxs = b_maxs
+            rem_start = slot0
+
+        m = int(rem_mins.shape[0])
+        if m > 0:
+            if m >= nb:
+                rem_mins = rem_mins[-nb:]
+                rem_maxs = rem_maxs[-nb:]
+                rem_start = (b1 - nb + 1) % nb
+                m = nb
+            rem_end = rem_start + m
+            if rem_end <= nb:
+                self._wf_min_ring[rem_start:rem_end] = rem_mins
+                self._wf_max_ring[rem_start:rem_end] = rem_maxs
+            else:
+                first_part = nb - rem_start
+                self._wf_min_ring[rem_start:] = rem_mins[:first_part]
+                self._wf_min_ring[: m - first_part] = rem_mins[first_part:]
+                self._wf_max_ring[rem_start:] = rem_maxs[:first_part]
+                self._wf_max_ring[: m - first_part] = rem_maxs[first_part:]
+
+        self._wf_head_bucket = b1
+
+    def _compute_incremental_waveform(
+        self,
+        *,
+        ring_generation: int,
+        oldest_abs: int,
+        end_abs: int,
+        pcm_start_abs: int,
+        mono_all: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        active_boundary = (
+            self._reset_boundary
+            if (self._reset_boundary is not None and self._reset_boundary[0] == ring_generation)
+            else None
+        )
+        effective_start = max(oldest_abs, active_boundary[1]) if active_boundary is not None else oldest_abs
+
+        if (
+            self._wf_generation != ring_generation
+            or self._wf_reset_boundary != active_boundary
+            or self._wf_last_abs > end_abs
+        ):
+            self._wf_min_ring.fill(0.0)
+            self._wf_max_ring.fill(0.0)
+            self._wf_head_bucket = -1
+            self._wf_last_abs = effective_start
+            self._wf_generation = ring_generation
+            self._wf_reset_boundary = active_boundary
+
+        if end_abs <= effective_start:
+            self._wf_min_ring.fill(0.0)
+            self._wf_max_ring.fill(0.0)
+            self._wf_head_bucket = -1
+            self._wf_last_abs = end_abs
+            return self._wf_min_ring.copy(), self._wf_max_ring.copy()
+
+        process_start = max(effective_start, self._wf_last_abs)
+        new_frames = end_abs - process_start
+        if new_frames > 0:
+            if new_frames >= self._wf_window_frames:
+                self._wf_min_ring.fill(0.0)
+                self._wf_max_ring.fill(0.0)
+                self._wf_head_bucket = -1
+                process_start = max(effective_start, end_abs - self._wf_window_frames)
+
+            if process_start >= pcm_start_abs and mono_all.shape[0] > 0:
+                mono_new = mono_all[process_start - pcm_start_abs :]
+            else:
+                pcm_seg = self.ring_buffer.read_range(process_start, end_abs)
+                if pcm_seg.shape[0] == 0:
+                    mono_new = np.empty(0, dtype=np.float32)
+                elif pcm_seg.shape[1] == 2:
+                    mono_new = (0.5 * (pcm_seg[:, 0] + pcm_seg[:, 1])).astype(np.float32, copy=False)
+                else:
+                    mono_new = np.mean(pcm_seg, axis=1, dtype=np.float32)
+            self._update_waveform_buckets(mono_new, process_start)
+            self._wf_last_abs = end_abs
+
+        if self._wf_head_bucket < 0:
+            return np.zeros(self._wf_num_buckets, dtype=np.float32), np.zeros(self._wf_num_buckets, dtype=np.float32)
+
+        split = (self._wf_head_bucket + 1) % self._wf_num_buckets
+        if split == 0:
+            return self._wf_min_ring.copy(), self._wf_max_ring.copy()
+        return (
+            np.concatenate((self._wf_min_ring[split:], self._wf_min_ring[:split])),
+            np.concatenate((self._wf_max_ring[split:], self._wf_max_ring[:split])),
+        )
 
     def latest_snapshot(self) -> Optional[AnalysisSnapshot]:
         with self._lock:
@@ -180,7 +350,14 @@ class AnalysisWorker:
             audio_silent = rms_db < self.config.silence_threshold_dbfs
             is_silent = (end_abs == prev_abs) or audio_silent
 
-        wf_min, wf_max = self.spectrum.compute_waveform_envelope(mono)
+        oldest_abs = max(0, end_abs - self.ring_buffer.capacity_frames)
+        wf_min, wf_max = self._compute_incremental_waveform(
+            ring_generation=ring_generation,
+            oldest_abs=oldest_abs,
+            end_abs=end_abs,
+            pcm_start_abs=start_abs,
+            mono_all=mono_all,
+        )
         fft_mag, fft_db, log_db = self.spectrum.analyze_frame(mono)
         pitch_est = self.pitch.estimate_from_pcm(mono, is_silent=is_silent)
 
