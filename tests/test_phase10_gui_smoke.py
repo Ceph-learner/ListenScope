@@ -17,7 +17,14 @@ from core.resource_manager import SimulationOverrides
 from main import ListenScopeController
 
 
-def test_desktop_gui_headless_smoke_capture_settings_and_emergency_stop(tmp_path) -> None:
+def test_desktop_gui_headless_smoke_capture_settings_and_emergency_stop(tmp_path, monkeypatch) -> None:
+    import psutil
+
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(total=16 * 1024**3, available=12 * 1024**3, percent=25.0, used=4 * 1024**3),
+    )
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     ctrl = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path / "ws")
     ctrl.resource_manager.set_simulation_overrides(

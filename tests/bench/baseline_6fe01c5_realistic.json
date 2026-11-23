@@ -1,0 +1,182 @@
+{
+  "summary": {
+    "total_cases": 15,
+    "acc1_pct": 40.0,
+    "acc2_pct": 66.67,
+    "peakiness_p50": 5.8866,
+    "peakiness_p95": 8.4703,
+    "peakiness_min": 3.2807,
+    "peakiness_max": 8.7549,
+    "neg_controls_none_pct": 100.0
+  },
+  "cases": [
+    {
+      "bpm": 70.0,
+      "style": "pop_compressed",
+      "estimated_bpm": 138.4,
+      "stability": "Medium",
+      "acf_peak": 0.2007,
+      "peakiness": 7.9632,
+      "acc1": false,
+      "acc2": true
+    },
+    {
+      "bpm": 70.0,
+      "style": "dense_loud",
+      "estimated_bpm": 70.4,
+      "stability": "High",
+      "acf_peak": 0.8275,
+      "peakiness": 6.0309,
+      "acc1": true,
+      "acc2": true
+    },
+    {
+      "bpm": 70.0,
+      "style": "streaming_wash",
+      "estimated_bpm": null,
+      "stability": "Unknown",
+      "acf_peak": 0.0,
+      "peakiness": 3.2807,
+      "acc1": false,
+      "acc2": false
+    },
+    {
+      "bpm": 95.0,
+      "style": "pop_compressed",
+      "estimated_bpm": 95.0,
+      "stability": "Low",
+      "acf_peak": 0.1343,
+      "peakiness": 8.7549,
+      "acc1": true,
+      "acc2": true
+    },
+    {
+      "bpm": 95.0,
+      "style": "dense_loud",
+      "estimated_bpm": 95.2,
+      "stability": "High",
+      "acf_peak": 0.802,
+      "peakiness": 6.0335,
+      "acc1": true,
+      "acc2": true
+    },
+    {
+      "bpm": 95.0,
+      "style": "streaming_wash",
+      "estimated_bpm": null,
+      "stability": "Unknown",
+      "acf_peak": 0.0,
+      "peakiness": 3.3011,
+      "acc1": false,
+      "acc2": false
+    },
+    {
+      "bpm": 120.0,
+      "style": "pop_compressed",
+      "estimated_bpm": 60.3,
+      "stability": "High",
+      "acf_peak": 0.5586,
+      "peakiness": 8.1808,
+      "acc1": false,
+      "acc2": true
+    },
+    {
+      "bpm": 120.0,
+      "style": "dense_loud",
+      "estimated_bpm": 118.9,
+      "stability": "High",
+      "acf_peak": 0.7831,
+      "peakiness": 5.8866,
+      "acc1": true,
+      "acc2": true
+    },
+    {
+      "bpm": 120.0,
+      "style": "streaming_wash",
+      "estimated_bpm": null,
+      "stability": "Unknown",
+      "acf_peak": 0.0,
+      "peakiness": 3.368,
+      "acc1": false,
+      "acc2": false
+    },
+    {
+      "bpm": 128.0,
+      "style": "pop_compressed",
+      "estimated_bpm": 64.3,
+      "stability": "High",
+      "acf_peak": 0.5806,
+      "peakiness": 8.3483,
+      "acc1": false,
+      "acc2": true
+    },
+    {
+      "bpm": 128.0,
+      "style": "dense_loud",
+      "estimated_bpm": 125.8,
+      "stability": "High",
+      "acf_peak": 0.7181,
+      "peakiness": 5.7204,
+      "acc1": true,
+      "acc2": true
+    },
+    {
+      "bpm": 128.0,
+      "style": "streaming_wash",
+      "estimated_bpm": null,
+      "stability": "Unknown",
+      "acf_peak": 0.0,
+      "peakiness": 3.562,
+      "acc1": false,
+      "acc2": false
+    },
+    {
+      "bpm": 150.0,
+      "style": "pop_compressed",
+      "estimated_bpm": 75.1,
+      "stability": "High",
+      "acf_peak": 0.5614,
+      "peakiness": 7.7837,
+      "acc1": false,
+      "acc2": true
+    },
+    {
+      "bpm": 150.0,
+      "style": "dense_loud",
+      "estimated_bpm": 148.2,
+      "stability": "High",
+      "acf_peak": 0.7839,
+      "peakiness": 5.7402,
+      "acc1": true,
+      "acc2": true
+    },
+    {
+      "bpm": 150.0,
+      "style": "streaming_wash",
+      "estimated_bpm": null,
+      "stability": "Unknown",
+      "acf_peak": 0.0,
+      "peakiness": 3.4297,
+      "acc1": false,
+      "acc2": false
+    }
+  ],
+  "negative_controls": [
+    {
+      "name": "steady_sine_440hz",
+      "estimated_bpm": null,
+      "stability": "Unknown",
+      "acf_peak": 0.0,
+      "peakiness": 4.2315,
+      "returned_none": true
+    },
+    {
+      "name": "pure_chord_pad",
+      "estimated_bpm": null,
+      "stability": "Unknown",
+      "acf_peak": 0.0,
+      "peakiness": 2.1068,
+      "returned_none": true
+    }
+  ]
+}

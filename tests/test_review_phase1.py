@@ -662,7 +662,11 @@ def test_ub21_win32_icon_handles_not_reloaded_every_show_event(monkeypatch: pyte
         def DestroyIcon(self, _h):
             return 1
 
-    fake_windll = types.SimpleNamespace(user32=_FakeUser32())
+    fake_windll = types.SimpleNamespace(
+        user32=_FakeUser32(),
+        dwmapi=types.SimpleNamespace(DwmSetWindowAttribute=lambda *args: 0),
+    )
+    mw._win32_hicons = None
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
     try:

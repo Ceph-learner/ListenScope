@@ -33,6 +33,7 @@ from core.paths import (
     prepend_ffmpeg_path_env,
     run_external_python,
     subprocess_no_window_kwargs,
+    terminate_all_active_subprocesses,
 )
 
 ROOT = get_bundle_root()
@@ -386,6 +387,7 @@ class ListenScopeController:
             midi_python_executable=self._midi_python_executable,
             appearance=saved_settings.appearance,
         )
+        self.window.close_behavior = str(getattr(saved_settings, "close_behavior", "ask") or "ask")
         if getattr(saved_settings, "window_geometry", ""):
             self.window.restore_saved_geometry(saved_settings.window_geometry)
         self.window.mixer_widget._open_audio_device = not self.use_mock_ai_for_demo
@@ -546,6 +548,7 @@ class ListenScopeController:
         w.live_widget.balance_changed.connect(self.live_separator.set_gains)
         w.settings_applied.connect(self._on_settings_applied)
         w.appearance_applied.connect(self._on_appearance_applied)
+        w.close_behavior_changed.connect(self._on_close_behavior_changed)
         w.ab_bookmark_save_requested.connect(self._on_ab_bookmark_save)
         w.ab_bookmark_select_requested.connect(self._on_ab_bookmark_select)
         w.ab_bookmark_delete_requested.connect(self._on_ab_bookmark_delete)
@@ -1893,7 +1896,14 @@ class ListenScopeController:
             appearance=self.window.appearance,
             progression_mode=self.window.chroma_widget.progression_mode,
             window_geometry=bytes(self.window.saveGeometry().toBase64()).decode("ascii"),
+            close_behavior=str(getattr(self.window, "close_behavior", "ask") or "ask"),
         )
+
+    def _on_close_behavior_changed(self, _behavior: str = "ask") -> None:
+        try:
+            save_settings(self._build_persisted_settings(), self._settings_path)
+        except OSError as exc:
+            logging.getLogger(__name__).warning("Failed to save close_behavior: %s", exc)
 
     def _on_appearance_applied(self) -> None:
         try:
@@ -2017,6 +2027,9 @@ class ListenScopeController:
         while True:
             try:
                 found_py = self._ui_ai_discover_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if (
                     found_py
                     and not getattr(self, "_shutdown_done", False)
@@ -2028,11 +2041,14 @@ class ListenScopeController:
                     if hasattr(self.window, "_ai_python_executable"):
                         self.window._ai_python_executable = found_py
                     self._schedule_external_ai_probe(found_py)
-            except queue.Empty:
-                break
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_ai_discover_q item")
         while True:
             try:
                 seq, probe_data = self._ui_hw_probe_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if seq == self._probe_seq:
                     self.hardware_report = apply_external_ai_probe_to_report(self.hardware_report, probe_data)
                     self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)
@@ -2040,18 +2056,24 @@ class ListenScopeController:
                         self.window.show_banner_message(
                             "✅ 独立 AI 环境已通过 GPU / CUDA / ONNX 检测，GPU AI 推理已解锁。"
                         )
-            except queue.Empty:
-                break
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_hw_probe_q item")
         while True:
             try:
                 progress = self._ui_ai_progress_q.get_nowait()
-                if not self._cleared_ai_task_id or progress.task_id != self._cleared_ai_task_id:
-                    self.window.update_ai_progress(progress)
             except queue.Empty:
                 break
+            try:
+                if not self._cleared_ai_task_id or progress.task_id != self._cleared_ai_task_id:
+                    self.window.update_ai_progress(progress)
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_ai_progress_q item")
         while True:
             try:
                 ai_res = self._ui_ai_result_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if self._cleared_ai_task_id and ai_res.task_id == self._cleared_ai_task_id:
                     continue
                 if ai_res.state == AIJobState.COMPLETED:
@@ -2060,33 +2082,54 @@ class ListenScopeController:
                     self._latest_deep_report = None
                     self._latest_midi_result = None
                 self.window.handle_ai_result(ai_res)
-            except queue.Empty:
-                break
-        self._drain_ui_callbacks()
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_ai_result_q item")
+        try:
+            self._drain_ui_callbacks()
+        except Exception:
+            logging.getLogger(__name__).exception("Error in _drain_ui_callbacks")
         while True:
             try:
-                self.window.show_banner_message(self._ui_banner_q.get_nowait())
+                banner_msg = self._ui_banner_q.get_nowait()
             except queue.Empty:
                 break
+            try:
+                self.window.show_banner_message(banner_msg)
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_banner_q item")
         while True:
             try:
                 dec = self._ui_track_decision_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 self._apply_track_decision(dec)
-            except queue.Empty:
-                break
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_track_decision_q item")
         while True:
             try:
-                self.window.live_widget.set_benchmark_text(self._ui_live_bench_q.get_nowait())
+                bench_txt = self._ui_live_bench_q.get_nowait()
             except queue.Empty:
                 break
+            try:
+                self.window.live_widget.set_benchmark_text(bench_txt)
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_live_bench_q item")
         while True:
             try:
-                self.window.live_widget.set_pending_start(self._ui_live_pending_q.get_nowait())
+                pending_val = self._ui_live_pending_q.get_nowait()
             except queue.Empty:
                 break
+            try:
+                self.window.live_widget.set_pending_start(pending_val)
+            except Exception:
+                logger.exception("Error handling _ui_live_pending_q item")
         while True:
             try:
                 gen, midi_res, midi_msg = self._ui_midi_result_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if gen != self._stem_generation:
                     continue
                 if midi_res is not None:
@@ -2096,11 +2139,14 @@ class ListenScopeController:
                     self.window.mixer_widget.set_midi_error(midi_msg)
                 if midi_msg:
                     self.window.show_banner_message(midi_msg)
-            except queue.Empty:
-                break
+            except Exception:
+                logger.exception("Error handling _ui_midi_result_q item")
         while True:
             try:
                 gen, deep_res, deep_msg = self._ui_deep_analysis_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if gen != self._stem_generation:
                     continue
                 if deep_res is not None:
@@ -2109,8 +2155,8 @@ class ListenScopeController:
                     self.window.display_deep_analysis(deep_res)
                 if deep_msg:
                     self.window.show_banner_message(deep_msg)
-            except queue.Empty:
-                break
+            except Exception:
+                logger.exception("Error handling _ui_deep_analysis_q item")
 
         if self.drum_preview.close_if_finished():
             self.window.mixer_widget.set_drum_preview_playing(False)
@@ -2213,6 +2259,10 @@ class ListenScopeController:
             get_bootstrap_manager().completed.disconnect(self._on_bootstrap_completed)
         except (RuntimeError, TypeError):
             pass
+        try:
+            get_bootstrap_manager().cancel()
+        except Exception:
+            pass
         if getattr(self, "_practice_dirty", False) and hasattr(self, "window") and self.window is not None:
             try:
                 save_settings(self._build_persisted_settings(), self._settings_path)
@@ -2231,6 +2281,7 @@ class ListenScopeController:
         if self.live_separator.is_active or self.live_separator.is_starting:
             self.live_separator.stop()
         self.ai_job_manager.shutdown()
+        terminate_all_active_subprocesses(timeout=1.0)
         self.resource_manager.close()
         logging.getLogger().removeHandler(self.log_handler)
         teardown_application_file_logging()
@@ -2277,11 +2328,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.headless_smoke:
         QtCore.QTimer.singleShot(300, ctrl.window.force_quit)
     ret = app.exec()
-    ctrl.shutdown()
-    del ctrl
-    app.processEvents()
-    gc.collect()
-    app.processEvents()
+    shutdown_done = threading.Event()
+
+    def _exit_watchdog() -> None:
+        if not shutdown_done.wait(timeout=5.0):
+            os._exit(0)
+
+    threading.Thread(
+        target=_exit_watchdog,
+        name="ListenScope-ExitWatchdog",
+        daemon=True,
+    ).start()
+    try:
+        ctrl.shutdown()
+        del ctrl
+        app.processEvents()
+        gc.collect()
+        app.processEvents()
+    finally:
+        shutdown_done.set()
     return int(ret)
 
 

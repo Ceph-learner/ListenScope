@@ -82,6 +82,7 @@ class PracticeMetronome:
         self.sample_rate = max(8000, int(sample_rate))
         self.channels = max(1, int(channels))
         self._lock = threading.RLock()
+        self._closing = threading.Event()
 
         self._bpm: float = 120.0
         self._beats_per_bar: int = 4
@@ -354,6 +355,7 @@ class PracticeMetronome:
             self._ensure_output_stream()
 
     def stop_standalone(self) -> None:
+        self._closing.set()
         with self._lock:
             self._standalone_playing = False
         self._close_output_stream()
@@ -369,7 +371,12 @@ class PracticeMetronome:
                 self._standalone_playing = False
             return
 
+        self._closing.clear()
+
         def _callback(outdata, frames, _time_info, _status) -> None:
+            if self._closing.is_set():
+                outdata.fill(0.0)
+                return
             with self._lock:
                 playing = self._standalone_playing
             if not playing:

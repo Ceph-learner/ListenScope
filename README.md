@@ -59,10 +59,11 @@
 
 ---
 
-## 硬件兼容性说明
+## 硬件兼容性说明与已知限制
 
 - 目前实机主要在 **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM** 环境验证通过，默认 6 秒分块与三级内存护栏（5120 / 3072 / 2048 MiB）均按该规格保守标定。
 - 其余显卡型号、核显或不同系统配置尚未全面实测；如在使用中遇到兼容或性能问题，欢迎在 [Issues](https://github.com/Ceph-learner/ListenScope/issues) 反馈硬件信息与诊断包日志。
+- **已知限制**：无边框主窗口暂不支持 Windows 11 Snap Layouts（悬停最大化按钮弹出贴靠布局菜单需要原生 `WM_NCHITTEST` 返回 `HTMAXBUTTON`，已规划至 Phase 3 `#33 P3-WIN`）。
 
 ---
 

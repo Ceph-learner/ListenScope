@@ -70,7 +70,7 @@ def is_help_mode_enabled() -> bool:
 
 
 def is_focus_animations_enabled() -> bool:
-    return _FOCUS_ANIMATIONS_ENABLED
+    return bool(_FOCUS_ANIMATIONS_ENABLED and system_animations_enabled())
 
 
 def get_focus_ring_style() -> str:

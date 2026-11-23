@@ -37,6 +37,8 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/normal
 SolidCompression=no
 WizardStyle=modern
+CloseApplications=yes
+AppMutex=ListenScopeSingleInstanceMutex
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

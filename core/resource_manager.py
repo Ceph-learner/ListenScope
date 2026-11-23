@@ -389,9 +389,12 @@ class ResourceManager:
             )
 
         if snap.system_ram_available_mb < self.limits.pause_ram_before_ai_mb:
+            req_gb = self.limits.pause_ram_before_ai_mb / 1024.0
+            cur_gb = snap.system_ram_available_mb / 1024.0
             return False, (
-                f"系统可用 RAM 不足 ({snap.system_ram_available_mb:.0f} MB < {self.limits.pause_ram_before_ai_mb:.0f} MB)，"
-                "默认拒绝启动新的 AI 分轨。"
+                f"系统可用内存 (RAM) 不足：需要 ≥{req_gb:.1f} GB，当前 {cur_gb:.1f} GB"
+                f"（{snap.system_ram_available_mb:.0f} MB < {self.limits.pause_ram_before_ai_mb:.0f} MB）；"
+                "关闭浏览器等程序可释放内存，或在设置中调整 pause_ram_before_ai_mb。"
             )
 
         if require_gpu:

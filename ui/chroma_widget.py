@@ -620,7 +620,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         tools_bar.addSpacing(4)
         tools_bar.addWidget(self.reset_harmony_btn)
 
-        self.track_status_lbl = MarqueeLabel("曲目会话监测 (SMTC): 待启动按进程捕获（也可随时手动点击「换歌重置」）")
+        self.track_status_lbl = MarqueeLabel("SMTC 曲目监测: 待启动")
+        self.track_status_lbl.setToolTip("曲目会话监测 (SMTC): 待启动按进程捕获（也可随时手动点击「换歌重置」）")
         self.track_status_lbl.setWordWrap(False)
         self.track_status_lbl.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Ignored,
@@ -688,9 +689,11 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         note_font.setPixelSize(10)
         ay.setStyle(tickFont=note_font, tickTextOffset=3)
         ay.geometryChanged.connect(self.refresh_chroma_note_ticks)
+        self.chroma_hist_plot.setLabel("bottom", "时间 (s)", **{"font-size": "9pt"})
         self.chroma_hist_plot.setYRange(0, len(PITCH_CLASSES), padding=0)
         self.chroma_hist_plot.setMouseEnabled(x=True, y=False)
         self.refresh_chroma_note_ticks()
+        self._chroma_frame_dt = 3200.0 / 48000.0
         self._chroma_img = pg.ImageItem()
         try:
             cmap = pg.colormap.get("viridis") if hasattr(pg, "colormap") else None
@@ -962,7 +965,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         for ov in self._acid_overlays:
             ov.setVisible(is_acid)
         lang = getattr(appearance, "language", "zh")
-        if is_acid:
+        if self._acid_variant in ("light", "dark"):
             from core.i18n import tr_telemetry
 
             self.practice_chords_btn.setText(
@@ -979,17 +982,17 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 tr("换歌重置 (和弦/调性/BPM)", "Reset Harmony (Chord/Key/BPM)", "화성 리셋 (코드/조성/BPM)", "和声リセット (コード/調性/BPM)", lang=lang)
             )
 
-        if is_acid:
+        if self._acid_variant in ("light", "dark"):
             variant = self._acid_variant or "dark"
             p = get_acid_palette(variant)
             self._chroma_splitter.set_grip_colors(grip=p.text_muted, accent=p.accent, line=p.border)
             if variant == "dark":
-                cross = QtGui.QColor(241, 242, 236, 65)
-                stencil = QtGui.QColor(241, 242, 236, 15)
+                cross = QtGui.QColor(241, 242, 236, 48)
+                stencil = QtGui.QColor(241, 242, 236, 7)
                 checker = QtGui.QColor(206, 255, 24, 190)
             else:
-                cross = QtGui.QColor(9, 13, 20, 52)
-                stencil = QtGui.QColor(9, 13, 20, 12)
+                cross = QtGui.QColor(9, 13, 20, 38)
+                stencil = QtGui.QColor(9, 13, 20, 6)
                 checker = QtGui.QColor(0, 168, 120, 175)
             for ov in self._acid_overlays:
                 ov.set_colors(cross, stencil, checker)
@@ -1205,6 +1208,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         if chroma_history is not None and chroma_history.size > 0:
             self._chroma_img.setImage(chroma_history, autoLevels=False, levels=(0.0, 0.9))
+            n_frames = int(chroma_history.shape[0])
+            dt = float(getattr(self, "_chroma_frame_dt", 3200.0 / 48000.0))
+            dur_s = max(0.1, n_frames * dt)
+            self._chroma_img.setRect(QtCore.QRectF(-dur_s, 0.0, dur_s, float(len(PITCH_CLASSES))))
 
     def _scale_tempo_display(self, factor: float) -> None:
         self._tempo_multiplier = max(0.25, min(4.0, self._tempo_multiplier * float(factor)))

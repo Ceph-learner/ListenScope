@@ -114,6 +114,7 @@ class HistoryABPlayer:
         self.audio_config = audio_config or ring_buffer.audio_config
         self.metronome = metronome
         self._lock = threading.RLock()
+        self._closing = threading.Event()
 
         self._a_frame: int = 0
         self._b_frame: int = 0
@@ -263,6 +264,7 @@ class HistoryABPlayer:
         self._close_output_stream()
 
     def stop(self) -> None:
+        self._closing.set()
         with self._lock:
             self._is_playing = False
             self._cursor_frame = self._a_frame
@@ -483,7 +485,12 @@ class HistoryABPlayer:
             logger.debug("sounddevice not installed; HistoryABPlayer running in pull-only mode")
             return
 
+        self._closing.clear()
+
         def _callback(outdata, frames, _time_info, _status) -> None:
+            if self._closing.is_set():
+                outdata.fill(0.0)
+                return
             outdata[:] = self.render_block(frames)
 
         stream = None
@@ -544,6 +551,7 @@ class StemMixerEngine:
         self.channels = channels
         self.metronome = metronome
         self._lock = threading.RLock()
+        self._closing = threading.Event()
         self._tracks: dict[str, StemTrackState] = {}
         self._bass_monitor_boost_enabled = True
         self._bass_monitor_boost_db: float = float(BASS_MONITOR_BOOST_DB)
@@ -796,6 +804,7 @@ class StemMixerEngine:
         self._close_output_stream()
 
     def stop(self) -> None:
+        self._closing.set()
         with self._lock:
             self._is_playing = False
             ws, _ = self._active_window_locked()
@@ -1208,7 +1217,12 @@ class StemMixerEngine:
                 self._is_playing = False
             return
 
+        self._closing.clear()
+
         def _callback(outdata, frames, _time_info, _status) -> None:
+            if self._closing.is_set():
+                outdata.fill(0.0)
+                return
             outdata[:] = self.render_block(frames, advance=True)
 
         stream = None

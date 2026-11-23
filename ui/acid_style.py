@@ -1373,7 +1373,7 @@ class AcidTabBar(QtWidgets.QTabBar):
         self.setMouseTracking(True)
         self.setDrawBase(False)
         self._anim = QtCore.QVariantAnimation(self)
-        self._anim.setDuration(220)
+        self._anim.setDuration(220 if _motion_enabled() else 0)
         self._anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
         self._anim.setStartValue(0.0)
         self._anim.setEndValue(1.0)
@@ -1395,7 +1395,9 @@ class AcidTabBar(QtWidgets.QTabBar):
         if not _is_qt_valid(self):
             return
         target = self._target_rect(idx)
-        if not _motion_enabled() or self._rail_rect.isEmpty() or not self.isVisible():
+        anim_on = _motion_enabled()
+        self._anim.setDuration(220 if anim_on else 0)
+        if not anim_on or self._rail_rect.isEmpty() or not self.isVisible():
             self._anim.stop()
             self._rail_rect = target
             self.update()
@@ -2261,8 +2263,11 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
             f_mono.setStyleHint(QtGui.QFont.StyleHint.Monospace)
             f_mono.setBold(True)
             f_mono.setPixelSize(10)
+            f_mono.setLetterSpacing(QtGui.QFont.SpacingType.AbsoluteSpacing, 0.4)
             p.setFont(f_mono)
-            raw = "LISTENSCOPE_V1.0.1 :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
+            from core.version import get_app_version_display
+
+            raw = f"LISTENSCOPE_V{get_app_version_display()} :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
             elided = QtGui.QFontMetrics(f_mono).elidedText(raw, QtCore.Qt.TextElideMode.ElideRight, avail_w)
             p.drawText(QtCore.QRect(text_left, 0, avail_w, h), QtCore.Qt.AlignmentFlag.AlignVCenter, elided)
 

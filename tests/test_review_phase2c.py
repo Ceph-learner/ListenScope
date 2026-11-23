@@ -338,15 +338,38 @@ def test_ub32_fixed_width_controls_elide_with_ellipsis_and_full_tooltip() -> Non
         win.resize(1093, 620)
         win.show()
         app.processEvents()
+        from ui.acid_style import MarqueeComboBox
+
         for widget, text in ((win.ai_2stem_combo, win.ai_2stem_combo.currentText()), (win.ai_gpu_chk, win.ai_gpu_chk.text())):
             tip = widget.toolTip().strip()
             assert tip and len(tip) >= len(text.rstrip("….")), f"{widget.objectName() or type(widget).__name__} missing full-text toolTip"
             fm = widget.fontMetrics()
-            avail = max(1, widget.width() - 28)
-            if fm.horizontalAdvance(text) > avail:
-                assert text.endswith("…") or text.endswith("..."), (
-                    f"{type(widget).__name__} text hard-truncated without ellipsis at width {widget.width()}: {text!r}"
-                )
+            if isinstance(widget, MarqueeComboBox):
+                avail = max(1, widget._text_rect().width())
+                if fm.horizontalAdvance(text) > avail:
+                    elided = fm.elidedText(text, QtCore.Qt.TextElideMode.ElideRight, avail)
+                    assert elided.endswith("…") or elided.endswith("..."), (
+                        f"MarqueeComboBox elided text missing ellipsis at width {widget.width()}: {elided!r}"
+                    )
+            else:
+                avail = max(1, widget.width() - 28)
+                if fm.horizontalAdvance(text) > avail:
+                    assert text.endswith("…") or text.endswith("..."), (
+                        f"{type(widget).__name__} text hard-truncated without ellipsis at width {widget.width()}: {text!r}"
+                    )
+
+        # Guaranteed overflow case on MarqueeComboBox
+        long_text = "Extremely Long Model Name (MDX-Net ONNX Stereo Vocal/Instrumental HQ v3) " * 2
+        win.ai_2stem_combo.addItem(long_text)
+        win.ai_2stem_combo.setCurrentIndex(win.ai_2stem_combo.count() - 1)
+        app.processEvents()
+        assert win.ai_2stem_combo.toolTip() == long_text
+        elided_long = win.ai_2stem_combo.fontMetrics().elidedText(
+            long_text,
+            QtCore.Qt.TextElideMode.ElideRight,
+            max(1, win.ai_2stem_combo._text_rect().width()),
+        )
+        assert elided_long.endswith("…") or elided_long.endswith("...")
     finally:
         win.close()
         mixer.close()

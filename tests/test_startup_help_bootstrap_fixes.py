@@ -213,6 +213,8 @@ def test_nonblocking_startup_pytorch_scan_and_ui_tick_drain(
 
     monkeypatch.delenv("LISTENSCOPE_AI_PYTHON", raising=False)
     monkeypatch.delenv("LISTENSCOPE_MIDI_PYTHON", raising=False)
+    monkeypatch.setattr(main_mod, "ROOT", tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     scan_calls: list[bool] = []
 
