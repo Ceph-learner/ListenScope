@@ -56,3 +56,26 @@
 - **基线测试（`e4c49e8`，Linux/offscreen 验证）**：全量 `264 passed, 6 skipped`
 - **本批修改后测试（`d4776f4`，Linux/offscreen 验证）**：`tests/test_review_phase2b.py` `19 passed`（0 failed，0 xfailed）
 - **判定统计（共 19 条）**：`CONFIRMED` 19 条已全部完成并移除 `xfail`（`A-M6` UI 按钮交 Phase 2C `→2C`，Windows 真机定时周期分布保留在 `docs/review/WINDOWS_RETEST.md`），`FALSE_POSITIVE` 0 条，`NEEDS_TARGET` 0 条
+
+---
+
+## 最终复审结论（复审者 Neon）
+
+- **复审状态**：**全部 19 条通过（批准合并至 `main`）**。
+- **冻结基准完整性**：`git diff 5085bc0..HEAD -- tests/bench/` 为 **0 字节**，基准未被改动。
+- **独立三方对比（`baseline_e4c49e8.json` vs `docs/review/bench_after_p2b.json` vs Neon 独立复跑）**：
+  - Neon 独立复跑与 `docs/review/bench_after_p2b.json` **完全一致（bit-for-bit）**，6 大类别全部无退化（`REGRESSIONS: NONE`）：
+    - `key`：`mirex` `63.33% → 75.56%`，`exact` `50.00% → 65.28%`，`minor` `0.00% → 91.67%`，`major` `100.00% → 100.00%`
+    - `rt_chord`：`prog` `90.00% → 90.83%`，`inversion` `4.44% → 86.67%`，`7th_on_triad` `87.50% → 95.83%`
+    - `rt_tempo`：`66.67ms` `63.64/90.91% → 90.91/90.91%`，`62.5ms` & `78.1ms` `0/0% → 90.91/90.91%`
+    - `offline_tempo`：`63.64/81.82% → 81.82/81.82%`（48k/44.1k 一致）
+    - `rt_pitch`：`pure`/`harm` `100%/0.70c → 100%/0.04c`，`weak_f0` `0.00% → 100.00%`
+    - `offline_bass`：`sine`/`808` `100% → 100%`，`repeated_a1` `3/3 → 4/4`（48k/44.1k 一致）
+- **专项审查项**：
+  - Slash 和弦：下游 `chord_scale_degree`、`transpose_chord_symbol`、`spell_chord_tones`、`chord_midi_notes` 及 UI 调用点均正确解析且有单测覆盖；
+  - `A-H1`：ring generation 变化及 `reset_harmony()` 均重置 `_onset_cursor` 与 `tempo`，单周期追赶上限 `2s`，单周期中位 CPU 耗时 `6.16 ms`（p95 `9.46 ms`，远低于 66.67 ms 周期预算）；
+  - 测试断言未削弱，未违反 `docs/DECISIONS.md`。
+- **独立复测结果（Linux/offscreen 验证，非 Windows 11 实机/GPU/exe）**：
+  - 专项 `tests/test_review_phase2b.py`：**`19 passed`**
+  - 全量 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`：**`283 passed, 6 skipped`**（0 failed，0 xfailed）
+

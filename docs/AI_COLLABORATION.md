@@ -35,3 +35,20 @@
 - **下轮调度调整**：
   - 进入 `2B 算法`（`fix/review-p2b-algo`），由验证者先建 `A-BENCH` 合成基准并锁定修改前基线指标，再验证其余 18 条算法项。
 
+## 2026-11-22｜Issue #32 Phase 2B 算法（冻结基准 → 验证 → 修改 → 复审）
+
+- **任务范围**：Issue #32 算法 19 条（`A-BENCH` + 18 条算法缺陷：`A-H1, A-H2, A-M6, A-H3, A-M2, A-L9, A-H4, A-L6, A-H5, A-L7, A-L3, A-M4, A-L10, A-M5, A-L2, A-L4, A-L5, A-PERF`）。
+- **协同分工**：
+  - **验证者 / 复审者（Neon）**：建立并冻结全黑盒公开入口基准 [algo_benchmark.py](../tests/bench/algo_benchmark.py) 与 [baseline_e4c49e8.json](../tests/bench/baseline_e4c49e8.json)，编写 19 条复现测试（[test_review_phase2b.py](../tests/test_review_phase2b.py)）；复审确认 `tests/bench/` 0 字节改动、独立三方对比零退化、slash 和弦与 `A-H1` 游标/追帧上限/CPU 耗时全部达标。
+  - **修改者（Hydrogen）**：按 5 组顺序完成全部 19 条修复并记录前后基准对比（[bench_after_p2b.json](review/bench_after_p2b.json)）。
+- **建议采纳与误报统计**：
+  - `CONFIRMED`：19 条（全部采纳并修复；`A-M6` UI `×2/÷2` 按钮并入 2C，`A-H1` Windows 真机定时周期分布保留在 [WINDOWS_RETEST.md](review/WINDOWS_RETEST.md)）；
+  - `FALSE_POSITIVE`：0 条。
+- **测试结果（Linux/offscreen 验证）**：
+  - `tests/test_review_phase2b.py`：`19 passed`；
+  - 全量 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`：`283 passed, 6 skipped`（0 failed）；
+  - 冻结 `A-BENCH`：`REGRESSIONS: NONE`。
+- **下轮调度调整**：
+  - 进入 `2C UI`（`fix/review-p2c-ui`），并入 `A-M6` 的 `×2/÷2` 按钮、`U-B07` 基于 2A `E6` 后台采样实现，并补充 offscreen 合成数据 `QWidget.grab()` 截图留证。
+
+
