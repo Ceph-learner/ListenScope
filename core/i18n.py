@@ -309,6 +309,11 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "트랙 모니터: 신호 대기 중 / Windows SMTC",
         "ja": "曲目追跡: 信号待機中 / Windows SMTC",
     },
+    "SMTC 曲目监测: 待启动": {
+        "en": "SMTC Monitor: Standby",
+        "ko": "SMTC 모니터: 대기 중",
+        "ja": "SMTC監視: 待機中",
+    },
     "换歌重置和弦/调性": {"en": "Reset on Track Change", "ko": "곡 변경 시 리셋", "ja": "曲変更時にリセット"},
     "手动重置": {"en": "Manual Reset", "ko": "수동 리셋", "ja": "手動リセット"},
     "移调 / 变调夹:": {"en": "Transpose / Capo:", "ko": "조옮김 / 카포:", "ja": "移調 / カポ:"},

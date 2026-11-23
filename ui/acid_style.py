@@ -2263,6 +2263,7 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
             f_mono.setStyleHint(QtGui.QFont.StyleHint.Monospace)
             f_mono.setBold(True)
             f_mono.setPixelSize(10)
+            f_mono.setLetterSpacing(QtGui.QFont.SpacingType.AbsoluteSpacing, 0.4)
             p.setFont(f_mono)
             from core.version import get_app_version_display
 

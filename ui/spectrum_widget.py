@@ -26,7 +26,7 @@ from ui.acid_style import (
 )
 
 ANALYSIS_VIEWS = {
-    "monitor": (((0, 0, 1, 2), (2, 0, 1, 1), (2, 1, 1, 1), (1, 0, 1, 2)), (4, 3, 3), (1, 1, 0)),
+    "monitor": (((0, 0, 1, 1), (0, 1, 1, 1), (1, 0, 1, 1), (1, 1, 1, 1)), (1, 1, 0), (1, 1, 0)),
     "frequency": (((0, 1, 1, 1), (0, 0, 2, 1), (1, 1, 1, 1), (2, 0, 1, 2)), (2, 3, 2), (3, 2, 0)),
     "history": (((1, 0, 1, 1), (1, 1, 1, 1), (1, 2, 1, 1), (0, 0, 1, 3)), (5, 3, 0), (1, 1, 1)),
 }
@@ -224,6 +224,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         root.addWidget(self._plot_stack, 1)
 
         # Row 1: Waveform
+        self._wave_auto_gain: bool = True
+        self._wave_gain_scale: float = 1.0
         self.wave_plot = pg.PlotWidget()
         self.wave_plot.setLabel("bottom", "时间 (秒)", **{"font-size": "9pt"})
         self.wave_plot.setBackground("#F8FAFC")
@@ -416,12 +418,14 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         layout.addStretch(1)
         return card
 
-    def set_compact_mode(self, compact: bool) -> None:
+    def set_compact_mode(self, compact: bool, *, compact_cards: Optional[bool] = None) -> None:
         compact = bool(compact)
-        if self._compact_mode == compact:
+        cards_compact = compact if compact_cards is None else bool(compact_cards)
+        if self._compact_mode == compact and getattr(self, "_cards_compact", None) == cards_compact:
             return
         self._compact_mode = compact
-        if compact:
+        self._cards_compact = cards_compact
+        if cards_compact:
             self._root_layout.setContentsMargins(6, 0, 6, 0)
             self._root_layout.setSpacing(2)
             self._plot_grid.setSpacing(4)
@@ -432,15 +436,15 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._plot_grid.setSpacing(8)
             self._header.setMaximumHeight(16777215)
         for eb in self._eyebrow_labels:
-            eb.setVisible(not compact)
-        self.pitch_detail.setVisible(not compact)
-        self.level_meter.setVisible(not compact)
+            eb.setVisible(not cards_compact)
+        self.pitch_detail.setVisible(not cards_compact)
+        self.level_meter.setVisible(not cards_compact)
         for card in self._metric_cards:
-            card.setMaximumHeight(36 if compact else 16777215)
+            card.setMaximumHeight(36 if cards_compact else 16777215)
             lay = card.layout()
             if lay is not None:
-                lay.setContentsMargins(8 if compact else 11, 1 if compact else 7, 8 if compact else 11, 1 if compact else 7)
-                lay.setSpacing(0 if compact else 2)
+                lay.setContentsMargins(8 if cards_compact else 11, 1 if cards_compact else 7, 8 if cards_compact else 11, 1 if cards_compact else 7)
+                lay.setSpacing(0 if cards_compact else 2)
         self._arrange_plots()
         self._refresh_axis_ticks()
 
@@ -466,7 +470,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.spec_plot.getAxis("left").setTicks([kept_spec])
         self.spec_plot.setLabel("left", "" if spec_h < 90.0 else "频率 (Hz)", **{"font-size": "9pt"})
 
-        # 2. FFT & Log-band Y-axis (-105..5 dBFS)
+        # 2. FFT & Log-band Y-axis (-105..5 dBFS) and redundant bottom titles on tight height
         db_candidates = (-100.0, -80.0, -60.0, -40.0, -20.0, 0.0)
         for plot in (self.fft_plot, self.log_plot):
             ph = float(max(40, plot.height() - 28))
@@ -478,15 +482,23 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                     kept_db.append((db, f"{int(db)}"))
                     prev_db_px = px_y
             plot.getAxis("left").setTicks([kept_db])
+        for plot, orig_bottom in (
+            (self.wave_plot, "时间 (秒)"),
+            (self.fft_plot, "频率 (Hz)"),
+            (self.log_plot, "频率 (Hz)"),
+            (self.spec_plot, "时间 (s)"),
+        ):
+            plot.setLabel("bottom", "" if plot.height() < 150 else orig_bottom, **{"font-size": "9pt"})
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         win = self.window()
         if win is not None and win is not self:
-            compact = win.height() < 760 or (win.isVisible() and self.height() < 420)
+            compact = win.height() < 760 or (win.isVisible() and self.height() < 360)
         else:
-            compact = self.height() < 460
-        self.set_compact_mode(compact)
+            compact = self.height() < 360
+        cards_compact = compact or (self.height() < 460)
+        self.set_compact_mode(compact, compact_cards=cards_compact)
         self._header.setVisible(self.height() >= 255)
         self._refresh_axis_ticks()
 
@@ -561,6 +573,26 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._fft_curve.setData(self._fft_x, cur, skipFiniteCheck=True)
             self._fft_peak_curve.setData(self._fft_x, pk, skipFiniteCheck=True)
 
+    def set_wave_auto_gain(self, enabled: bool) -> None:
+        self._wave_auto_gain = bool(enabled)
+        if not self._wave_auto_gain:
+            self._wave_gain_scale = 1.05
+            self.wave_plot.setYRange(-1.05, 1.05, padding=0)
+
+    def _apply_waveform_auto_gain(self, w_min: np.ndarray, w_max: np.ndarray) -> None:
+        if not self._wave_auto_gain:
+            return
+        if w_min.size == 0 or w_max.size == 0:
+            return
+        peak = max(float(np.max(np.abs(w_min))), float(np.max(np.abs(w_max))))
+        target = max(0.1, min(1.05, 1.2 * peak))
+        alpha = 0.5 if target > self._wave_gain_scale else 0.2
+        self._wave_gain_scale = (1.0 - alpha) * self._wave_gain_scale + alpha * target
+        self.wave_plot.setYRange(-self._wave_gain_scale, self._wave_gain_scale, padding=0)
+
+    def update_snapshot(self, snap: AnalysisSnapshot, spectrogram: np.ndarray | None = None) -> None:
+        self.update_analysis(snap, spectrogram)
+
     def update_analysis(self, snap: AnalysisSnapshot, spectrogram: np.ndarray | None = None) -> None:
         if snap.peak_dbfs > -0.3 and not self._clip_latched:
             self._clip_latched = True
@@ -578,12 +610,27 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._last_level_val = lvl
             self.level_meter.setValue(lvl)
         if snap.pitch.frequency_hz is not None:
-            self._set_text_cached("pitch", self.pitch_label, snap.pitch.note_name)
-            self._set_text_cached(
-                "pitch_det",
-                self.pitch_detail,
-                f"{snap.pitch.frequency_hz:.1f} Hz  ·  {snap.pitch.cents_offset:+.1f} cents",
-            )
+            if getattr(snap.pitch, "source_band", "full") == "bass":
+                self._set_text_cached(
+                    "pitch",
+                    self.pitch_label,
+                    f"低音 {snap.pitch.note_name} {snap.pitch.cents_offset:+.0f}c",
+                )
+                self._set_text_cached(
+                    "pitch_det",
+                    self.pitch_detail,
+                    f"多声部 · 显示低音 ({snap.pitch.frequency_hz:.1f} Hz)",
+                )
+            else:
+                self._set_text_cached("pitch", self.pitch_label, snap.pitch.note_name or "—")
+                self._set_text_cached(
+                    "pitch_det",
+                    self.pitch_detail,
+                    f"{snap.pitch.frequency_hz:.1f} Hz  ·  {snap.pitch.cents_offset:+.1f} cents",
+                )
+        elif getattr(snap.pitch, "is_polyphonic", False) or snap.pitch.note_name is None:
+            self._set_text_cached("pitch", self.pitch_label, "多声部")
+            self._set_text_cached("pitch_det", self.pitch_detail, "多声部音频，无单一主音")
         else:
             self._set_text_cached("pitch", self.pitch_label, "—")
             self._set_text_cached("pitch_det", self.pitch_detail, "等待有效音高")
@@ -593,12 +640,11 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             n_w = len(snap.waveform_min)
             if self._cached_wave_x.shape[0] != n_w:
                 self._cached_wave_x = np.linspace(-self._waveform_window_seconds, 0.0, n_w, dtype=np.float32)
-            self._wave_max_curve.setData(
-                self._cached_wave_x, np.asarray(snap.waveform_max, dtype=np.float32), skipFiniteCheck=True
-            )
-            self._wave_min_curve.setData(
-                self._cached_wave_x, np.asarray(snap.waveform_min, dtype=np.float32), skipFiniteCheck=True
-            )
+            w_max = np.asarray(snap.waveform_max, dtype=np.float32)
+            w_min = np.asarray(snap.waveform_min, dtype=np.float32)
+            self._apply_waveform_auto_gain(w_min, w_max)
+            self._wave_max_curve.setData(self._cached_wave_x, w_max, skipFiniteCheck=True)
+            self._wave_min_curve.setData(self._cached_wave_x, w_min, skipFiniteCheck=True)
 
         if snap.fft_freqs_hz and snap.fft_db:
             if self._cached_fft_freqs is not snap.fft_freqs_hz and self._cached_fft_freqs != snap.fft_freqs_hz:

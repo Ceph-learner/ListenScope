@@ -2018,6 +2018,9 @@ class ListenScopeController:
         while True:
             try:
                 found_py = self._ui_ai_discover_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if (
                     found_py
                     and not getattr(self, "_shutdown_done", False)
@@ -2029,11 +2032,14 @@ class ListenScopeController:
                     if hasattr(self.window, "_ai_python_executable"):
                         self.window._ai_python_executable = found_py
                     self._schedule_external_ai_probe(found_py)
-            except queue.Empty:
-                break
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_ai_discover_q item")
         while True:
             try:
                 seq, probe_data = self._ui_hw_probe_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if seq == self._probe_seq:
                     self.hardware_report = apply_external_ai_probe_to_report(self.hardware_report, probe_data)
                     self.window.update_hardware_report(self.hardware_report, auto_sync_gpu_chk=True)
@@ -2041,18 +2047,24 @@ class ListenScopeController:
                         self.window.show_banner_message(
                             "✅ 独立 AI 环境已通过 GPU / CUDA / ONNX 检测，GPU AI 推理已解锁。"
                         )
-            except queue.Empty:
-                break
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_hw_probe_q item")
         while True:
             try:
                 progress = self._ui_ai_progress_q.get_nowait()
-                if not self._cleared_ai_task_id or progress.task_id != self._cleared_ai_task_id:
-                    self.window.update_ai_progress(progress)
             except queue.Empty:
                 break
+            try:
+                if not self._cleared_ai_task_id or progress.task_id != self._cleared_ai_task_id:
+                    self.window.update_ai_progress(progress)
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_ai_progress_q item")
         while True:
             try:
                 ai_res = self._ui_ai_result_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if self._cleared_ai_task_id and ai_res.task_id == self._cleared_ai_task_id:
                     continue
                 if ai_res.state == AIJobState.COMPLETED:
@@ -2061,33 +2073,54 @@ class ListenScopeController:
                     self._latest_deep_report = None
                     self._latest_midi_result = None
                 self.window.handle_ai_result(ai_res)
-            except queue.Empty:
-                break
-        self._drain_ui_callbacks()
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_ai_result_q item")
+        try:
+            self._drain_ui_callbacks()
+        except Exception:
+            logging.getLogger(__name__).exception("Error in _drain_ui_callbacks")
         while True:
             try:
-                self.window.show_banner_message(self._ui_banner_q.get_nowait())
+                banner_msg = self._ui_banner_q.get_nowait()
             except queue.Empty:
                 break
+            try:
+                self.window.show_banner_message(banner_msg)
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_banner_q item")
         while True:
             try:
                 dec = self._ui_track_decision_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 self._apply_track_decision(dec)
-            except queue.Empty:
-                break
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_track_decision_q item")
         while True:
             try:
-                self.window.live_widget.set_benchmark_text(self._ui_live_bench_q.get_nowait())
+                bench_txt = self._ui_live_bench_q.get_nowait()
             except queue.Empty:
                 break
+            try:
+                self.window.live_widget.set_benchmark_text(bench_txt)
+            except Exception:
+                logging.getLogger(__name__).exception("Error handling _ui_live_bench_q item")
         while True:
             try:
-                self.window.live_widget.set_pending_start(self._ui_live_pending_q.get_nowait())
+                pending_val = self._ui_live_pending_q.get_nowait()
             except queue.Empty:
                 break
+            try:
+                self.window.live_widget.set_pending_start(pending_val)
+            except Exception:
+                logger.exception("Error handling _ui_live_pending_q item")
         while True:
             try:
                 gen, midi_res, midi_msg = self._ui_midi_result_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if gen != self._stem_generation:
                     continue
                 if midi_res is not None:
@@ -2097,11 +2130,14 @@ class ListenScopeController:
                     self.window.mixer_widget.set_midi_error(midi_msg)
                 if midi_msg:
                     self.window.show_banner_message(midi_msg)
-            except queue.Empty:
-                break
+            except Exception:
+                logger.exception("Error handling _ui_midi_result_q item")
         while True:
             try:
                 gen, deep_res, deep_msg = self._ui_deep_analysis_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if gen != self._stem_generation:
                     continue
                 if deep_res is not None:
@@ -2110,8 +2146,8 @@ class ListenScopeController:
                     self.window.display_deep_analysis(deep_res)
                 if deep_msg:
                     self.window.show_banner_message(deep_msg)
-            except queue.Empty:
-                break
+            except Exception:
+                logger.exception("Error handling _ui_deep_analysis_q item")
 
         if self.drum_preview.close_if_finished():
             self.window.mixer_widget.set_drum_preview_playing(False)

@@ -50,6 +50,7 @@ from core.models import (
     LiveSeparationMetrics,
     MidiTranscriptionResult,
     ResourceSnapshot,
+    ResourceStatus,
     StemDeepAnalysisReport,
     SystemHardwareReport,
 )
@@ -712,7 +713,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._src_pill.setObjectName("telemetryPill")
         self.source_combo = MarqueeComboBox()
         self.source_combo.setMinimumWidth(140)
-        self.source_combo.setMaximumWidth(400)
+        self.source_combo.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.source_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
@@ -740,7 +744,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.freeze_screen_btn.toggled.connect(self.set_freeze_screen)
 
         row_io.addWidget(self._src_pill)
-        row_io.addWidget(self.source_combo)
+        row_io.addWidget(self.source_combo, 1)
         row_io.addWidget(
             HelpBadge(
                 "按进程捕获说明",
@@ -1374,9 +1378,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._shortcut_pill.setVisible(not compact_h and not compact_w)
         self._skin_badge.setVisible(not compact_h and not compact_w)
 
-        # Collapse secondary A/B controls on short screens unless user explicitly expanded them
+        # Default A/B panel to compact single-row mode; user can expand via '⋯ 更多'
         if self._ab_more_user_override is None:
-            show_more = not compact_h
+            show_more = False
             self._ab_more_panel.setVisible(show_more)
             self.ab_more_btn.blockSignals(True)
             self.ab_more_btn.setChecked(show_more)
@@ -1414,7 +1418,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self._bottom_l.setSpacing(3)
 
         if hasattr(self, "spectrum_widget"):
-            self.spectrum_widget.set_compact_mode(compact_h or (self.isVisible() and self.spectrum_widget.height() < 420))
+            sw_h = self.spectrum_widget.height()
+            compact_tabs = compact_h or (self.isVisible() and sw_h < 360)
+            cards_compact = compact_tabs or (self.isVisible() and sw_h < 460)
+            self.spectrum_widget.set_compact_mode(compact_tabs, compact_cards=cards_compact)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if (
@@ -2195,17 +2202,53 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                     pass
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        want_tray = (
+        tray_ok = (
             not self._force_quit
-            and bool(getattr(self.appearance, "close_to_tray", True))
             and self._tray_icon is not None
             and self._tray_icon.isVisible()
         )
-        if want_tray:
+        if tray_ok:
             try:
-                want_tray = bool(QtWidgets.QSystemTrayIcon.isSystemTrayAvailable())
+                tray_ok = bool(QtWidgets.QSystemTrayIcon.isSystemTrayAvailable())
             except Exception:
+                tray_ok = False
+
+        behavior = str(getattr(self, "close_behavior", "ask") or "ask").strip().lower()
+        want_tray = False
+        if tray_ok:
+            if behavior == "tray" or (behavior == "ask" and not bool(getattr(self.appearance, "close_to_tray", True)) is False and QtWidgets.QApplication.platformName() == "offscreen"):
+                want_tray = bool(getattr(self.appearance, "close_to_tray", True))
+            elif behavior == "ask" and QtWidgets.QApplication.platformName() != "offscreen" and self.isVisible():
+                box = QtWidgets.QMessageBox(self)
+                box.setWindowTitle(translate_text("关闭 ListenScope", get_current_language()))
+                box.setText(translate_text("点击关闭按钮时希望执行什么操作？", get_current_language()))
+                btn_tray = box.addButton(
+                    translate_text("最小化到托盘", get_current_language()),
+                    QtWidgets.QMessageBox.ButtonRole.AcceptRole,
+                )
+                btn_quit = box.addButton(
+                    translate_text("退出程序", get_current_language()),
+                    QtWidgets.QMessageBox.ButtonRole.DestructiveRole,
+                )
+                box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+                remember_chk = QtWidgets.QCheckBox(translate_text("记住我的选择", get_current_language()))
+                box.setCheckBox(remember_chk)
+                box.exec()
+                clicked = box.clickedButton()
+                if clicked is btn_tray:
+                    want_tray = True
+                    if remember_chk.isChecked():
+                        self.close_behavior = "tray"
+                elif clicked is btn_quit:
+                    want_tray = False
+                    if remember_chk.isChecked():
+                        self.close_behavior = "quit"
+                else:
+                    event.ignore()
+                    return
+            elif behavior == "quit":
                 want_tray = False
+
         if want_tray:
             app_q = QtWidgets.QApplication.instance()
             if isinstance(app_q, QtWidgets.QApplication):
@@ -2610,6 +2653,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         logs: list[str],
     ) -> None:
         self.resource_bar.update_snapshot(snap)
+        if snap.ai_worker_ram_mb < 1.0 and snap.status == ResourceStatus.WARNING:
+            self.resource_bar.status_badge.setText("内存偏低")
+            self.resource_bar.status_badge.setToolTip(
+                f"当前可用内存 {snap.system_ram_available_mb:.0f} MB：实时分析与 A/B 练习正常，"
+                "启动新 AI 分轨前建议关闭占用内存的程序，或在设置中调整 pause_ram_before_ai_mb。"
+            )
         self.resource_panel.update_snapshot(snap)
         self.resource_panel.update_performance_records(perf_records)
         self.resource_panel.update_logs(logs)
@@ -2646,9 +2695,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._last_ai_badge_txt = txt
         if res.state == AIJobState.COMPLETED:
             tone = "ok"
-        elif res.state in (AIJobState.FAILED, AIJobState.REJECTED_RESOURCE):
+        elif res.state in (AIJobState.FAILED, AIJobState.OOM_ERROR):
             tone = "error"
-        elif res.state in (AIJobState.CANCELED, AIJobState.EMERGENCY_STOPPED):
+        elif res.state in (AIJobState.CANCELLED, AIJobState.EMERGENCY_STOPPED):
             tone = "warn"
         else:
             tone = "info"

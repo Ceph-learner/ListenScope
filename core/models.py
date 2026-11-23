@@ -205,9 +205,11 @@ class TempoEstimate:
 @dataclass
 class PitchEstimate:
     frequency_hz: Optional[float]
-    note_name: str
+    note_name: Optional[str]
     cents_offset: float
     confidence: float
+    is_polyphonic: bool = False
+    source_band: str = "full"
 
 
 @dataclass

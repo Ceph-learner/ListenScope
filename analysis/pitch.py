@@ -34,6 +34,56 @@ class PitchEstimator:
         self._freqs = np.fft.rfftfreq(fft_size, d=1.0 / sample_rate)
         self._bin_hz = sample_rate / float(fft_size)
         self._sfm_mask = (self._freqs >= 40.0) & (self._freqs <= 3000.0)
+        self._bass_sos = None
+        try:
+            from scipy.signal import butter
+
+            self._bass_sos = butter(6, 175.0, btype="low", fs=float(self.sample_rate), output="sos")
+        except Exception:
+            self._bass_sos = None
+
+    def _estimate_lowpass_bass(self, seg: np.ndarray) -> Optional[PitchEstimate]:
+        """Lowpass ~175-330 Hz + 8x decimation YIN for polyphonic mixes (<= 1 ms CPU)."""
+        if seg.size < 512 or self.sample_rate < 16000:
+            return None
+        if self._bass_sos is not None:
+            from scipy.signal import sosfilt
+
+            lp = sosfilt(self._bass_sos, seg).astype(np.float32, copy=False)
+        else:
+            # Fast O(N) 2-pass boxcar lowpass fallback
+            m = max(8, int(round(0.44 * self.sample_rate / 180.0)))
+            k = np.ones(m, dtype=np.float32) / float(m)
+            lp = np.convolve(np.convolve(seg, k, mode="same"), k, mode="same").astype(np.float32, copy=False)
+        skip = min(256, lp.size // 8)
+        dec = lp[skip::8]
+        if dec.size < 128:
+            return None
+        seg_rms = float(np.sqrt(np.mean(np.square(seg)))) + 1e-12
+        bass_rms = float(np.sqrt(np.mean(np.square(dec))))
+        if bass_rms < 0.20 * seg_rms:
+            return None
+        sub_sr = float(self.sample_rate) / 8.0
+        sub_mag = np.abs(np.fft.rfft(dec * np.hanning(dec.size).astype(np.float32))).astype(np.float32)
+        freq, conf = yin_frame_f0(
+            dec,
+            mag=sub_mag,
+            sample_rate=int(round(sub_sr)),
+            bin_hz=sub_sr / float(dec.size),
+            min_hz=35.0,
+            max_hz=200.0,
+        )
+        if freq <= 0.0:
+            return None
+        note_name, cents = freq_to_note_and_cents(freq)
+        return PitchEstimate(
+            frequency_hz=round(freq, 2),
+            note_name=note_name,
+            cents_offset=round(cents, 1),
+            confidence=round(min(1.0, max(0.0, float(conf))), 3),
+            is_polyphonic=True,
+            source_band="bass",
+        )
 
     def estimate_from_pcm(self, mono: np.ndarray, *, is_silent: bool = False) -> PitchEstimate:
         if is_silent or mono is None or mono.size == 0 or not np.all(np.isfinite(mono)):
@@ -62,8 +112,18 @@ class PitchEstimator:
             min_hz=38.0,
             max_hz=1600.0,
         )
-        if freq <= 0.0:
-            return PitchEstimate(frequency_hz=None, note_name="Unknown", cents_offset=0.0, confidence=round(float(conf), 3))
+        if freq <= 0.0 or (conf < 0.78 and freq < 220.0):
+            bass_est = self._estimate_lowpass_bass(seg)
+            if bass_est is not None:
+                return bass_est
+            return PitchEstimate(
+                frequency_hz=None,
+                note_name=None,
+                cents_offset=0.0,
+                confidence=round(float(conf), 3),
+                is_polyphonic=True,
+                source_band="full",
+            )
 
         note_name, cents = freq_to_note_and_cents(freq)
         return PitchEstimate(

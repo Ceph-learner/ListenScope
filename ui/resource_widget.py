@@ -79,8 +79,18 @@ class ResourceMonitorBar(QtWidgets.QFrame):
             else "VRAM N/A"
         )
         self._set_text_if_changed("vram", self.vram_label, vram_txt)
-        self._set_text_if_changed("status", self.status_badge, snap.status.value)
-        set_widget_tone(self.status_badge, _status_to_tone(snap.status))
+        ai_idle = snap.ai_worker_ram_mb < 1.0
+        if ai_idle and snap.status == ResourceStatus.WARNING:
+            self._set_text_if_changed("status", self.status_badge, "内存偏低")
+            set_widget_tone(self.status_badge, "warn")
+            self.status_badge.setToolTip(
+                f"当前可用内存 {snap.system_ram_available_mb:.0f} MB：实时分析与 A/B 练习正常，"
+                "启动新 AI 分轨前建议关闭占用内存的程序，或在设置中调整 pause_ram_before_ai_mb。"
+            )
+        else:
+            self._set_text_if_changed("status", self.status_badge, snap.status.value)
+            set_widget_tone(self.status_badge, _status_to_tone(snap.status))
+            self.status_badge.setToolTip(f"资源状态: {snap.status.value}")
 
 
 class ResourceStatusPanel(QtWidgets.QWidget):

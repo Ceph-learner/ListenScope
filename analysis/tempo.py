@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from collections import deque
+import logging
 import threading
+import time
 from typing import Optional
 
 import numpy as np
 
 from core.config import AnalysisConfig
 from core.models import TempoEstimate
+
+logger = logging.getLogger(__name__)
 
 
 class TempoEstimator:
@@ -38,6 +42,7 @@ class TempoEstimator:
         self._previous_silence = False
         self._frames_since_est = 0
         self._est_interval_frames = max(1, int(round(0.5 * self._rate_hz)))
+        self._last_debug_log_ts: float = 0.0
         self._cached_estimate = TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0, alt_bpm=None)
 
     def reset(self) -> None:
@@ -81,7 +86,7 @@ class TempoEstimator:
                 self._frames_since_est = 0
             return est
         peakiness = float(np.percentile(env, 95)) / (float(np.median(env)) + 1e-9)
-        if peakiness < 4.0:
+        if peakiness < 2.5:
             est = TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0, alt_bpm=None)
             with self._lock:
                 self._cached_estimate = est
@@ -120,12 +125,14 @@ class TempoEstimator:
             np.exp(-0.5 * (np.log2(bpms / 100.0) / 0.45) ** 2),
             0.8 * np.exp(-0.5 * (np.log2(bpms / 170.0) / 0.15) ** 2),
         ).astype(np.float32)
-        weighted = acf[min_lag : max_lag + 1] * prior
+        acf_slice = acf[min_lag : max_lag + 1]
+        weighted = acf_slice * prior
         best_rel = int(np.argmax(weighted))
         best_lag = min_lag + best_rel
         raw_acf = float(acf[best_lag])
+        acf_prominence = raw_acf - float(np.median(acf_slice))
 
-        if raw_acf < 0.12:
+        if raw_acf < 0.12 or acf_prominence < 0.08:
             est = TempoEstimate(bpm=None, stability="Unknown", confidence_score=raw_acf, alt_bpm=None)
             with self._lock:
                 self._cached_estimate = est
@@ -133,13 +140,15 @@ class TempoEstimator:
             return est
 
         # Disambiguate half-time lock (e.g. 140 BPM rock -> 70 BPM, 174 BPM -> 87 BPM) when half-lag ACF is strong
-        if (60.0 * self._rate_hz / max(1, best_lag)) < 95.0:
+        cand_bpm = 60.0 * self._rate_hz / max(1, best_lag)
+        if cand_bpm < 95.0:
             half_lag = int(round(best_lag * 0.5))
             if min_lag <= half_lag <= max_lag:
                 lo_h = max(min_lag, half_lag - 1)
                 hi_h = min(max_lag, half_lag + 1)
                 sub_rel = lo_h + int(np.argmax(acf[lo_h : hi_h + 1]))
-                if float(acf[sub_rel]) >= 0.35 * raw_acf:
+                sub_acf = float(acf[sub_rel])
+                if (cand_bpm < 68.0 and sub_acf >= 0.06) or (sub_acf >= max(0.12, 0.35 * raw_acf)):
                     best_lag = sub_rel
                     best_rel = best_lag - min_lag
                     raw_acf = float(acf[best_lag])
@@ -158,6 +167,18 @@ class TempoEstimator:
             alt_bpm = round(bpm * 2.0, 1)
         elif bpm * 0.5 >= self.min_bpm:
             alt_bpm = round(bpm * 0.5, 1)
+
+        now = time.monotonic()
+        if now - self._last_debug_log_ts >= 5.0:
+            self._last_debug_log_ts = now
+            logger.debug(
+                "TempoEstimator: peakiness=%.2f acf_peak=%.3f prominence=%.3f bpm=%.1f alt_bpm=%s",
+                peakiness,
+                raw_acf,
+                acf_prominence,
+                bpm,
+                alt_bpm,
+            )
 
         stability = "High" if raw_acf >= 0.35 else ("Medium" if raw_acf >= 0.2 else "Low")
         est = TempoEstimate(bpm=bpm, stability=stability, confidence_score=raw_acf, alt_bpm=alt_bpm)

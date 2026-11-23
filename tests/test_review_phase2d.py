@@ -256,7 +256,6 @@ def test_w2_process_loopback_stop_then_start_receives_audio_frames() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="W10")
 def test_w10_handle_ai_result_handles_every_ai_job_state_and_notifies_mixer() -> None:
     """W10: handle_ai_result must accept every AIJobState without AttributeError and forward to mixer_widget."""
     from audio.playback import StemMixerEngine
@@ -286,7 +285,6 @@ def test_w10_handle_ai_result_handles_every_ai_job_state_and_notifies_mixer() ->
             res = AIJobResult(
                 task_id=f"job_{st.name.lower()}",
                 state=st,
-                message=f"state={st.name}",
                 error="simulated error" if st in (AIJobState.FAILED, AIJobState.OOM_ERROR) else None,
             )
             win.handle_ai_result(res)
@@ -297,7 +295,6 @@ def test_w10_handle_ai_result_handles_every_ai_job_state_and_notifies_mixer() ->
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="W10")
 def test_w10_ast_guard_all_enum_references_exist() -> None:
     """W10 AST guard: every AIJobState.<X> and OOMRecoveryAction.<X> reference in production code must exist."""
     import ast
@@ -326,7 +323,6 @@ def test_w10_ast_guard_all_enum_references_exist() -> None:
     assert bad == [], f"Invalid Enum member references found: {bad}"
 
 
-@pytest.mark.xfail(strict=True, reason="W10")
 def test_w10_ui_tick_isolates_queue_handler_exceptions(tmp_path: Path) -> None:
     """W10: each queue handler in _on_ui_tick must be isolated with try/except + logger.exception."""
     from core.models import AIJobResult, AIJobState
@@ -350,7 +346,6 @@ def test_w10_ui_tick_isolates_queue_handler_exceptions(tmp_path: Path) -> None:
         ctrl.shutdown()
 
 
-@pytest.mark.xfail(strict=True, reason="W11")
 def test_w11_realistic_mix_bpm_acc1_at_least_80pct_and_pads_return_none() -> None:
     """W11: realistic_mix BPM Acc1 must be >= 80%, while steady sine & pure chord pad must still return None."""
     from tests.bench.realistic_mix import run_realistic_mix_benchmark
@@ -364,7 +359,6 @@ def test_w11_realistic_mix_bpm_acc1_at_least_80pct_and_pads_return_none() -> Non
     )
 
 
-@pytest.mark.xfail(strict=True, reason="W12")
 def test_w12_polyphonic_mix_falls_back_to_lowpass_bass_pitch_or_poly_notice() -> None:
     """W12: Polyphonic mix with E2 bass must show bass E2 (+-10c); pure chord pad shows poly notice; 440Hz sine shows A4."""
     from analysis.worker import AnalysisWorker
@@ -422,7 +416,6 @@ def test_w12_polyphonic_mix_falls_back_to_lowpass_bass_pitch_or_poly_notice() ->
     assert snap_a4 is not None and snap_a4.pitch.note_name == "A4"
 
 
-@pytest.mark.xfail(strict=True, reason="W13")
 def test_w13_viewbox_data_height_waveform_autogain_and_chroma_seconds_axis() -> None:
     """W13: ViewBox data area height >= 80px at 1420x900 & 1366x768; waveform auto-gain for -38 dBFS; chroma X-axis in seconds."""
     from audio.playback import StemMixerEngine
@@ -463,7 +456,6 @@ def test_w13_viewbox_data_height_waveform_autogain_and_chroma_seconds_axis() -> 
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="W2-close")
 def test_w2_close_button_prompts_and_respects_remembered_choice_and_inno_setup(tmp_path: Path) -> None:
     """W2 (updated): close button behavior persisted in schema 2, tray bubble i18n, and Inno Setup CloseApplications/AppMutex."""
     from core.config import AIConfig, ResourceLimits
@@ -487,7 +479,6 @@ def test_w2_close_button_prompts_and_respects_remembered_choice_and_inno_setup(t
     assert "AppMutex=" in iss, "scripts/installer.iss missing AppMutex="
 
 
-@pytest.mark.xfail(strict=True, reason="W14")
 def test_w14_idle_low_ram_shows_amber_not_red_critical_and_records_report() -> None:
     """W14: AI idle with ~2.6 GB free RAM shows amber '内存偏低' (not red Critical); docs/WINDOWS_TEST_REPORT.md records measurements."""
     report_path = REPO_ROOT / "docs" / "WINDOWS_TEST_REPORT.md"
@@ -503,7 +494,6 @@ def test_w14_idle_low_ram_shows_amber_not_red_critical_and_records_report() -> N
     )
 
 
-@pytest.mark.xfail(strict=True, reason="W15")
 def test_w15_ui_polish_source_combo_stretch_and_smtc_concise_and_footer_spacing() -> None:
     """W15: source_combo stretches in top bar, SMTC status label is concise with tooltip, and mixer badge has tooltip."""
     from audio.playback import StemMixerEngine

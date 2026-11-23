@@ -527,6 +527,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         analysis_actions.addWidget(self.export_sheet_btn)
 
         self.deep_rhythm_badge_lbl = QtWidgets.QLabel("BPM: -- | 鼓点: 分轨分析后显示节奏与鼓点统计")
+        self.deep_rhythm_badge_lbl.setToolTip("BPM: -- | 鼓点: 分轨分析后显示节奏与鼓点统计")
         self.deep_rhythm_badge_lbl.setObjectName("bannerNotice")
         self.deep_rhythm_badge_lbl.setWordWrap(False)
         set_widget_tone(self.deep_rhythm_badge_lbl, "info")
