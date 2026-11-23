@@ -199,6 +199,7 @@ class TempoEstimate:
     bpm: Optional[float]
     stability: str  # High, Medium, Low, Unknown
     confidence_score: float
+    alt_bpm: Optional[float] = None
 
 
 @dataclass

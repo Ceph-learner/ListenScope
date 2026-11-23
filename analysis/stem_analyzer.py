@@ -436,13 +436,27 @@ def _estimate_offline_bpm_from_flux(flux: np.ndarray, rate_hz: float) -> TempoEs
 
     lags = np.arange(min_lag, max_lag + 1, dtype=np.float32)
     bpms = 60.0 * rate_hz / lags
-    prior = np.exp(-0.5 * (np.log2(bpms / 118.0) / 0.55) ** 2).astype(np.float32)
+    prior = np.maximum(
+        np.exp(-0.5 * (np.log2(bpms / 100.0) / 0.45) ** 2),
+        0.8 * np.exp(-0.5 * (np.log2(bpms / 170.0) / 0.15) ** 2),
+    ).astype(np.float32)
     weighted = acf[min_lag : max_lag + 1] * prior
     best_rel = int(np.argmax(weighted))
     best_lag = min_lag + best_rel
     raw_acf = float(acf[best_lag])
     if not np.isfinite(raw_acf) or raw_acf < 0.14:
         return TempoEstimate(bpm=None, stability="Unknown", confidence_score=raw_acf if np.isfinite(raw_acf) else 0.0)
+
+    if (60.0 * rate_hz / max(1, best_lag)) < 95.0:
+        half_lag = int(round(best_lag * 0.5))
+        if min_lag <= half_lag <= max_lag:
+            lo_h = max(min_lag, half_lag - 1)
+            hi_h = min(max_lag, half_lag + 1)
+            sub_lag = lo_h + int(np.argmax(acf[lo_h : hi_h + 1]))
+            if float(acf[sub_lag]) >= 0.35 * raw_acf:
+                best_lag = sub_lag
+                best_rel = best_lag - min_lag
+                raw_acf = float(acf[best_lag])
 
     refined = float(best_lag)
     if 0 < best_rel < weighted.shape[0] - 1:

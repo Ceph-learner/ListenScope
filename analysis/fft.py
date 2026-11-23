@@ -109,6 +109,24 @@ class SpectrumAnalyzer:
 
         return mag, fft_db, log_db
 
+    def log_spectrum_only(self, mono: np.ndarray) -> np.ndarray:
+        """Compute only log-frequency spectrum dB without recording UI spectrogram history."""
+        if mono.shape[0] < self.fft_size:
+            frame = np.zeros(self.fft_size, dtype=np.float32)
+            if mono.shape[0] > 0:
+                frame[-mono.shape[0] :] = mono
+        else:
+            frame = mono[-self.fft_size :]
+
+        if not np.all(np.isfinite(frame)):
+            frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+
+        windowed = frame * self._window
+        spec = np.fft.rfft(windowed)
+        mag = np.abs(spec) * np.float32(2.0 / self._window_norm)
+        log_power = self._log_fb @ np.square(mag)
+        return (10.0 * np.log10(np.maximum(log_power, 1e-12))).astype(np.float32)
+
     def recent_log_spectrogram(self) -> np.ndarray:
         with self._history_lock:
             if not self._log_history:

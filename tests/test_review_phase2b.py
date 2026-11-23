@@ -45,7 +45,6 @@ def test_abench_benchmark_suite_runs_and_returns_all_metrics() -> None:
     assert "pure_sine_acc" in pitch_res and "harmonic_acc" in pitch_res and "weak_f0_acc" in pitch_res
 
 
-@pytest.mark.xfail(strict=True, reason="A-H1")
 def test_ah1_realtime_bpm_decoupled_from_scheduler_rate() -> None:
     """NEEDS_TARGET contract: TempoEstimator & AnalysisWorker must advance onset envelope on sample clock, not 15Hz timer."""
     from analysis.tempo import TempoEstimator
@@ -57,7 +56,6 @@ def test_ah1_realtime_bpm_decoupled_from_scheduler_rate() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="A-H2")
 def test_ah2_realtime_bpm_140_bpm_rock_within_1_percent() -> None:
     """Real-time TempoEstimator must measure 140 BPM rock groove within 1% (not half-time ~70.7 BPM)."""
     from analysis.fft import SpectrumAnalyzer
@@ -78,7 +76,6 @@ def test_ah2_realtime_bpm_140_bpm_rock_within_1_percent() -> None:
     assert abs(est.bpm - 140.0) / 140.0 < 0.01, f"140 BPM rock measured as {est.bpm}"
 
 
-@pytest.mark.xfail(strict=True, reason="A-M6")
 def test_am6_high_tempo_174_bpm_not_locked_to_half_time() -> None:
     """Offline and real-time BPM estimators must not lock 174 BPM click to 87 BPM."""
     from analysis.stem_analyzer import _estimate_offline_bpm_from_flux
