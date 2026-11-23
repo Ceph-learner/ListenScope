@@ -218,7 +218,6 @@ def test_e17_normalize_to_canonical_pcm_uint8_centering_and_channel_validation()
         normalize_to_canonical_pcm(wrong_shape, src_rate=48000, src_channels=2, dst_rate=48000, dst_channels=2)
 
 
-@pytest.mark.xfail(strict=True, reason="E18")
 def test_e18_mono_audio_config_does_not_crash_ring_buffer_snapshot() -> None:
     """If AudioConfig allows channels=1, FixedRingBuffer.snapshot_envelope must not raise IndexError."""
     from audio.ring_buffer import FixedRingBuffer
