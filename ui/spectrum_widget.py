@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Optional
 
 import numpy as np
@@ -13,6 +14,7 @@ from core.appearance import ANALYSIS_LAYOUTS, Appearance
 from core.i18n import get_current_language, translate_text
 from core.models import AnalysisSnapshot
 from ui.appearance import apply_plot_appearance
+from ui.frame_clock import Ballistics
 from ui.help_badge import HelpBadge
 from ui.acid_style import (
     AcidGraphicOverlay,
@@ -79,6 +81,10 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self._cached_wave_x: Optional[np.ndarray] = None
         self._cached_fft_freqs: Optional[list[float]] = None
         self._fft_x: Optional[np.ndarray] = None
+        self._fft_slope_offset: Optional[np.ndarray] = None
+        self._fft_ballistics: Optional[Ballistics] = None
+        self._last_text_t: float = 0.0
+        self._clip_latched: bool = False
         self._cached_texts: dict[str, str] = {}
         self._last_level_val: int = -1
         self._default_spec_lut: Optional[np.ndarray] = None
@@ -94,6 +100,18 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self._header = TelemetryHeader("AUDIO SPECTRUM // REALTIME", "实时频谱与波形分析")
         self._pulse_strip = TelemetryPulseStrip(bar_count=10)
         self._header.add_right_widget(self._pulse_strip)
+        self._slope_combo = QtWidgets.QComboBox()
+        self._slope_combo.setToolTip("FFT 频谱倾斜补偿 (dB/oct)")
+        for lbl, slp in (("0 dB/oct", 0.0), ("3 dB/oct", 3.0), ("4.5 dB/oct", 4.5)):
+            self._slope_combo.addItem(lbl, slp)
+        self._slope_combo.currentIndexChanged.connect(self._on_slope_changed)
+        self._header.add_right_widget(self._slope_combo)
+        self._clip_latch_btn = QtWidgets.QPushButton("CLIP")
+        self._clip_latch_btn.setCheckable(True)
+        self._clip_latch_btn.setEnabled(False)
+        self._clip_latch_btn.setToolTip("峰值 > -0.3 dBFS 削波锁存灯（点击清除）")
+        self._clip_latch_btn.clicked.connect(self._clear_clip_latch)
+        self._header.add_right_widget(self._clip_latch_btn)
         self.view_combo = QtWidgets.QComboBox()
         self.view_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.view_combo.setAccessibleName("实时分析布局")
@@ -201,6 +219,9 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.wave_plot.showGrid(x=True, y=True, alpha=0.22)
         self._wave_max_curve = self.wave_plot.plot(pen=pg.mkPen("#0F766E", width=1.2))
         self._wave_min_curve = self.wave_plot.plot(pen=pg.mkPen("#0F766E", width=1.2))
+        for wc in (self._wave_max_curve, self._wave_min_curve):
+            wc.setClipToView(True)
+            wc.setDownsampling(auto=True, method="peak")
         frequency_axis = _FftFrequencyAxis(orientation="bottom")
         self.fft_plot = pg.PlotWidget(axisItems={"bottom": frequency_axis})
         self.fft_plot.setBackground("#F8FAFC")
@@ -209,6 +230,9 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.fft_plot.setLogMode(x=False, y=False)
         self.fft_plot.showGrid(x=True, y=True, alpha=0.22)
         self._fft_curve = self.fft_plot.plot(pen=pg.mkPen("#00A878", width=1.5))
+        self._fft_peak_curve = self.fft_plot.plot(
+            pen=pg.mkPen("#F59E0B", width=1.0, style=QtCore.Qt.PenStyle.DashLine)
+        )
         log_axis = _FftFrequencyAxis(orientation="bottom")
         self.log_plot = pg.PlotWidget(axisItems={"bottom": log_axis})
         self.log_plot.setBackground("#F8FAFC")
@@ -468,9 +492,32 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             lbl.setProperty("_ls_orig_text", text)
             lbl.setText(rendered)
 
+    def _on_slope_changed(self) -> None:
+        self._fft_slope_offset = None
+
+    def _clear_clip_latch(self) -> None:
+        self._clip_latched = False
+        self._clip_latch_btn.setChecked(False)
+        self._clip_latch_btn.setEnabled(False)
+
+    def advance_frame(self, dt: float) -> None:
+        if self._fft_ballistics is not None and self._fft_x is not None:
+            cur, pk = self._fft_ballistics.step(dt)
+            self._fft_curve.setData(self._fft_x, cur, skipFiniteCheck=True)
+            self._fft_peak_curve.setData(self._fft_x, pk, skipFiniteCheck=True)
+
     def update_analysis(self, snap: AnalysisSnapshot, spectrogram: np.ndarray | None = None) -> None:
-        self._set_text_cached("rms", self.rms_label, f"{snap.rms_dbfs:.1f} dBFS")
-        self._set_text_cached("peak", self.peak_label, f"{snap.peak_dbfs:.1f} dBFS")
+        if snap.peak_dbfs > -0.3 and not self._clip_latched:
+            self._clip_latched = True
+            self._clip_latch_btn.setEnabled(True)
+            self._clip_latch_btn.setChecked(True)
+
+        now = time.monotonic()
+        if now - self._last_text_t >= 0.18:
+            self._last_text_t = now
+            self._set_text_cached("rms", self.rms_label, f"{snap.rms_dbfs:.1f} dBFS")
+            self._set_text_cached("peak", self.peak_label, f"{snap.peak_dbfs:.1f} dBFS")
+
         lvl = round(max(0.0, min(60.0, snap.rms_dbfs + 60)))
         if lvl != self._last_level_val:
             self._last_level_val = lvl
@@ -491,8 +538,12 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             n_w = len(snap.waveform_min)
             if self._cached_wave_x is None or len(self._cached_wave_x) != n_w:
                 self._cached_wave_x = np.arange(n_w, dtype=np.float32)
-            self._wave_max_curve.setData(self._cached_wave_x, np.asarray(snap.waveform_max, dtype=np.float32))
-            self._wave_min_curve.setData(self._cached_wave_x, np.asarray(snap.waveform_min, dtype=np.float32))
+            self._wave_max_curve.setData(
+                self._cached_wave_x, np.asarray(snap.waveform_max, dtype=np.float32), skipFiniteCheck=True
+            )
+            self._wave_min_curve.setData(
+                self._cached_wave_x, np.asarray(snap.waveform_min, dtype=np.float32), skipFiniteCheck=True
+            )
 
         if snap.fft_freqs_hz and snap.fft_db:
             if self._cached_fft_freqs is not snap.fft_freqs_hz and self._cached_fft_freqs != snap.fft_freqs_hz:
@@ -501,13 +552,30 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                 self._cached_fft_freqs = snap.fft_freqs_hz
                 self._fft_valid_mask = valid
                 self._fft_x = np.log10(freqs[valid]).astype(np.float32)
+                self._fft_slope_offset = None
+                self._fft_ballistics = Ballistics(
+                    int(self._fft_x.shape[0]),
+                    floor_val=-120.0,
+                    release_rate=20.0,
+                    hold_sec=1.5,
+                    peak_fall_rate=12.0,
+                    mode="db",
+                )
             fft_y = np.asarray(snap.fft_db, dtype=np.float32)
             if self._fft_x is not None and fft_y.shape[0] == self._fft_valid_mask.shape[0]:
                 y_sel = fft_y[self._fft_valid_mask] if not np.all(self._fft_valid_mask) else fft_y
+                slope = float(self._slope_combo.currentData() or 0.0)
+                if slope > 0.0:
+                    if self._fft_slope_offset is None:
+                        octaves = (self._fft_x - float(np.log10(1000.0))) / math.log10(2.0)
+                        self._fft_slope_offset = (octaves * slope).astype(np.float32)
+                    y_sel = y_sel + self._fft_slope_offset
+                if self._fft_ballistics is not None:
+                    self._fft_ballistics.set_target(y_sel)
                 self._fft_curve.setData(self._fft_x, y_sel, skipFiniteCheck=True)
 
         if snap.log_freqs_hz and len(snap.log_freqs_hz) == len(snap.log_spectrum_db):
-            self._log_curve.setData(snap.log_freqs_hz, snap.log_spectrum_db)
+            self._log_curve.setData(snap.log_freqs_hz, snap.log_spectrum_db, skipFiniteCheck=True)
 
         if spectrogram is not None and spectrogram.size > 0:
             self._spec_img.setImage(spectrogram, autoLevels=False, levels=(-90.0, -5.0))

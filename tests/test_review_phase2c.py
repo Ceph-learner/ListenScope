@@ -112,7 +112,6 @@ def test_ufx1_frame_clock_exists_and_decouples_display_interpolation() -> None:
     assert found, "Missing unified FrameClock class under ui/"
 
 
-@pytest.mark.xfail(strict=True, reason="U-FX2")
 def test_ufx2_ballistics_and_spectrogram_ring_buffer_exist() -> None:
     """Spectrum/chroma meters must use Ballistics peak-hold & SpectrumAnalyzer must avoid per-tick np.stack over deque."""
     ui_texts = "\n".join(p.read_text("utf-8") for p in (REPO_ROOT / "ui").glob("*.py"))

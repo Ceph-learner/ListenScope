@@ -32,7 +32,10 @@ class SpectrumAnalyzer:
 
         max_hist_frames = max(1, int(self.config.spectrum_history_seconds * self.config.analysis_rate_hz))
         self._history_lock = threading.Lock()
-        self._log_history: deque[np.ndarray] = deque(maxlen=max_hist_frames)
+        self._log_cap = max_hist_frames
+        self._log_buf = np.zeros((self._log_cap, self.config.log_freq_bins), dtype=np.float32)
+        self._log_pos = 0
+        self._log_len = 0
 
     def _build_log_filterbank(self) -> np.ndarray:
         n_bins = self._freqs.shape[0]
@@ -66,7 +69,7 @@ class SpectrumAnalyzer:
 
     @property
     def history_maxlen(self) -> int:
-        return self._log_history.maxlen or 0
+        return self._log_cap
 
     def compute_waveform_envelope(self, mono: np.ndarray, num_points: Optional[int] = None) -> tuple[np.ndarray, np.ndarray]:
         pts = num_points or self.config.waveform_display_points
@@ -105,7 +108,10 @@ class SpectrumAnalyzer:
 
         if record:
             with self._history_lock:
-                self._log_history.append(log_db)
+                self._log_buf[self._log_pos] = log_db
+                self._log_pos = (self._log_pos + 1) % self._log_cap
+                if self._log_len < self._log_cap:
+                    self._log_len += 1
 
         return mag, fft_db, log_db
 
@@ -142,6 +148,8 @@ class SpectrumAnalyzer:
 
     def recent_log_spectrogram(self) -> np.ndarray:
         with self._history_lock:
-            if not self._log_history:
+            if self._log_len == 0:
                 return np.empty((0, self.config.log_freq_bins), dtype=np.float32)
-            return np.stack(list(self._log_history), axis=0)
+            if self._log_len < self._log_cap:
+                return self._log_buf[: self._log_len].copy()
+            return np.concatenate((self._log_buf[self._log_pos :], self._log_buf[: self._log_pos]), axis=0)

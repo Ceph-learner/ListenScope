@@ -25,6 +25,7 @@ from core.i18n import get_current_language, set_i18n_text, translate_text
 from core.models import AnalysisSnapshot
 from ui.appearance import apply_plot_appearance, set_widget_tone
 from ui.chord_practice import ChordPracticeDialog
+from ui.frame_clock import Ballistics
 from ui.help_badge import HelpBadge
 from ui.acid_style import (
     AcidGraphicOverlay,
@@ -622,6 +623,15 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         splitter.setChildrenCollapsible(False)
 
         self._chroma_bar_heights = np.zeros(12, dtype=np.float32)
+        self._chroma_x_idx = np.arange(12, dtype=np.float32)
+        self._chroma_ballistics = Ballistics(
+            12,
+            floor_val=0.0,
+            mode="linear",
+            release_tau=0.20,
+            hold_sec=1.2,
+            peak_fall_rate=0.6,
+        )
         self._label_cache: dict[int, str] = {}
 
         self.chroma_bar_plot = pg.PlotWidget(title="12-BIN CHROMA // 实时色度分布")
@@ -636,13 +646,22 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         ax = self.chroma_bar_plot.getAxis("bottom")
         ax.setTicks([[(i, name) for i, name in enumerate(PITCH_CLASSES)]])
         self._bar_item = pg.BarGraphItem(
-            x=np.arange(12, dtype=np.float32),
+            x=self._chroma_x_idx,
             height=self._chroma_bar_heights,
             width=0.65,
             brush="#00A878",
             pen=pg.mkPen("#008F66", width=0.8),
         )
         self.chroma_bar_plot.addItem(self._bar_item)
+        self._chroma_peak_item = pg.ScatterPlotItem(
+            x=self._chroma_x_idx,
+            y=self._chroma_bar_heights,
+            symbol="_",
+            size=16,
+            pen=pg.mkPen("#F59E0B", width=2.0),
+            brush=None,
+        )
+        self.chroma_bar_plot.addItem(self._chroma_peak_item)
         splitter.addWidget(self.chroma_bar_plot)
 
         self.chroma_hist_plot = pg.PlotWidget(title="CHROMA HEATMAP // 有界时序热图 (30s)")
@@ -1164,6 +1183,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._set_cached_text(self.bpm_stab_lbl, f"节拍稳定度: {tp.stability} (自相关峰: {tp.confidence_score:.2f})")
 
         if snap.chroma_12 and len(snap.chroma_12) == 12:
+            self._chroma_ballistics.set_target(snap.chroma_12)
             self._chroma_bar_heights[:] = snap.chroma_12
             self._bar_item.setOpts(height=self._chroma_bar_heights)
 
@@ -1172,4 +1192,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
     def advance_frame(self, dt: float) -> None:
         self.tuning_bar.advance_frame(dt)
+        cur, pk = self._chroma_ballistics.step(dt)
+        self._bar_item.setOpts(height=cur)
+        self._chroma_peak_item.setData(self._chroma_x_idx, pk, skipFiniteCheck=True)
 

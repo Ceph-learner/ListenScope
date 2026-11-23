@@ -2,8 +2,77 @@
 
 from __future__ import annotations
 
+import math
 import time
+import numpy as np
 from PySide6 import QtCore
+
+
+class Ballistics:
+    """In-place meter/curve ballistics (instant attack, controlled release, peak-hold + fall)."""
+
+    def __init__(
+        self,
+        size: int,
+        *,
+        floor_val: float = -120.0,
+        release_rate: float = 20.0,
+        hold_sec: float = 1.5,
+        peak_fall_rate: float = 12.0,
+        mode: str = "db",
+        release_tau: float = 0.20,
+    ) -> None:
+        self.size = max(1, int(size))
+        self.floor_val = float(floor_val)
+        self.release_rate = float(release_rate)
+        self.hold_sec = float(hold_sec)
+        self.peak_fall_rate = float(peak_fall_rate)
+        self.mode = mode
+        self.release_tau = float(release_tau)
+
+        self.target = np.full(self.size, self.floor_val, dtype=np.float32)
+        self.current = np.full(self.size, self.floor_val, dtype=np.float32)
+        self.peak = np.full(self.size, self.floor_val, dtype=np.float32)
+        self._hold = np.zeros(self.size, dtype=np.float32)
+        self._dirty = False
+
+    def set_target(self, values) -> None:
+        arr = np.asarray(values, dtype=np.float32)
+        if arr.shape == (self.size,):
+            np.copyto(self.target, arr)
+            self._dirty = True
+
+    def step(self, dt: float) -> tuple[np.ndarray, np.ndarray]:
+        dt_f = max(0.001, min(0.1, float(dt)))
+        # Instant attack
+        rise = self.target > self.current
+        self.current[rise] = self.target[rise]
+        fall = ~rise
+        if np.any(fall):
+            if self.mode == "linear":
+                alpha = 1.0 - math.exp(-dt_f / max(0.01, self.release_tau))
+                self.current[fall] += (self.target[fall] - self.current[fall]) * alpha
+            else:
+                self.current[fall] = np.maximum(
+                    self.target[fall],
+                    self.current[fall] - self.release_rate * dt_f,
+                )
+
+        # Peak hold + fall
+        pk_rise = self.current >= self.peak
+        self.peak[pk_rise] = self.current[pk_rise]
+        self._hold[pk_rise] = self.hold_sec
+        pk_hold = ~pk_rise
+        if np.any(pk_hold):
+            self._hold[pk_hold] -= dt_f
+            falling = pk_hold & (self._hold <= 0.0)
+            if np.any(falling):
+                self.peak[falling] = np.maximum(
+                    self.current[falling],
+                    self.peak[falling] - self.peak_fall_rate * dt_f,
+                )
+        self._dirty = False
+        return self.current, self.peak
 
 
 class FrameClock(QtCore.QObject):

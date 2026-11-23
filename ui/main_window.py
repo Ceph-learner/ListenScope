@@ -953,6 +953,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         history_view.sigXRangeChanged.connect(lambda *_: self._history_view_timer.start())
         self._hist_max_curve = self.history_overview_plot.plot(pen=pg.mkPen("#0F766E", width=1.0))
         self._hist_min_curve = self.history_overview_plot.plot(pen=pg.mkPen("#0F766E", width=1.0))
+        for hc in (self._hist_max_curve, self._hist_min_curve):
+            hc.setClipToView(True)
+            hc.setDownsampling(auto=True, method="peak")
         self.ab_region = pg.LinearRegionItem(
             values=(-30.0, 0.0),
             bounds=(-120.0, 0.0),
