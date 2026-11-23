@@ -100,7 +100,6 @@ def test_e4_stem_mixer_44k_stem_playback_has_no_callback_boundary_clicks(tmp_pat
         engine.close()
 
 
-@pytest.mark.xfail(strict=True, reason="E6")
 def test_e6_resource_manager_caches_nvidia_smi_outside_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     """ResourceManager.sample() must cache nvidia-smi >= 2s and must not hold self._lock during subprocess."""
     from core import resource_manager as rm_mod
