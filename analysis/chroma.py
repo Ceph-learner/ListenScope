@@ -248,7 +248,9 @@ class ChromaExtractor:
                     comp_bass = np.log1p(6.0 * norm_mag).astype(np.float32)
                     raw_c = np.power(np.maximum(self._hr_chroma_fb @ comp, 0.0), 1.3).astype(np.float32)
                     chroma, norm_c = self._l2_normalize(raw_c)
-                    bass_chroma, _ = self._l2_normalize(self._hr_bass_fb @ comp_bass)
+                    bass_chroma, norm_b = self._l2_normalize(self._hr_bass_fb @ comp_bass)
+                    if norm_b < 0.25 * max(norm_c, 1e-6):
+                        bass_chroma = np.zeros(12, dtype=np.float32)
                     if norm_c > 1e-9:
                         tonality = self._compute_tonality(hr_mag, self._hr_sfm_mask)
                         weight = float(tonality * np.sqrt(rms))
