@@ -209,7 +209,6 @@ def test_ub18_ai_progress_localized_stages_and_stretchable_bar() -> None:
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B19")
 def test_ub19_marquee_combobox_does_not_scroll_infinitely_at_rest() -> None:
     """MarqueeComboBox must not run an infinite 35ms scroll timer when idle/unhovered (WCAG 2.2.2)."""
     from ui.acid_style import MarqueeComboBox

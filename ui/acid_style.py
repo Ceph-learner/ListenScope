@@ -1043,20 +1043,39 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         super().__init__(parent)
         self._offset: float = 0.0
         self._pause_ticks: int = 28
+        self._cycles_done: int = 0
+        self._max_cycles: int = 2
+        self._hovered: bool = False
+        self._kbd_focused: bool = False
         self._gap_px: int = 40
         self._speed_px_per_tick: float = 1.25  # ~35 px/s @ 35ms
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(35)
         self._timer.timeout.connect(self._on_tick)
+        self._hover_intent_timer = QtCore.QTimer(self)
+        self._hover_intent_timer.setSingleShot(True)
+        self._hover_intent_timer.setInterval(150)
+        self._hover_intent_timer.timeout.connect(self._on_hover_intent)
         self.currentIndexChanged.connect(self._reset_scroll)
         try:
             self.view().setTextElideMode(QtCore.Qt.TextElideMode.ElideNone)
         except Exception:
             pass
 
+    def _on_hover_intent(self) -> None:
+        if self.isVisible() and self.underMouse():
+            self._hovered = True
+            self._cycles_done = 0
+            self._pause_ticks = 8
+            self._update_scroll_state()
+
     def _reset_scroll(self, *_args) -> None:
         self._offset = 0.0
-        self._pause_ticks = 28
+        self._pause_ticks = 12
+        self._cycles_done = 0
+        txt = self.currentText()
+        if txt:
+            self.setToolTip(txt)
         self._update_scroll_state()
 
     def _text_rect(self) -> QtCore.QRect:
@@ -1080,7 +1099,14 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         return self.fontMetrics().horizontalAdvance(txt) > tr_rect.width() + 2
 
     def _update_scroll_state(self) -> None:
-        if self.isVisible() and self._needs_scroll():
+        active_trigger = self._hovered or self._kbd_focused
+        if (
+            self.isVisible()
+            and self._needs_scroll()
+            and active_trigger
+            and _motion_enabled()
+            and self._cycles_done < self._max_cycles
+        ):
             if not self._timer.isActive():
                 self._timer.start()
         else:
@@ -1089,21 +1115,54 @@ class MarqueeComboBox(QtWidgets.QComboBox):
                 self._offset = 0.0
                 self.update()
 
+    def enterEvent(self, event: QtGui.QEnterEvent) -> None:  # type: ignore[override]
+        super().enterEvent(event)
+        self._hover_intent_timer.start()
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        self._hover_intent_timer.stop()
+        self._hovered = False
+        super().leaveEvent(event)
+        self._update_scroll_state()
+
+    def focusInEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
+        self._kbd_focused = event.reason() in (
+            QtCore.Qt.FocusReason.TabFocusReason,
+            QtCore.Qt.FocusReason.BacktabFocusReason,
+        )
+        if self._kbd_focused:
+            self._cycles_done = 0
+            self._pause_ticks = 8
+        super().focusInEvent(event)
+        self._update_scroll_state()
+
+    def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
+        self._kbd_focused = False
+        super().focusOutEvent(event)
+        self._update_scroll_state()
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
+        if self._needs_scroll() and self.currentText():
+            self.setToolTip(self.currentText())
         self._update_scroll_state()
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
+        if self._needs_scroll() and self.currentText():
+            self.setToolTip(self.currentText())
         self._update_scroll_state()
 
     def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        self._hovered = False
         self._timer.stop()
         super().hideEvent(event)
 
     def _on_tick(self) -> None:
-        if not self.isVisible() or not self._needs_scroll():
+        if not self.isVisible() or not self._needs_scroll() or not (self._hovered or self._kbd_focused):
             self._timer.stop()
+            self._offset = 0.0
+            self.update()
             return
         if self._pause_ticks > 0:
             self._pause_ticks -= 1
@@ -1115,7 +1174,10 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         self._offset += self._speed_px_per_tick
         if self._offset >= cycle:
             self._offset = 0.0
-            self._pause_ticks = 30
+            self._pause_ticks = 24
+            self._cycles_done += 1
+            if self._cycles_done >= self._max_cycles:
+                self._timer.stop()
         self.update()
 
     def showPopup(self) -> None:  # type: ignore[override]
@@ -1145,14 +1207,21 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         tr_rect = self._text_rect()
         p.setClipRect(tr_rect)
         p.setFont(self.font())
-        role = QtGui.QPalette.ColorRole.Text if self.isEnabled() else QtGui.QPalette.ColorRole.Disabled
         color = self.palette().color(
             QtGui.QPalette.ColorGroup.Active if self.isEnabled() else QtGui.QPalette.ColorGroup.Disabled,
             QtGui.QPalette.ColorRole.Text,
         )
-        del role
         p.setPen(color)
         txt = self.currentText()
+        if not self._timer.isActive() and self._offset == 0.0:
+            elided = self.fontMetrics().elidedText(txt, QtCore.Qt.TextElideMode.ElideRight, tr_rect.width())
+            p.drawText(
+                tr_rect,
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                elided,
+            )
+            p.end()
+            return
         txt_w = self.fontMetrics().horizontalAdvance(txt)
         x = float(tr_rect.left()) - self._offset
         p.drawText(
