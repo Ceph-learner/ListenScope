@@ -257,7 +257,6 @@ def test_ub27_appearance_dialog_debounces_font_spinbox_changes() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="U-B30")
 def test_ub30_telemetry_pulse_strip_accepts_real_level_or_is_static_by_default() -> None:
     """TelemetryPulseStrip must accept real audio level/bands (e.g. set_level / set_bands) instead of fake sine animation."""
     from ui.acid_style import TelemetryPulseStrip

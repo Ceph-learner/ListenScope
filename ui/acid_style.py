@@ -678,12 +678,32 @@ class TelemetryPulseStrip(QtWidgets.QWidget):
         self._reactive: bool = True
         self._locked: bool = False
         self._phase: float = 0.0
+        self._level_db: float = -120.0
+        self._bands: list[float] | None = None
         self.setFixedSize(self._bars * 5 + 2, 14)
 
     def set_theme_color(self, color: str) -> None:
         self._color = QtGui.QColor(color)
         self._track = QtGui.QColor(color)
         self._track.setAlpha(42)
+        if self.isVisible():
+            self.update()
+
+    def set_level(self, rms_db: float) -> None:
+        self._level_db = float(rms_db)
+        self._bands = None
+        self._energy = max(0.0, min(1.0, (self._level_db + 60.0) / 60.0))
+        if self.isVisible():
+            self.update()
+
+    def set_bands(self, levels) -> None:
+        vals = [max(0.0, min(1.0, float(v))) for v in levels]
+        if vals:
+            self._bands = vals
+            self._energy = max(vals)
+        else:
+            self._bands = None
+            self._energy = 0.0
         if self.isVisible():
             self.update()
 
@@ -714,16 +734,15 @@ class TelemetryPulseStrip(QtWidgets.QWidget):
         p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
         eff = 0.0 if self._locked else self._strength
         h_max = float(self.height() - 2)
-        base_level = 0.16 if eff <= 0.02 else (
-            (0.22 + 0.56 * self._energy + 0.28 * self._climax)
-            if self._reactive
-            else 0.42
-        )
         for i in range(self._bars):
-            wave = 0.5 + 0.5 * math.sin(self._phase * (1.6 + self._climax * 2.2) + i * 0.9)
-            frac = max(0.14, min(1.0, base_level * (0.55 + 0.65 * wave * max(0.2, eff))))
-            if eff <= 0.02:
-                frac = 0.18
+            if self._bands is not None:
+                idx = min(len(self._bands) - 1, int(i * len(self._bands) / self._bars))
+                frac = max(0.10, min(1.0, self._bands[idx]))
+            elif eff <= 0.02 or self._energy <= 0.01:
+                frac = 0.14
+            else:
+                taper = 1.0 - 0.18 * abs(i - (self._bars - 1) * 0.5) / max(1.0, self._bars * 0.5)
+                frac = max(0.14, min(1.0, (0.18 + 0.72 * self._energy + 0.20 * self._climax) * taper * max(0.25, eff)))
             bh = max(2.0, h_max * frac)
             x = 1 + i * 5
             p.fillRect(QtCore.QRectF(x, 1.0, 3.0, h_max), self._track)
