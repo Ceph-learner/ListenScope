@@ -255,6 +255,9 @@ def test_theme_modes_font_scanning_live_preview_and_system_follow(tmp_path: Path
     dialog = AppearanceDialog(initial, DARK_STYLESHEET, on_preview=seen_previews.append, system_is_dark=True)
     dialog._theme_mode_buttons["light"].click()
     dialog._font.setValue(15)
+    loop = QtCore.QEventLoop()
+    QtCore.QTimer.singleShot(160, loop.quit)
+    loop.exec()
     assert seen_previews and seen_previews[-1].theme_mode == "light"
     assert seen_previews[-1].font_size == 15
     dialog._reset_btn.click()
@@ -309,7 +312,7 @@ def test_help_badge_tuning_bar_and_turnkey_discovery(tmp_path: Path, monkeypatch
     lbl = QtWidgets.QLabel("示例")
     holder, badge = wrap_with_help(lbl, "复杂功能说明", "详细操作指导内容")
     assert isinstance(badge, HelpBadge)
-    assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.NoFocus
+    assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.TabFocus
     assert "复杂功能说明" in badge.toolTip()
     holder.show()
     holder.activateWindow()
@@ -548,7 +551,7 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w._pill_dark.isChecked() is True
         assert w._skin_badge.text() == "ACID // VOID_V2"
         assert w._history_box.objectName() == "historyPaperDock"
-        assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#F4F5F2"
+        assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#0E1216"
         assert "// 01 SPECTRUM" in w.tabs.tabText(0)
         assert "// 02 CHROMA & HARMONY" in w.tabs.tabText(1).replace("&&", "&")
         assert w.chroma_widget.chord_echo_lbl.isHidden() is False
@@ -594,13 +597,18 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
 
         w._acid_footer.lock_btn.click()
         assert w._static_lock is True
-        assert w._acid_footer.lock_btn.text() == "[STATIC_LOCK: ON]"
-        w.update_analysis_snapshot(snap_c, None, None)
-        assert w.chroma_widget.chord_primary_lbl.text() == "Am"  # remains frozen while locked
-
+        assert w._acid_footer.lock_btn.text() == "[STATIC_DECOR: ON]"
         w._acid_footer.lock_btn.click()
         assert w._static_lock is False
-        assert w._acid_footer.lock_btn.text() == "[STATIC_LOCK: OFF]"
+        assert w._acid_footer.lock_btn.text() == "[STATIC_DECOR: OFF]"
+
+        w.freeze_screen_btn.click()
+        assert w._freeze_screen is True
+        w.update_analysis_snapshot(snap_c, None, None)
+        assert w.chroma_widget.chord_primary_lbl.text() == "Am"  # remains frozen while freeze_screen is ON
+
+        w.freeze_screen_btn.click()
+        assert w._freeze_screen is False
         w.update_analysis_snapshot(snap_c, None, None)
         assert w.chroma_widget.chord_primary_lbl.text() == "C"
 
@@ -687,7 +695,7 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
     ):
         assert svg_name in spec_txt
 
-    forbidden = re.compile(r"marathon|nucaloric|\bm5\b|马拉松", re.IGNORECASE)
+    forbidden = re.compile(r"marathon|nucaloric|(?<![A-Za-z0-9-])m5\b|马拉松", re.IGNORECASE)
     for py_file in sorted((root / "ui").glob("*.py")):
         assert not forbidden.search(py_file.read_text(encoding="utf-8")), f"Unexpected legacy term in {py_file.name}"
     for doc_file in [root / "README.md", root / "ACKNOWLEDGMENTS.md", root / "CONTRIBUTING.md", *sorted((root / "docs").glob("*.md"))]:

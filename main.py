@@ -417,11 +417,29 @@ class ListenScopeController:
 
         # Qt UI refresh timer: consumes snapshots only, zero blocking work
         self._timer = QtCore.QTimer(self.window)
+        self._timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
         self._timer.setInterval(45)  # ~22 Hz UI refresh
         self._timer.timeout.connect(self._on_ui_tick)
         self._timer.start()
         self._tick_counter = 0
+        self._last_snap_ts: float = 0.0
+        self._latest_rsnap: Optional[ResourceSnapshot] = None
+        self._res_stop_event = threading.Event()
         self._shutdown_done = False
+
+        def _resource_sampler_loop() -> None:
+            while not self._res_stop_event.is_set() and not self._shutdown_done:
+                try:
+                    self._latest_rsnap = self.resource_manager.sample()
+                except Exception:
+                    pass
+                self._res_stop_event.wait(1.2)
+
+        threading.Thread(
+            target=_resource_sampler_loop,
+            name="ListenScope-ResourceSampler",
+            daemon=True,
+        ).start()
 
         if ai_python_executable:
             self._schedule_external_ai_probe(ai_python_executable)
@@ -1242,7 +1260,8 @@ class ListenScopeController:
             shutil.rmtree(task_dir, ignore_errors=True)
             self.window.ai_status_badge.setText("AI: Blocked")
             self.window.mixer_widget.job_progress.setValue(0)
-            self.window.mixer_widget.job_status_lbl.setText(f"❌ 拒绝启动 AI 分轨: {msg}")
+            from core.i18n import set_i18n_text
+            set_i18n_text(self.window.mixer_widget.job_status_lbl, f"❌ 拒绝启动 AI 分轨: {msg}")
             self._refresh_resource_ui_now()
             self.window.show_banner_message(f"拒绝启动 AI 分轨: {msg}")
         else:
@@ -1320,7 +1339,8 @@ class ListenScopeController:
         if not ok:
             self.window.ai_status_badge.setText("AI: Blocked")
             self.window.mixer_widget.job_progress.setValue(0)
-            self.window.mixer_widget.job_status_lbl.setText(f"❌ OOM 恢复启动失败: {msg}")
+            from core.i18n import set_i18n_text
+            set_i18n_text(self.window.mixer_widget.job_status_lbl, f"❌ OOM 恢复启动失败: {msg}")
             self._refresh_resource_ui_now()
             self.window.show_banner_message(f"OOM 恢复启动失败: {msg}")
         else:
@@ -2113,13 +2133,29 @@ class ListenScopeController:
             self.window.sync_mixer_position()
         self._last_mixer_playing = mixer_playing
 
-        # Update real-time CPU DSP analysis snapshots
+        hidden = (not self.window.isVisible()) or self.window.isMinimized()
+        target_interval = 250 if hidden else 45
+        if self._timer.interval() != target_interval:
+            self._timer.setInterval(target_interval)
+        if self.window.isMinimized():
+            return
+        if (not self.window.isVisible()) and (self._tick_counter % 4 != 0):
+            return
+
+        cur_tab = self.window.tabs.currentWidget()
+
+        # Update real-time CPU DSP analysis snapshots (deduplicated by timestamp)
         asnap = self.analysis_worker.latest_snapshot()
-        if asnap is not None:
-            spec_hist = self.analysis_worker.spectrum.recent_log_spectrogram() if self._tick_counter % 3 == 0 else None
+        if asnap is not None and float(asnap.timestamp) != self._last_snap_ts:
+            self._last_snap_ts = float(asnap.timestamp)
+            spec_hist = (
+                self.analysis_worker.spectrum.recent_log_spectrogram()
+                if (cur_tab is self.window.spectrum_widget and self._tick_counter % 3 == 0)
+                else None
+            )
             chroma_hist = (
                 self.analysis_worker.chroma.recent_chroma_matrix(seconds=30.0)
-                if self._tick_counter % 4 == 0
+                if (cur_tab is self.window.chroma_widget and self._tick_counter % 4 == 0)
                 else None
             )
             self.window.update_analysis_snapshot(asnap, spectrogram=spec_hist, chroma_history=chroma_hist)
@@ -2131,13 +2167,13 @@ class ListenScopeController:
             target_climax = max(0.0, min(1.0, 0.55 * surge + 0.45 * max(0.0, raw_p - 0.35)))
             self._telem_climax = 0.60 * self._telem_climax + 0.40 * target_climax
             self.window.update_music_telemetry(self._telem_energy, self._telem_climax)
-        else:
+        elif asnap is None:
             self._telem_energy *= 0.88
             self._telem_climax *= 0.85
             if self._tick_counter % 2 == 0:
                 self.window.update_music_telemetry(self._telem_energy, self._telem_climax)
 
-        # Update capture stats, 120s history overview waveform & resource monitor on tick 1 and every ~4 ticks (~200ms)
+        # Update capture stats, 120s history overview waveform & cached resource monitor on tick 1 and every ~4 ticks (~200ms)
         if self._tick_counter == 1 or self._tick_counter % 4 == 0:
             if self._capture_backend is not None:
                 cstats = self._capture_backend.get_stats()
@@ -2154,19 +2190,24 @@ class ListenScopeController:
             self._refresh_history_overview()
             self._sync_ab_bookmarks()
 
-            rsnap = self.resource_manager.sample()
-            self.window.update_resource_snapshot(
-                rsnap,
-                self.perf_logger.recent_records(),
-                self.log_handler.recent(),
-            )
-            if self.live_separator.is_active or self.live_separator.is_starting or self._tick_counter % 12 == 0:
+            rsnap = self._latest_rsnap
+            if rsnap is not None:
+                self.window.update_resource_snapshot(
+                    rsnap,
+                    self.perf_logger.recent_records() if cur_tab is self.window.resource_panel else [],
+                    self.log_handler.recent() if cur_tab is self.window.resource_panel else [],
+                )
+            if self.live_separator.is_active or self.live_separator.is_starting or (
+                cur_tab is self.window.live_widget and self._tick_counter % 12 == 0
+            ):
                 self.window.update_live_metrics(self.live_separator.latest_metrics())
 
     def shutdown(self) -> None:
         if getattr(self, "_shutdown_done", False):
             return
         self._shutdown_done = True
+        if hasattr(self, "_res_stop_event"):
+            self._res_stop_event.set()
         self._probe_seq += 1
         try:
             get_bootstrap_manager().completed.disconnect(self._on_bootstrap_completed)

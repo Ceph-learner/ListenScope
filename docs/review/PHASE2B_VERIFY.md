@@ -78,4 +78,9 @@
 - **独立复测结果（Linux/offscreen 验证，非 Windows 11 实机/GPU/exe）**：
   - 专项 `tests/test_review_phase2b.py`：**`19 passed`**
   - 全量 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`：**`283 passed, 6 skipped`**（0 failed，0 xfailed）
+- **A-H1 性能补测（同脚本 120 周期稳态 `analyze_latest_once`）**：
+  - `e4c49e8`（2B 前）：中位数 **`3.11 ms`**，p95 **`4.94 ms`**
+  - `86938ef`（2B 后）：中位数 **`6.80 ms`**，p95 **`8.87 ms`**
+  - **增量**：中位数 **`+3.69 ms`**，p95 **`+3.93 ms`**（超过 3 ms 阈值，已在 `docs/review/PHASE2C_VERIFY.md` 新增 `P2C-PERF` 跟踪优化）。
+
 

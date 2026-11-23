@@ -63,6 +63,27 @@ class AnalysisWorker:
         self._reset_boundary: tuple[int, int] | None = None
         self._dropped_cycles: int = 0
 
+        # 1/24-octave log-frequency FFT display grid (27.5 Hz .. 16 kHz, 221 bins)
+        self._disp_f = np.geomspace(
+            max(20.0, float(self.config.min_freq_hz)),
+            max(1000.0, float(self.config.max_freq_hz)),
+            221,
+        ).astype(np.float32)
+        self._disp_f_list = self._disp_f.tolist()
+        fft_freqs = self.spectrum.fft_freqs
+        half_step = 2.0 ** (1.0 / 48.0)
+        self._disp_max_ranges: list[tuple[int, int, int]] = []
+        self._disp_interp_idx: list[int] = []
+        for i, fc in enumerate(self._disp_f):
+            lo_idx = int(np.searchsorted(fft_freqs, float(fc) / half_step, side="left"))
+            hi_idx = int(np.searchsorted(fft_freqs, float(fc) * half_step, side="right"))
+            if hi_idx - lo_idx >= 2:
+                self._disp_max_ranges.append((i, lo_idx, hi_idx))
+            else:
+                self._disp_interp_idx.append(i)
+        self._disp_interp_idx_arr = np.asarray(self._disp_interp_idx, dtype=np.intp)
+        self._disp_interp_f_arr = self._disp_f[self._disp_interp_idx_arr] if self._disp_interp_idx else np.empty(0, dtype=np.float32)
+
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive() and not self._stop_event.is_set()
@@ -118,13 +139,20 @@ class AnalysisWorker:
         sr = self.audio_config.sample_rate
         fft_size = self.config.fft_size
         window_sec = max(0.1, fft_size / float(sr))
-        _, _, ring_generation = self.ring_buffer.frame_state()
+        _, latest_abs, ring_generation = self.ring_buffer.frame_state()
         if self._onset_generation != ring_generation:
             self.tempo.reset()
             self._onset_cursor = None
             self._onset_generation = ring_generation
 
-        pcm, start_abs, end_abs = self.ring_buffer.read_recent(max(window_sec, 2.0 + window_sec))
+        recent_frames = max(fft_size, int(0.36 * sr))
+        max_read_frames = max(recent_frames, int(round(max(window_sec, 2.0 + window_sec) * sr)))
+        if self._onset_cursor is None:
+            read_frames = max_read_frames
+        else:
+            needed_for_onset = max(0, latest_abs - (self._onset_cursor - fft_size) + self.tempo.hop_frames)
+            read_frames = min(max_read_frames, max(recent_frames, needed_for_onset))
+        pcm, start_abs, end_abs = self.ring_buffer.read_recent(read_frames / float(sr))
         if self._reset_boundary is not None and self._reset_boundary[0] == ring_generation:
             cut = max(0, self._reset_boundary[1] - start_abs)
             pcm = pcm[cut:]
@@ -139,8 +167,10 @@ class AnalysisWorker:
             audio_silent = True
             is_silent = True
         else:
-            mono_all = np.mean(pcm, axis=1, dtype=np.float32)
-            recent_frames = max(fft_size, int(0.36 * sr))
+            if pcm.shape[1] == 2:
+                mono_all = (0.5 * (pcm[:, 0] + pcm[:, 1])).astype(np.float32, copy=False)
+            else:
+                mono_all = np.mean(pcm, axis=1, dtype=np.float32)
             pcm_recent = pcm[-recent_frames:]
             mono_recent = mono_all[-recent_frames:]
             pitch_frames = max(fft_size, int(0.15 * sr))
@@ -187,33 +217,51 @@ class AnalysisWorker:
             else:
                 cursor = self._onset_cursor
 
-            silence_lin = float(10.0 ** (self.config.silence_threshold_dbfs / 20.0))
+            silence_sq = float(10.0 ** (self.config.silence_threshold_dbfs / 10.0))
+            active_slices: list[np.ndarray] = []
+            hop_flags: list[bool] = []
             while cursor <= end_abs:
                 end_off = cursor - start_abs
                 win_slice = mono_all[end_off - fft_size : end_off]
-                frame_rms = float(np.sqrt(np.mean(np.square(win_slice))))
-                if not np.isfinite(frame_rms) or frame_rms < silence_lin:
-                    self.tempo.push_frame(np.empty(0, dtype=np.float32), is_silent=True)
+                mean_sq = float(np.dot(win_slice, win_slice)) / float(fft_size)
+                if not np.isfinite(mean_sq) or mean_sq < silence_sq:
+                    hop_flags.append(True)
                 else:
-                    hop_log_db = self.spectrum.log_spectrum_only(win_slice)
-                    self.tempo.push_frame(hop_log_db, is_silent=False)
+                    hop_flags.append(False)
+                    active_slices.append(win_slice)
                 cursor += hop
             self._onset_cursor = cursor
+            if active_slices:
+                batch_db = self.spectrum.log_spectrum_batch(np.stack(active_slices, axis=0))
+                b_idx = 0
+                for silent_hop in hop_flags:
+                    if silent_hop:
+                        self.tempo.push_frame(np.empty(0, dtype=np.float32), is_silent=True)
+                    else:
+                        self.tempo.push_frame(batch_db[b_idx], is_silent=False)
+                        b_idx += 1
+            else:
+                for _ in hop_flags:
+                    self.tempo.push_frame(np.empty(0, dtype=np.float32), is_silent=True)
 
         tempo_est = self.tempo.maybe_estimate()
 
-        # Decimate display bins cleanly for UI transmission (avoid huge list allocations)
+        # Log-frequency 1/24-octave display resampling (dense bass bins + high-freq max-pooling)
         fft_freqs = self.spectrum.fft_freqs
-        mask = (fft_freqs >= self.config.min_freq_hz) & (fft_freqs <= self.config.max_freq_hz)
-        fft_freqs_sel = fft_freqs[mask][::4]
-        fft_db_sel = fft_db[mask][::4]
+        disp_db = np.empty(self._disp_f.shape[0], dtype=np.float32)
+        if self._disp_interp_idx_arr.size > 0:
+            disp_db[self._disp_interp_idx_arr] = np.interp(
+                self._disp_interp_f_arr, fft_freqs, fft_db
+            ).astype(np.float32)
+        for out_i, lo_i, hi_i in self._disp_max_ranges:
+            disp_db[out_i] = float(np.max(fft_db[lo_i:hi_i]))
 
         snap = AnalysisSnapshot(
             timestamp=time.time(),
             waveform_min=wf_min.tolist(),
             waveform_max=wf_max.tolist(),
-            fft_freqs_hz=fft_freqs_sel.tolist(),
-            fft_db=fft_db_sel.tolist(),
+            fft_freqs_hz=self._disp_f_list,
+            fft_db=disp_db.tolist(),
             log_freqs_hz=self.spectrum.log_freqs.tolist(),
             log_spectrum_db=log_db.tolist(),
             chroma_12=chroma_12.tolist(),

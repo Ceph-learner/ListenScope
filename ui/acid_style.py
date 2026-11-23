@@ -115,10 +115,10 @@ ACID_PALETTES: dict[str, AcidPalette] = {
         danger="#FF2442",
         border="#2D3438",
         border_strong="#4B565B",
-        dock_bg="#E9EBE7",
-        dock_card="#F4F5F2",
-        dock_ink="#0B0D0F",
-        dock_border="#9EA6A1",
+        dock_bg="#14181C",
+        dock_card="#1D2328",
+        dock_ink="#F1F2EC",
+        dock_border="#4B565B",
         status_ok_bg="#142310",
         status_ok_fg="#CEFF18",
         status_ok_bd="#CEFF18",
@@ -129,14 +129,14 @@ ACID_PALETTES: dict[str, AcidPalette] = {
         status_danger_fg="#FF8FA0",
         status_danger_bd="#FF2442",
         plot_bg="#0E1216",
-        plot_axis="#89918F",
+        plot_axis="#B8C2C0",
         plot_tick_pen="#2D3438",
         plot_wave="#CEFF18",
         plot_fft="#77DCE4",
         plot_log="#CEFF18",
-        hist_plot_bg="#F4F5F2",
-        hist_plot_axis="#0B0D0F",
-        hist_plot_wave="#0B0D0F",
+        hist_plot_bg="#0E1216",
+        hist_plot_axis="#B8C2C0",
+        hist_plot_wave="#CEFF18",
         plot_region_rgba=(34, 17, 255, 34),
         plot_region_pen="#2211FF",
         plot_playhead="#FF2442",
@@ -678,12 +678,32 @@ class TelemetryPulseStrip(QtWidgets.QWidget):
         self._reactive: bool = True
         self._locked: bool = False
         self._phase: float = 0.0
+        self._level_db: float = -120.0
+        self._bands: list[float] | None = None
         self.setFixedSize(self._bars * 5 + 2, 14)
 
     def set_theme_color(self, color: str) -> None:
         self._color = QtGui.QColor(color)
         self._track = QtGui.QColor(color)
         self._track.setAlpha(42)
+        if self.isVisible():
+            self.update()
+
+    def set_level(self, rms_db: float) -> None:
+        self._level_db = float(rms_db)
+        self._bands = None
+        self._energy = max(0.0, min(1.0, (self._level_db + 60.0) / 60.0))
+        if self.isVisible():
+            self.update()
+
+    def set_bands(self, levels) -> None:
+        vals = [max(0.0, min(1.0, float(v))) for v in levels]
+        if vals:
+            self._bands = vals
+            self._energy = max(vals)
+        else:
+            self._bands = None
+            self._energy = 0.0
         if self.isVisible():
             self.update()
 
@@ -714,16 +734,15 @@ class TelemetryPulseStrip(QtWidgets.QWidget):
         p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
         eff = 0.0 if self._locked else self._strength
         h_max = float(self.height() - 2)
-        base_level = 0.16 if eff <= 0.02 else (
-            (0.22 + 0.56 * self._energy + 0.28 * self._climax)
-            if self._reactive
-            else 0.42
-        )
         for i in range(self._bars):
-            wave = 0.5 + 0.5 * math.sin(self._phase * (1.6 + self._climax * 2.2) + i * 0.9)
-            frac = max(0.14, min(1.0, base_level * (0.55 + 0.65 * wave * max(0.2, eff))))
-            if eff <= 0.02:
-                frac = 0.18
+            if self._bands is not None:
+                idx = min(len(self._bands) - 1, int(i * len(self._bands) / self._bars))
+                frac = max(0.10, min(1.0, self._bands[idx]))
+            elif eff <= 0.02 or self._energy <= 0.01:
+                frac = 0.14
+            else:
+                taper = 1.0 - 0.18 * abs(i - (self._bars - 1) * 0.5) / max(1.0, self._bars * 0.5)
+                frac = max(0.14, min(1.0, (0.18 + 0.72 * self._energy + 0.20 * self._climax) * taper * max(0.25, eff)))
             bh = max(2.0, h_max * frac)
             x = 1 + i * 5
             p.fillRect(QtCore.QRectF(x, 1.0, 3.0, h_max), self._track)
@@ -1036,6 +1055,93 @@ class MarqueeLabel(QtWidgets.QLabel):
         p.end()
 
 
+class FlowLayout(QtWidgets.QLayout):
+    """Responsive wrapping layout so horizontal button/control rows never clip on narrow screens."""
+
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        margin: int = 0,
+        h_spacing: int = 6,
+        v_spacing: int = 4,
+    ) -> None:
+        super().__init__(parent)
+        self._items: list[QtWidgets.QLayoutItem] = []
+        self._h_space = int(h_spacing)
+        self._v_space = int(v_spacing)
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def __del__(self) -> None:
+        while self._items:
+            self.takeAt(0)
+
+    def addItem(self, item: QtWidgets.QLayoutItem) -> None:  # type: ignore[override]
+        self._items.append(item)
+
+    def count(self) -> int:  # type: ignore[override]
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QtWidgets.QLayoutItem | None:  # type: ignore[override]
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int) -> QtWidgets.QLayoutItem | None:  # type: ignore[override]
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self) -> QtCore.Qt.Orientation:  # type: ignore[override]
+        return QtCore.Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # type: ignore[override]
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # type: ignore[override]
+        return self._do_layout(QtCore.QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QtCore.QRect) -> None:  # type: ignore[override]
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        return self.minimumSize()
+
+    def minimumSize(self) -> QtCore.QSize:  # type: ignore[override]
+        size = QtCore.QSize()
+        for item in self._items:
+            w = item.widget()
+            if w is not None and w.isHidden():
+                continue
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QtCore.QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect: QtCore.QRect, *, test_only: bool) -> int:
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x = effective.x()
+        y = effective.y()
+        line_h = 0
+        for item in self._items:
+            w = item.widget()
+            if w is not None and w.isHidden():
+                continue
+            sz = item.sizeHint()
+            next_x = x + sz.width() + self._h_space
+            if next_x - self._h_space > effective.right() and line_h > 0:
+                x = effective.x()
+                y += line_h + self._v_space
+                next_x = x + sz.width() + self._h_space
+                line_h = 0
+            if not test_only:
+                item.setGeometry(QtCore.QRect(QtCore.QPoint(x, y), sz))
+            x = next_x
+            line_h = max(line_h, sz.height())
+        return y + line_h - rect.y() + m.bottom()
+
+
 class MarqueeComboBox(QtWidgets.QComboBox):
     """ComboBox that smoothly scrolls overflowing current name & widens popup so items avoid '...'."""
 
@@ -1043,20 +1149,39 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         super().__init__(parent)
         self._offset: float = 0.0
         self._pause_ticks: int = 28
+        self._cycles_done: int = 0
+        self._max_cycles: int = 2
+        self._hovered: bool = False
+        self._kbd_focused: bool = False
         self._gap_px: int = 40
         self._speed_px_per_tick: float = 1.25  # ~35 px/s @ 35ms
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(35)
         self._timer.timeout.connect(self._on_tick)
+        self._hover_intent_timer = QtCore.QTimer(self)
+        self._hover_intent_timer.setSingleShot(True)
+        self._hover_intent_timer.setInterval(150)
+        self._hover_intent_timer.timeout.connect(self._on_hover_intent)
         self.currentIndexChanged.connect(self._reset_scroll)
         try:
             self.view().setTextElideMode(QtCore.Qt.TextElideMode.ElideNone)
         except Exception:
             pass
 
+    def _on_hover_intent(self) -> None:
+        if self.isVisible() and self.underMouse():
+            self._hovered = True
+            self._cycles_done = 0
+            self._pause_ticks = 8
+            self._update_scroll_state()
+
     def _reset_scroll(self, *_args) -> None:
         self._offset = 0.0
-        self._pause_ticks = 28
+        self._pause_ticks = 12
+        self._cycles_done = 0
+        txt = self.currentText()
+        if txt:
+            self.setToolTip(txt)
         self._update_scroll_state()
 
     def _text_rect(self) -> QtCore.QRect:
@@ -1080,7 +1205,14 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         return self.fontMetrics().horizontalAdvance(txt) > tr_rect.width() + 2
 
     def _update_scroll_state(self) -> None:
-        if self.isVisible() and self._needs_scroll():
+        active_trigger = self._hovered or self._kbd_focused
+        if (
+            self.isVisible()
+            and self._needs_scroll()
+            and active_trigger
+            and _motion_enabled()
+            and self._cycles_done < self._max_cycles
+        ):
             if not self._timer.isActive():
                 self._timer.start()
         else:
@@ -1089,21 +1221,54 @@ class MarqueeComboBox(QtWidgets.QComboBox):
                 self._offset = 0.0
                 self.update()
 
+    def enterEvent(self, event: QtGui.QEnterEvent) -> None:  # type: ignore[override]
+        super().enterEvent(event)
+        self._hover_intent_timer.start()
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        self._hover_intent_timer.stop()
+        self._hovered = False
+        super().leaveEvent(event)
+        self._update_scroll_state()
+
+    def focusInEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
+        self._kbd_focused = event.reason() in (
+            QtCore.Qt.FocusReason.TabFocusReason,
+            QtCore.Qt.FocusReason.BacktabFocusReason,
+        )
+        if self._kbd_focused:
+            self._cycles_done = 0
+            self._pause_ticks = 8
+        super().focusInEvent(event)
+        self._update_scroll_state()
+
+    def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
+        self._kbd_focused = False
+        super().focusOutEvent(event)
+        self._update_scroll_state()
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
+        if self._needs_scroll() and self.currentText():
+            self.setToolTip(self.currentText())
         self._update_scroll_state()
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
+        if self._needs_scroll() and self.currentText():
+            self.setToolTip(self.currentText())
         self._update_scroll_state()
 
     def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        self._hovered = False
         self._timer.stop()
         super().hideEvent(event)
 
     def _on_tick(self) -> None:
-        if not self.isVisible() or not self._needs_scroll():
+        if not self.isVisible() or not self._needs_scroll() or not (self._hovered or self._kbd_focused):
             self._timer.stop()
+            self._offset = 0.0
+            self.update()
             return
         if self._pause_ticks > 0:
             self._pause_ticks -= 1
@@ -1115,7 +1280,10 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         self._offset += self._speed_px_per_tick
         if self._offset >= cycle:
             self._offset = 0.0
-            self._pause_ticks = 30
+            self._pause_ticks = 24
+            self._cycles_done += 1
+            if self._cycles_done >= self._max_cycles:
+                self._timer.stop()
         self.update()
 
     def showPopup(self) -> None:  # type: ignore[override]
@@ -1145,14 +1313,21 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         tr_rect = self._text_rect()
         p.setClipRect(tr_rect)
         p.setFont(self.font())
-        role = QtGui.QPalette.ColorRole.Text if self.isEnabled() else QtGui.QPalette.ColorRole.Disabled
         color = self.palette().color(
             QtGui.QPalette.ColorGroup.Active if self.isEnabled() else QtGui.QPalette.ColorGroup.Disabled,
             QtGui.QPalette.ColorRole.Text,
         )
-        del role
         p.setPen(color)
         txt = self.currentText()
+        if not self._timer.isActive() and self._offset == 0.0:
+            elided = self.fontMetrics().elidedText(txt, QtCore.Qt.TextElideMode.ElideRight, tr_rect.width())
+            p.drawText(
+                tr_rect,
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                elided,
+            )
+            p.end()
+            return
         txt_w = self.fontMetrics().horizontalAdvance(txt)
         x = float(tr_rect.left()) - self._offset
         p.drawText(
@@ -2024,23 +2199,23 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         row.setSpacing(6)
         row.addStretch(1)
 
-        self.lock_btn = QtWidgets.QPushButton("[STATIC_LOCK: OFF]")
+        self.lock_btn = QtWidgets.QPushButton("[STATIC_DECOR: OFF]")
         self.lock_btn.setObjectName("acidStaticLockBtn")
         self.lock_btn.setCheckable(True)
-        self.lock_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.lock_btn.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         self.lock_btn.setFixedHeight(19)
         self.lock_btn.toggled.connect(self._on_lock_btn_toggled)
         self.lock_help = HelpBadge(
-            "静态锁定 (STATIC_LOCK) 与遥测微动画",
+            "静态装饰锁定 (STATIC_DECOR) 与遥测微动画",
             "• 右侧卡片上的跳动圆点、信号能量柱及电池分段条属于「遥测微动画」，开启音乐动态响应后会随音量与高潮实时变化。\n"
-            "• 点击 [STATIC_LOCK] 可立即冻结主屏幕实时频谱/和弦刷新与全部微动画，方便静态读谱或截图并进一步降低功耗。",
+            "• 点击 [STATIC_DECOR] 可立即冻结底部装饰微动画（不影响主屏幕实时频谱/和弦刷新；如需冻结主屏幕请点顶栏「暂停/冻结画面」）。",
         )
         row.addWidget(self.lock_btn)
         row.addWidget(self.lock_help)
 
     def _on_lock_btn_toggled(self, checked: bool) -> None:
         self._locked = bool(checked)
-        self.lock_btn.setText("[STATIC_LOCK: ON]" if self._locked else "[STATIC_LOCK: OFF]")
+        self.lock_btn.setText("[STATIC_DECOR: ON]" if self._locked else "[STATIC_DECOR: OFF]")
         self.update()
         self.static_lock_toggled.emit(self._locked)
 
@@ -2052,7 +2227,7 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         self._locked = val
         self.lock_btn.blockSignals(True)
         self.lock_btn.setChecked(val)
-        self.lock_btn.setText("[STATIC_LOCK: ON]" if val else "[STATIC_LOCK: OFF]")
+        self.lock_btn.setText("[STATIC_DECOR: ON]" if val else "[STATIC_DECOR: OFF]")
         self.lock_btn.blockSignals(False)
         self.update()
 
@@ -2447,8 +2622,12 @@ QLineEdit:focus,
 QSpinBox:focus,
 QDoubleSpinBox:focus,
 QTableWidget:focus,
+QCheckBox:focus,
+QRadioButton:focus,
+QSlider:focus,
+QTabBar::tab:focus,
 QToolButton#helpBadge:focus {{
-    border: 1px solid {p.accent};
+    border: 2px solid {p.accent_secondary};
     outline: none;
 }}
 
@@ -2585,8 +2764,8 @@ QGroupBox#historyPaperDock {{
     border-radius: 0px;
 }}
 QGroupBox#historyPaperDock::title {{
-    background-color: {p.dock_ink};
-    color: {'#FFFFFF' if is_light else '#CEFF18'};
+    background-color: {p.dock_ink if is_light else p.bg_elevated};
+    color: {'#FFFFFF' if is_light else p.accent};
     border-left: 3px solid {p.accent};
     padding: 1px 8px;
 }}
@@ -2603,7 +2782,7 @@ QGroupBox#historyPaperDock QToolButton {{
 QGroupBox#historyPaperDock QPushButton:hover:enabled,
 QGroupBox#historyPaperDock QToolButton:hover:enabled {{
     background-color: {p.dock_ink};
-    color: #FFFFFF;
+    color: {'#FFFFFF' if is_light else p.text_inverse};
     border-color: {p.dock_ink};
 }}
 QGroupBox#historyPaperDock QToolButton#helpBadge {{
@@ -3447,4 +3626,15 @@ def apply_acid_plot_theme(
         axis.setTickFont(tick_font)
         axis.setPen(p.plot_tick_pen)
         axis.setTextPen(axis_col)
+        try:
+            axis.labelStyle["color"] = axis_col
+            if axis.labelText:
+                axis.setLabel(
+                    text=axis.labelText,
+                    units=axis.labelUnits,
+                    unitPrefix=axis.labelUnitPrefix,
+                    color=axis_col,
+                )
+        except Exception:
+            pass
 

@@ -60,7 +60,7 @@ def test_help_badge_no_focus_popup_and_focus_ring_reset_on_tab_and_deactivate() 
     app.processEvents()
 
     try:
-        assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.NoFocus
+        assert badge.focusPolicy() == QtCore.Qt.FocusPolicy.TabFocus
         # focusInEvent must NEVER auto-show _HelpPopover
         QtWidgets.QApplication.sendEvent(
             badge,

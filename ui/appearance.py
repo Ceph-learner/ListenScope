@@ -836,7 +836,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         telem_row.setSpacing(10)
         self._telemetry_strength_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self._telemetry_strength_slider.setRange(0, 100)
-        self._telemetry_strength_slider.valueChanged.connect(self._on_control_changed)
+        self._telemetry_strength_slider.valueChanged.connect(self._on_debounced_control_changed)
         self._telemetry_strength_lbl = QtWidgets.QLabel("70%")
         self._telemetry_strength_lbl.setMinimumWidth(36)
         self._music_reactive_chk = QtWidgets.QCheckBox("随音乐高潮动态变化")
@@ -887,7 +887,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._font.setRange(11, 20)
         self._font.setSuffix(" px")
         self._font.setAccessibleName("字号")
-        self._font.valueChanged.connect(self._on_control_changed)
+        self._font.valueChanged.connect(self._on_debounced_control_changed)
 
         font_row.addWidget(self._font_family, 1)
         font_row.addWidget(self._font)
@@ -949,7 +949,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         for key, label in (("strength", "折射观感"), ("softness", "玻璃柔化"), ("dispersion", "边缘色散观感")):
             slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
             slider.setRange(0, 100)
-            slider.valueChanged.connect(self._on_control_changed)
+            slider.valueChanged.connect(self._on_debounced_control_changed)
             self._sliders[key] = slider
             optics.addRow(label, slider)
         root.addWidget(self._glass_group)
@@ -1120,6 +1120,16 @@ class AppearanceDialog(QtWidgets.QDialog):
         else:
             self._on_preview(self._initial_appearance)
 
+    def _on_debounced_control_changed(self, *_args) -> None:
+        timer = getattr(self, "_debounce_timer", None)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(120)
+            timer.timeout.connect(lambda: self._refresh_sample(emit_preview=True, sample_only=False))
+            self._debounce_timer = timer
+        timer.start(120)
+
     def _on_control_changed(self, *_args) -> None:
         self._refresh_sample(emit_preview=True)
 
@@ -1134,7 +1144,7 @@ class AppearanceDialog(QtWidgets.QDialog):
         self._bg_image_clear_btn.setEnabled(not is_acid)
         self._glass_group.setEnabled(not is_acid)
 
-    def _refresh_sample(self, *, emit_preview: bool = True) -> None:
+    def _refresh_sample(self, *, emit_preview: bool = True, sample_only: bool = False) -> None:
         appearance = self.values()
         is_acid = appearance.is_acid_locked()
         self._update_acid_lock_state(is_acid)
@@ -1175,8 +1185,9 @@ class AppearanceDialog(QtWidgets.QDialog):
                 is_acid=False,
             )
         self._chrome.apply_frameless(bool(appearance.frameless))
-        # Theme the entire AppearanceDialog consistently with the selected preset & mode
-        self.setStyleSheet(sample_qss)
+        if not sample_only:
+            # Theme the entire AppearanceDialog consistently with the selected preset & mode
+            self.setStyleSheet(sample_qss)
         self._sample.setStyleSheet(sample_qss)
         set_help_mode_enabled(appearance.help_mode)
         set_focus_animations_enabled(appearance.focus_animations)

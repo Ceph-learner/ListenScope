@@ -21,10 +21,11 @@ from analysis.chords import (
 from analysis.chroma import PITCH_CLASSES
 from audio.drum_preview import DrumPreviewPlayer
 from audio.metronome import TapTempoTracker
-from core.i18n import get_current_language, translate_text
+from core.i18n import get_current_language, set_i18n_text, translate_text
 from core.models import AnalysisSnapshot
 from ui.appearance import apply_plot_appearance, set_widget_tone
 from ui.chord_practice import ChordPracticeDialog
+from ui.frame_clock import Ballistics
 from ui.help_badge import HelpBadge
 from ui.acid_style import (
     AcidGraphicOverlay,
@@ -104,6 +105,18 @@ class TuningCentsBar(QtWidgets.QWidget):
             self._display_cents = float(value)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             return
+        self.update()
+
+    def advance_frame(self, dt: float) -> None:
+        """Interpolate needle position on FrameClock ticks."""
+        diff = self._cents - self._display_cents
+        if abs(diff) <= 0.05:
+            if self._display_cents != self._cents:
+                self._display_cents = self._cents
+                self.update()
+            return
+        alpha = 1.0 - math.exp(-max(0.001, float(dt)) / 0.045)
+        self._display_cents += diff * alpha
         self.update()
 
     def set_theme_colors(
@@ -428,17 +441,29 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         )
         rhythm_l.addWidget(rhythm_hdr)
 
+        self._tempo_multiplier: float = 1.0
+        self._raw_detected_bpm: float | None = None
         bpm_hero_row = QtWidgets.QHBoxLayout()
         bpm_hero_row.setContentsMargins(0, 0, 0, 0)
-        bpm_hero_row.setSpacing(8)
+        bpm_hero_row.setSpacing(6)
         self.bpm_lbl = QtWidgets.QLabel("BPM: Unknown")
         self.bpm_lbl.setObjectName("chromaWarnHero")
+        self.tempo_half_btn = QtWidgets.QPushButton("÷2")
+        self.tempo_half_btn.setToolTip("显示与同步半速 BPM (÷2，不改分析器内部状态)")
+        self.tempo_half_btn.setFixedWidth(34)
+        self.tempo_half_btn.clicked.connect(lambda: self._scale_tempo_display(0.5))
+        self.tempo_double_btn = QtWidgets.QPushButton("×2")
+        self.tempo_double_btn.setToolTip("显示与同步倍速 BPM (×2，不改分析器内部状态)")
+        self.tempo_double_btn.setFixedWidth(34)
+        self.tempo_double_btn.clicked.connect(lambda: self._scale_tempo_display(2.0))
         self.bpm_stab_lbl = ElidedLabel("节拍稳定度: Unknown")
         self.bpm_stab_lbl.setObjectName("chromaCaption")
         self._bpm_dots = DotMatrixWidget(0, 5)
         self._bpm_dots.setVisible(False)
         self._dot_matrices.append(self._bpm_dots)
         bpm_hero_row.addWidget(self.bpm_lbl)
+        bpm_hero_row.addWidget(self.tempo_half_btn)
+        bpm_hero_row.addWidget(self.tempo_double_btn)
         bpm_hero_row.addWidget(self.bpm_stab_lbl, 1)
         bpm_hero_row.addWidget(self._bpm_dots)
 
@@ -610,6 +635,15 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         splitter.setChildrenCollapsible(False)
 
         self._chroma_bar_heights = np.zeros(12, dtype=np.float32)
+        self._chroma_x_idx = np.arange(12, dtype=np.float32)
+        self._chroma_ballistics = Ballistics(
+            12,
+            floor_val=0.0,
+            mode="linear",
+            release_tau=0.20,
+            hold_sec=1.2,
+            peak_fall_rate=0.6,
+        )
         self._label_cache: dict[int, str] = {}
 
         self.chroma_bar_plot = pg.PlotWidget(title="12-BIN CHROMA // 实时色度分布")
@@ -624,13 +658,22 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         ax = self.chroma_bar_plot.getAxis("bottom")
         ax.setTicks([[(i, name) for i, name in enumerate(PITCH_CLASSES)]])
         self._bar_item = pg.BarGraphItem(
-            x=np.arange(12, dtype=np.float32),
+            x=self._chroma_x_idx,
             height=self._chroma_bar_heights,
             width=0.65,
             brush="#00A878",
             pen=pg.mkPen("#008F66", width=0.8),
         )
         self.chroma_bar_plot.addItem(self._bar_item)
+        self._chroma_peak_item = pg.ScatterPlotItem(
+            x=self._chroma_x_idx,
+            y=self._chroma_bar_heights,
+            symbol="_",
+            size=16,
+            pen=pg.mkPen("#F59E0B", width=2.0),
+            brush=None,
+        )
+        self.chroma_bar_plot.addItem(self._chroma_peak_item)
         splitter.addWidget(self.chroma_bar_plot)
 
         self.chroma_hist_plot = pg.PlotWidget(title="CHROMA HEATMAP // 有界时序热图 (30s)")
@@ -806,15 +849,15 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     def _on_tap_tempo_clicked(self) -> None:
         tap_bpm = self._tap_tracker.tap()
         if tap_bpm is None:
-            self.tap_status_lbl.setText(f"Tap x{self._tap_tracker.tap_count} (继续点击...)")
+            set_i18n_text(self.tap_status_lbl, f"Tap x{self._tap_tracker.tap_count} (继续点击...)")
             return
-        self.tap_status_lbl.setText(f"Tap={tap_bpm:.1f} BPM")
+        set_i18n_text(self.tap_status_lbl, f"Tap={tap_bpm:.1f} BPM")
         self.metronome_bpm_spin.setValue(tap_bpm)
 
     def _on_adopt_bpm_clicked(self) -> None:
         if self._latest_detected_bpm is not None:
             self.metronome_bpm_spin.setValue(round(self._latest_detected_bpm, 1))
-            self.tap_status_lbl.setText(f"已同步 {self._latest_detected_bpm:.1f} BPM")
+            set_i18n_text(self.tap_status_lbl, f"已同步 {self._latest_detected_bpm:.1f} BPM")
 
     def _on_metronome_vol_slider_changed(self, value: int) -> None:
         self.metronome_vol_lbl.setText(f"音量: {int(value)}%")
@@ -831,7 +874,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.auto_reset_chk.setChecked(bool(enabled))
             self.auto_reset_chk.blockSignals(False)
         if track_status_text is not None:
-            self.track_status_lbl.setText(track_status_text)
+            set_i18n_text(self.track_status_lbl, track_status_text)
 
     def sync_metronome_ui(
         self,
@@ -1140,21 +1183,42 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         bpm_pips = 0 if tp.bpm is None else {"High": 4, "Medium": 3, "Low": 2}.get(tp.stability, 1)
         self._bpm_dots.set_state(bpm_pips)
         if tp.bpm is not None:
-            self._latest_detected_bpm = float(tp.bpm)
+            self._raw_detected_bpm = float(tp.bpm)
+            disp_bpm = round(max(30.0, min(240.0, self._raw_detected_bpm * self._tempo_multiplier)), 1)
+            self._latest_detected_bpm = disp_bpm
             if not self.adopt_bpm_btn.isEnabled():
                 self.adopt_bpm_btn.setEnabled(True)
-            self._set_cached_text(self.bpm_lbl, f"BPM: {tp.bpm:.1f}")
+            self._set_cached_text(self.bpm_lbl, f"BPM: {disp_bpm:.1f}")
         else:
+            self._raw_detected_bpm = None
             self._latest_detected_bpm = None
             if self.adopt_bpm_btn.isEnabled():
                 self.adopt_bpm_btn.setEnabled(False)
             self._set_cached_text(self.bpm_lbl, "BPM: Unknown")
-        self._set_cached_text(self.bpm_stab_lbl, f"节拍稳定度: {tp.stability} (自相关峰: {tp.confidence_score:.2f})")
+        alt_txt = f" | 候选: {tp.alt_bpm:.1f}" if getattr(tp, "alt_bpm", None) is not None else ""
+        self._set_cached_text(self.bpm_stab_lbl, f"节拍稳定度: {tp.stability} (自相关峰: {tp.confidence_score:.2f}){alt_txt}")
 
         if snap.chroma_12 and len(snap.chroma_12) == 12:
+            self._chroma_ballistics.set_target(snap.chroma_12)
             self._chroma_bar_heights[:] = snap.chroma_12
             self._bar_item.setOpts(height=self._chroma_bar_heights)
 
         if chroma_history is not None and chroma_history.size > 0:
             self._chroma_img.setImage(chroma_history, autoLevels=False, levels=(0.0, 0.9))
+
+    def _scale_tempo_display(self, factor: float) -> None:
+        self._tempo_multiplier = max(0.25, min(4.0, self._tempo_multiplier * float(factor)))
+        if self._raw_detected_bpm is not None:
+            disp_bpm = round(max(30.0, min(240.0, self._raw_detected_bpm * self._tempo_multiplier)), 1)
+            self._latest_detected_bpm = disp_bpm
+            self._set_cached_text(self.bpm_lbl, f"BPM: {disp_bpm:.1f}")
+
+    def advance_frame(self, dt: float) -> None:
+        self.tuning_bar.advance_frame(dt)
+        cur, pk = self._chroma_ballistics.step(dt)
+        self._bar_item.setOpts(height=cur)
+        self._chroma_peak_item.setData(self._chroma_x_idx, pk, skipFiniteCheck=True)
+
+
+ChromaChordWidget = ChromaAndHarmonyWidget
 

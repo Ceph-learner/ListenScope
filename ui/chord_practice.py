@@ -24,7 +24,7 @@ from analysis.chord_practice import (
 from analysis.chords import transpose_chord_symbol, transpose_key_label
 from audio.drum_preview import DrumPreviewPlayer
 from core.appearance import Appearance
-from core.i18n import get_current_language, translate_widget_tree
+from core.i18n import get_current_language, set_i18n_text, translate_widget_tree
 from core.models import KeyEstimate
 from core.paths import default_export_dir
 from ui.acid_style import FramelessDialogChrome, TelemetryHeader, acid_stylesheet, get_acid_palette
@@ -308,7 +308,7 @@ class ChordPracticeDialog(QtWidgets.QDialog):
         translate_widget_tree(self, get_current_language())
 
     def _set_feedback(self, text: str, tone: str = "info") -> None:
-        self._feedback_lbl.setText(text)
+        set_i18n_text(self._feedback_lbl, text)
         set_widget_tone(self._feedback_lbl, tone)
 
     def tempo_bpm(self) -> float:

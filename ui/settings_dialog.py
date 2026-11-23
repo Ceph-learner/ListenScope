@@ -30,7 +30,7 @@ from core.bootstrap_manager import (
     get_bootstrap_manager,
 )
 from core.config import AIConfig, ResourceLimits, TargetHardwareSpec
-from core.i18n import LANGUAGES, translate_widget_tree
+from core.i18n import LANGUAGES, set_i18n_text, translate_widget_tree
 from core.logging import active_log_dir
 from core.models import SystemHardwareReport
 from core.paths import (
@@ -1359,8 +1359,9 @@ class SettingsDialog(QtWidgets.QDialog):
             speed = str(snap.get("speed", "") or "").strip()
             mirror = str(snap.get("mirror", "") or "").strip()
             parts = [p for p in (stage, speed, f"源: {mirror}" if mirror else "") if p]
-            self.bootstrap_meta_lbl.setText(
-                " | ".join(parts) if parts else "待命：支持多源下载，低速或断流时自动切换高速镜像"
+            set_i18n_text(
+                self.bootstrap_meta_lbl,
+                " | ".join(parts) if parts else "待命：支持多源下载，低速或断流时自动切换高速镜像",
             )
         tone = str(snap.get("tone", "info") or "info")
         set_widget_tone(self.bootstrap_status_lbl, tone)

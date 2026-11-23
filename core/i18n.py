@@ -556,6 +556,58 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "[OK] 환경 구성 및 검증 완료(GPU AI 준비됨). 아래 저장을 누르면 바로 사용할 수 있습니다!",
         "ja": "[OK] 環境構築と検証が完了しました（GPU AI 準備完了）。「設定を保存」を押してすぐ利用できます！",
     },
+    "⏸ 冻结画面": {"en": "⏸ Freeze View", "ko": "⏸ 화면 고정", "ja": "⏸ 画面固定"},
+    "▶ 恢复画面": {"en": "▶ Resume View", "ko": "▶ 화면 재개", "ja": "▶ 画面再開"},
+    "⋯ 更多": {"en": "⋯ More", "ko": "⋯ 더보기", "ja": "⋯ その他"},
+    "▴ 收起更多": {"en": "▴ Less", "ko": "▴ 접기", "ja": "▴ 閉じる"},
+    "波形与 FFT 频谱": {"en": "Waveform & FFT", "ko": "파형 및 FFT 스펙트럼", "ja": "波形と FFT スペクトル"},
+    "频带能量与声谱图": {"en": "Bands & Spectrogram", "ko": "대역 에너지 및 스펙트로그램", "ja": "帯域エネルギーとスペクトログラム"},
+    "▾ 收起 A/B": {"en": "▾ Collapse A/B", "ko": "▾ A/B 접기", "ja": "▾ A/B を折りたたむ"},
+    "▸ 展开 A/B": {"en": "▸ Expand A/B", "ko": "▸ A/B 펼치기", "ja": "▸ A/B を展開"},
+    "时间 (秒)": {"en": "Time (s)", "ko": "시간 (초)", "ja": "時間 (秒)"},
+    "最小化窗口": {"en": "Minimize Window", "ko": "창 최소화", "ja": "ウィンドウを最小化"},
+    "最大化 / 还原窗口": {"en": "Maximize / Restore Window", "ko": "창 최대화 / 복원", "ja": "ウィンドウの最大化 / 復元"},
+    "关闭 ListenScope": {"en": "Close ListenScope", "ko": "ListenScope 닫기", "ja": "ListenScope を閉じる"},
+    "冻结/恢复实时频谱、和弦、调性与音准画面刷新 (快捷键 F)": {
+        "en": "Freeze/Resume live spectrum, chord, key & pitch display (Shortcut: F)",
+        "ko": "실시간 스펙트럼, 코드, 조성 및 음정 표시 일시정지/재개 (단축키 F)",
+        "ja": "リアルタイムスペクトル・コード・調・音程表示の固定/再開 (ショートカット F)",
+    },
+    "展开或收起 A/B 微调、导出、缩放与书签控件": {
+        "en": "Expand or collapse A/B fine-tune, export, zoom & bookmark controls",
+        "ko": "A/B 미세 조정, 내보내기, 확대/축소 및 북마크 컨트롤 펼치기/접기",
+        "ja": "A/B 微調整・書き出し・ズーム・ブックマークの展開/折りたたみ",
+    },
+    "历史波形时间轴（秒）": {
+        "en": "History Waveform Timeline (sec)",
+        "ko": "히스토리 파형 타임라인 (초)",
+        "ja": "履歴波形タイムライン（秒）",
+    },
+    "FFT 频谱倾斜补偿 (dB/oct)": {
+        "en": "FFT Spectrum Slope Tilt (dB/oct)",
+        "ko": "FFT 스펙트럼 기울기 보정 (dB/oct)",
+        "ja": "FFT スペクトル傾斜補正 (dB/oct)",
+    },
+    "峰值 > -0.3 dBFS 削波锁存灯（点击清除）": {
+        "en": "Peak > -0.3 dBFS Clip Latch Indicator (Click to clear)",
+        "ko": "피크 > -0.3 dBFS 클리핑 래치 표시등 (클릭하여 해제)",
+        "ja": "ピーク > -0.3 dBFS クリップラッチ表示（クリックで解除）",
+    },
+    "折叠或展开底部 120 秒历史缓冲与 A/B 分轨面板": {
+        "en": "Collapse or expand the 120s history buffer & A/B stem panel",
+        "ko": "하단 120초 히스토리 버퍼 및 A/B 분리 패널 접기/펼치기",
+        "ja": "下部の 120 秒履歴バッファ・A/B 分離パネルを折りたたむ/展開",
+    },
+    "静态装饰锁定 (STATIC_DECOR) 与遥测微动画": {
+        "en": "Static Decor Lock (STATIC_DECOR) & Telemetry Micro-Animations",
+        "ko": "정적 장식 잠금 (STATIC_DECOR) 및 텔레메트리 미세 애니메이션",
+        "ja": "静的装飾ロック (STATIC_DECOR) とテレメトリ微細アニメーション",
+    },
+    "• 右侧卡片上的跳动圆点、信号能量柱及电池分段条属于「遥测微动画」，开启音乐动态响应后会随音量与高潮实时变化。\n• 点击 [STATIC_DECOR] 可立即冻结底部装饰微动画（不影响主屏幕实时频谱/和弦刷新；如需冻结主屏幕请点顶栏「暂停/冻结画面」）。": {
+        "en": "• The pulsing dots, band strips, and segmented battery bar are decorative telemetry micro-animations that react to audio energy when enabled.\n• Click [STATIC_DECOR] to freeze decorative animations without pausing live spectrum/chord updates (use the topbar Freeze View button to pause live plots).",
+        "ko": "• 우측 카드의 맥동 점, 대역 스트립 및 배터리 분할 바는 오디오 에너지에 반응하는 장식용 텔레메트리 미세 애니메이션입니다.\n• [STATIC_DECOR]를 클릭하면 실시간 스펙트럼/코드 갱신에 영향을 주지 않고 장식 애니메이션만 즉시 고정할 수 있습니다.",
+        "ja": "• 右側カードのパルス点・帯域ストリップ・バッテリーバーはオーディオに連動する装飾マイクロアニメーションです。\n• [STATIC_DECOR] を押すとリアルタイムスペクトル/コード更新を止めずに装飾アニメーションのみ固定できます。",
+    },
 }
 
 _PREFIX_REPLACEMENTS: tuple[tuple[str, dict[str, str]], ...] = (
@@ -661,6 +713,17 @@ def _translate_cached(
     target = orig_str if code == "zh" else translate_text(orig_str, code)
     if target is not None and cur != target:
         apply_fn(target)
+
+
+def set_i18n_text(widget: QtCore.QObject, zh_text: str) -> None:
+    """Update a dynamic widget's text while refreshing _ls_orig_text for language switches."""
+    orig = str(zh_text)
+    widget.setProperty("_ls_orig_text", orig)
+    code = get_current_language()
+    target = orig if code == "zh" else translate_text(orig, code)
+    setter = getattr(widget, "setText", None)
+    if callable(setter):
+        setter(target)
 
 
 def translate_widget_tree(root: QtWidgets.QWidget, lang: str) -> None:
@@ -777,7 +840,16 @@ def translate_widget_tree(root: QtWidgets.QWidget, lang: str) -> None:
                         f"_ls_orig_axis_{ax_name}",
                         code,
                         apply_fn=lambda t, _pi=plot_item, _an=ax_name: _pi.setLabel(
-                            _an, t, **{"font-size": "9pt"}
+                            _an,
+                            t,
+                            **(
+                                {
+                                    "font-size": "9pt",
+                                    "color": _pi.getAxis(_an).labelStyle["color"],
+                                }
+                                if _pi.getAxis(_an).labelStyle.get("color")
+                                else {"font-size": "9pt"}
+                            ),
                         ),
                     )
 

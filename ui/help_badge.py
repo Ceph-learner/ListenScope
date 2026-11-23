@@ -6,8 +6,24 @@ Zero QGraphicsEffect usage for minimal RAM and smooth 60fps interaction.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 import weakref
 from typing import Optional
+
+
+def system_animations_enabled() -> bool:
+    """Return False when Windows 'Show animations in Windows' (SPI_GETCLIENTAREAANIMATION=0x1042) is off."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        val = ctypes.c_int(1)
+        ok = ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(val), 0)
+        if ok:
+            return bool(val.value)
+    except Exception:
+        pass
+    return True
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -312,12 +328,12 @@ class HelpBadge(QtWidgets.QAbstractButton):
     def __init__(
         self,
         title: str,
-        explanation: str,
+        explanation: str = "",
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._orig_title = str(title).strip()
-        self._orig_explanation = str(explanation).strip()
+        self._orig_explanation = str(explanation).strip() or self._orig_title
         self._title = self._orig_title
         self._explanation = self._orig_explanation
         self._hover_progress: float = 0.0
@@ -325,10 +341,11 @@ class HelpBadge(QtWidgets.QAbstractButton):
 
         self.setObjectName("helpBadge")
         self.setText("?")
-        self.setFixedSize(22, 22)
+        badge_sz = max(24, self.fontMetrics().height() + 6)
+        self.setFixedSize(badge_sz, badge_sz)
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
         self.setCursor(QtCore.Qt.CursorShape.WhatsThisCursor)
-        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.TabFocus)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
 
         self._hover_anim = QtCore.QVariantAnimation(self)
@@ -338,7 +355,7 @@ class HelpBadge(QtWidgets.QAbstractButton):
 
         self._hover_show_timer = QtCore.QTimer(self)
         self._hover_show_timer.setSingleShot(True)
-        self._hover_show_timer.setInterval(110)
+        self._hover_show_timer.setInterval(450)
         self._hover_show_timer.timeout.connect(self._show_help_popup)
 
         self.clicked.connect(self._show_help_popup)
@@ -411,12 +428,16 @@ class HelpBadge(QtWidgets.QAbstractButton):
             and (win is None or (self.isVisibleTo(win) and win.isVisible() and win.isActiveWindow()))
         )
         if can_show:
+            already_open = _SHARED_POPOVER is not None and _is_qt_valid(_SHARED_POPOVER) and _SHARED_POPOVER.isVisible()
             if _SHARED_POPOVER is not None:
                 try:
                     _SHARED_POPOVER.cancel_hide()
                 except RuntimeError:
                     pass
-            self._hover_show_timer.start()
+            if already_open:
+                self._show_help_popup()
+            else:
+                self._hover_show_timer.start()
         super().enterEvent(event)
 
     def leaveEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
@@ -455,6 +476,31 @@ class HelpBadge(QtWidgets.QAbstractButton):
         self._pressed = False
         self.update()
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # type: ignore[override]
+        key = event.key()
+        if key in (
+            QtCore.Qt.Key.Key_Return,
+            QtCore.Qt.Key.Key_Enter,
+            QtCore.Qt.Key.Key_Space,
+            QtCore.Qt.Key.Key_F1,
+        ):
+            if (
+                _SHARED_POPOVER is not None
+                and _is_qt_valid(_SHARED_POPOVER)
+                and _SHARED_POPOVER.isVisible()
+                and _SHARED_POPOVER._anchor is self
+            ):
+                _SHARED_POPOVER.hide()
+            else:
+                self._show_help_popup()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_Escape and _SHARED_POPOVER is not None and _is_qt_valid(_SHARED_POPOVER):
+            _SHARED_POPOVER.hide()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _show_help_popup(self) -> None:
         if not _HELP_MODE_ENABLED or self.isHidden() or self.parentWidget() is None:
@@ -644,11 +690,11 @@ class _TooltipOnlyOnHelpBadgeFilter(QtCore.QObject):
         try:
             et = event.type()
             if et == QtCore.QEvent.Type.ToolTip:
-                if isinstance(obj, HelpBadge):
-                    return False
-                QtWidgets.QToolTip.hideText()
-                event.accept()
-                return True
+                if bool(obj.property("lsSuppressTip")):
+                    QtWidgets.QToolTip.hideText()
+                    event.accept()
+                    return True
+                return False
             if _SHARED_POPOVER is not None and _is_qt_valid(_SHARED_POPOVER) and _SHARED_POPOVER.isVisible():
                 if et in (
                     QtCore.QEvent.Type.WindowDeactivate,
@@ -761,8 +807,13 @@ class FocusRingAnimator(QtCore.QObject):
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = bool(enabled)
-        if not self._enabled:
-            self._reset_focus_state()
+        if not self._enabled and self._current_target is not None and _is_qt_valid(self._overlay):
+            if _is_qt_valid(self._anim):
+                self._anim.stop()
+            if _is_qt_valid(self._fade_anim):
+                self._fade_anim.stop()
+            self._alpha = 1.0
+            self._overlay.set_state(self._end_rect, 1.0)
 
     def set_style(self, style: str) -> None:
         if not self._torn_down and _is_qt_valid(self._overlay):
@@ -818,7 +869,7 @@ class FocusRingAnimator(QtCore.QObject):
     def _focus_widget(self, w: QtWidgets.QWidget) -> None:
         if self._torn_down or not _is_qt_valid(self) or not _is_qt_valid(self._root) or not _is_qt_valid(w):
             return
-        if not self._enabled or not self._root.isVisible() or not w.isVisible() or not w.isEnabled():
+        if not self._root.isVisible() or not w.isVisible() or not w.isEnabled():
             return
         if w.objectName() in (
             "winCloseBtn",
@@ -840,6 +891,18 @@ class FocusRingAnimator(QtCore.QObject):
         if target_rect.width() < 16 or target_rect.height() < 14:
             return
         self._current_target = w
+        if not self._enabled:
+            self._start_rect = target_rect
+            self._end_rect = target_rect
+            self._alpha = 1.0
+            if _is_qt_valid(self._anim):
+                self._anim.stop()
+            if _is_qt_valid(self._fade_anim):
+                self._fade_anim.stop()
+            if _is_qt_valid(self._overlay):
+                self._overlay.set_state(target_rect, 1.0)
+            return
+
         if _is_qt_valid(self._overlay) and self._overlay.isVisible() and not self._overlay._rect.isEmpty():
             self._start_rect = QtCore.QRectF(self._overlay._rect)
         else:
@@ -862,6 +925,11 @@ class FocusRingAnimator(QtCore.QObject):
         if self._torn_down or self._current_target is not w:
             return
         self._current_target = None
+        if not self._enabled:
+            self._alpha = 0.0
+            if _is_qt_valid(self._overlay):
+                self._overlay.set_state(QtCore.QRectF(), 0.0)
+            return
         if _is_qt_valid(self._fade_anim):
             self._fade_anim.stop()
             self._fade_anim.setStartValue(self._alpha)
