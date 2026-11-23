@@ -261,18 +261,26 @@ class KeyDetector:
         modulation = False
         if active.shape[0] >= self._min_active_frames * 2:
             mid = active.shape[0] // 2
-            h1_idx, _, h1_corr, _ = self._score_mean_chroma(
+            h1_idx, _, h1_corr, h1_margin = self._score_mean_chroma(
                 active[:mid],
                 frame_weights=active_w[:mid] if active_w is not None else None,
                 bass_mat=active_b[:mid] if active_b is not None else None,
             )
-            h2_idx, _, h2_corr, _ = self._score_mean_chroma(
+            h2_idx, _, h2_corr, h2_margin = self._score_mean_chroma(
                 active[mid:],
                 frame_weights=active_w[mid:] if active_w is not None else None,
                 bass_mat=active_b[mid:] if active_b is not None else None,
             )
-            if h1_idx != h2_idx and h1_corr >= 0.55 and h2_corr >= 0.55:
+            if (
+                h1_idx != h2_idx
+                and h1_corr >= 0.70
+                and h2_corr >= 0.70
+                and h1_margin >= 0.05
+                and h2_margin >= 0.05
+            ):
                 modulation = True
+                primary = self._names[h2_idx]
+                secondary = self._names[h1_idx]
                 relation_notes.append(f"疑似转调: {self._names[h1_idx]} -> {self._names[h2_idx]}")
 
         if margin >= 0.08 and b_corr >= 0.65 and not modulation:

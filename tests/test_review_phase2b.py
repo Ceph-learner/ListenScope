@@ -208,7 +208,6 @@ def test_ah5_minor_cadence_with_c2_bass_not_misclassified_as_parallel_major() ->
     assert res["major_I_IV_V_I_acc"] >= 90.0, f"Major I-IV-V-I accuracy dropped to {res['major_I_IV_V_I_acc']}%"
 
 
-@pytest.mark.xfail(strict=True, reason="A-L7")
 def test_al7_key_modulation_returns_second_half_key_not_third_key() -> None:
     """When C major modulates to Eb major mid-window, primary key must be Eb major (second half), not C minor."""
     from analysis.chroma import ChromaExtractor
