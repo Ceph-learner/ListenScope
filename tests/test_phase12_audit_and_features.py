@@ -656,6 +656,7 @@ def test_phase12_overview_ab_drag_wav_export_sevenths_and_table_seek(tmp_path: P
         # Export A/B excerpt WAV directly
         ab_out = tmp_path / "exports" / "ab_clip.wav"
         ctrl._on_export_ab_wav(str(ab_out))
+        ctrl.wait_pending_io()
         assert ab_out.exists()
         info = sf.info(str(ab_out))
         assert info.samplerate == 48000 and info.channels == 2

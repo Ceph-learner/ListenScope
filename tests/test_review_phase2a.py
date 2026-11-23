@@ -128,7 +128,6 @@ def test_e6_resource_manager_caches_nvidia_smi_outside_lock(monkeypatch: pytest.
     assert calls["n"] == 1, f"nvidia-smi was called {calls['n']} times within <2s instead of cached"
 
 
-@pytest.mark.xfail(strict=True, reason="E7")
 def test_e7_heavy_export_and_import_handlers_dispatch_off_gui_thread() -> None:
     """_on_export_ab_wav / _on_export_mix / _on_import_audio_file must run heavy work on background thread."""
     src = (REPO_ROOT / "main.py").read_text("utf-8")

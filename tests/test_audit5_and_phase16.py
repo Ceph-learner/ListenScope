@@ -575,6 +575,7 @@ def test_settings_v2_backward_compat_ui_transposition_and_stale_generation_guard
         cw.metronome_overlay_chk.setChecked(True)
         ab_wav_path = tmp_path / "ctrl_ab_practice.wav"
         ctrl._on_export_ab_wav(str(ab_wav_path))
+        ctrl.wait_pending_io()
         assert ab_wav_path.exists()
         assert "0.75x" in ctrl.window.notice_banner.text()
 

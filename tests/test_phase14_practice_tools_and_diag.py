@@ -310,6 +310,7 @@ def test_controller_phase14_integration_bookmarks_metronome_and_diag(tmp_path: P
         assert ctrl.window.bookmark_combo.count() == 1
         wav_path = _write_silent_or_tone_wav(tmp_path / "song.wav", seconds=1.5, amp=0.25)
         ctrl._on_import_audio_file(str(wav_path))
+        ctrl.wait_pending_io()
         assert ctrl.window.bookmark_combo.count() == 0
 
         # 2. Metronome UI two-way overlay sync + Tap/Adopt BPM + mutual exclusion vs A/B play

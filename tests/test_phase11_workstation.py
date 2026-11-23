@@ -517,6 +517,7 @@ def test_phase11_headless_gui_workstation_integration(tmp_path: Path) -> None:
         # 6. Bounded local audio import via controller
         local_wav = _write_sine_wav(tmp_path / "local_import.wav", [(440.0, 2.0)], sr=44100, ch=2)
         ctrl._on_import_audio_file(str(local_wav))
+        ctrl.wait_pending_io()
         app.processEvents()
         assert 1.8 <= ctrl.ring_buffer.available_seconds <= 2.2
         assert ctrl.ab_player.loop_range[1] > ctrl.ab_player.loop_range[0]
