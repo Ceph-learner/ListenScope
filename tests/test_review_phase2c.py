@@ -372,7 +372,6 @@ def test_ub32_fixed_width_controls_elide_with_ellipsis_and_full_tooltip() -> Non
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="P2C-PERF")
 def test_p2c_perf_analyze_latest_once_cpu_within_5ms_median() -> None:
     """A-H1 CPU regression (+3.69ms median over e4c49e8 3.11ms): steady-state analyze_latest_once median must be <= 5.0 ms."""
     import time

@@ -127,6 +127,19 @@ class SpectrumAnalyzer:
         log_power = self._log_fb @ np.square(mag)
         return (10.0 * np.log10(np.maximum(log_power, 1e-12))).astype(np.float32)
 
+    def log_spectrum_batch(self, frames_2d: np.ndarray) -> np.ndarray:
+        """Vectorized log-frequency spectrum dB for a (N, fft_size) batch of mono frames."""
+        frames = np.asarray(frames_2d, dtype=np.float32)
+        if frames.ndim != 2 or frames.shape[0] == 0:
+            return np.empty((0, self.config.log_freq_bins), dtype=np.float32)
+        if not np.all(np.isfinite(frames)):
+            frames = np.nan_to_num(frames, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+        windowed = frames * self._window
+        spec = np.fft.rfft(windowed, axis=1)
+        mag = np.abs(spec) * np.float32(2.0 / self._window_norm)
+        log_power = np.square(mag) @ self._log_fb.T
+        return (10.0 * np.log10(np.maximum(log_power, 1e-12))).astype(np.float32)
+
     def recent_log_spectrogram(self) -> np.ndarray:
         with self._history_lock:
             if not self._log_history:

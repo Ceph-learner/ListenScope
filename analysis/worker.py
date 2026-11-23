@@ -118,13 +118,20 @@ class AnalysisWorker:
         sr = self.audio_config.sample_rate
         fft_size = self.config.fft_size
         window_sec = max(0.1, fft_size / float(sr))
-        _, _, ring_generation = self.ring_buffer.frame_state()
+        _, latest_abs, ring_generation = self.ring_buffer.frame_state()
         if self._onset_generation != ring_generation:
             self.tempo.reset()
             self._onset_cursor = None
             self._onset_generation = ring_generation
 
-        pcm, start_abs, end_abs = self.ring_buffer.read_recent(max(window_sec, 2.0 + window_sec))
+        recent_frames = max(fft_size, int(0.36 * sr))
+        max_read_frames = max(recent_frames, int(round(max(window_sec, 2.0 + window_sec) * sr)))
+        if self._onset_cursor is None:
+            read_frames = max_read_frames
+        else:
+            needed_for_onset = max(0, latest_abs - (self._onset_cursor - fft_size) + self.tempo.hop_frames)
+            read_frames = min(max_read_frames, max(recent_frames, needed_for_onset))
+        pcm, start_abs, end_abs = self.ring_buffer.read_recent(read_frames / float(sr))
         if self._reset_boundary is not None and self._reset_boundary[0] == ring_generation:
             cut = max(0, self._reset_boundary[1] - start_abs)
             pcm = pcm[cut:]
@@ -139,8 +146,10 @@ class AnalysisWorker:
             audio_silent = True
             is_silent = True
         else:
-            mono_all = np.mean(pcm, axis=1, dtype=np.float32)
-            recent_frames = max(fft_size, int(0.36 * sr))
+            if pcm.shape[1] == 2:
+                mono_all = (0.5 * (pcm[:, 0] + pcm[:, 1])).astype(np.float32, copy=False)
+            else:
+                mono_all = np.mean(pcm, axis=1, dtype=np.float32)
             pcm_recent = pcm[-recent_frames:]
             mono_recent = mono_all[-recent_frames:]
             pitch_frames = max(fft_size, int(0.15 * sr))
@@ -187,18 +196,32 @@ class AnalysisWorker:
             else:
                 cursor = self._onset_cursor
 
-            silence_lin = float(10.0 ** (self.config.silence_threshold_dbfs / 20.0))
+            silence_sq = float(10.0 ** (self.config.silence_threshold_dbfs / 10.0))
+            active_slices: list[np.ndarray] = []
+            hop_flags: list[bool] = []
             while cursor <= end_abs:
                 end_off = cursor - start_abs
                 win_slice = mono_all[end_off - fft_size : end_off]
-                frame_rms = float(np.sqrt(np.mean(np.square(win_slice))))
-                if not np.isfinite(frame_rms) or frame_rms < silence_lin:
-                    self.tempo.push_frame(np.empty(0, dtype=np.float32), is_silent=True)
+                mean_sq = float(np.dot(win_slice, win_slice)) / float(fft_size)
+                if not np.isfinite(mean_sq) or mean_sq < silence_sq:
+                    hop_flags.append(True)
                 else:
-                    hop_log_db = self.spectrum.log_spectrum_only(win_slice)
-                    self.tempo.push_frame(hop_log_db, is_silent=False)
+                    hop_flags.append(False)
+                    active_slices.append(win_slice)
                 cursor += hop
             self._onset_cursor = cursor
+            if active_slices:
+                batch_db = self.spectrum.log_spectrum_batch(np.stack(active_slices, axis=0))
+                b_idx = 0
+                for silent_hop in hop_flags:
+                    if silent_hop:
+                        self.tempo.push_frame(np.empty(0, dtype=np.float32), is_silent=True)
+                    else:
+                        self.tempo.push_frame(batch_db[b_idx], is_silent=False)
+                        b_idx += 1
+            else:
+                for _ in hop_flags:
+                    self.tempo.push_frame(np.empty(0, dtype=np.float32), is_silent=True)
 
         tempo_est = self.tempo.maybe_estimate()
 
