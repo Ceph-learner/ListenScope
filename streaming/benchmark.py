@@ -286,7 +286,6 @@ def benchmark_live_model_isolated(
 
 
 def _cli_main() -> int:
-    ipc_out = sys.stdout
     parser = argparse.ArgumentParser(description="ListenScope Isolated Live 2-Stem RTF Benchmark")
     parser.add_argument("--model-id", type=str, default="mdx_low_vram_2stem")
     parser.add_argument("--use-gpu", dest="use_gpu", action="store_true", default=True)
@@ -302,7 +301,16 @@ def _cli_main() -> int:
     ai_cfg = AIConfig(**json.loads(args.ai_config_json_str)) if args.ai_config_json_str else AIConfig()
     aud_cfg = AudioConfig(**json.loads(args.audio_config_json_str)) if args.audio_config_json_str else AudioConfig()
 
+    orig_stdout = sys.stdout
+    ipc_out = sys.stdout
+    owns_ipc_out = False
     if args.json:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        ipc_fd = os.dup(1)
+        os.dup2(2, 1)
+        ipc_out = os.fdopen(ipc_fd, "w", encoding="utf-8", buffering=1)
+        owns_ipc_out = True
         sys.stdout = sys.stderr
     try:
         res = benchmark_live_model(
@@ -326,7 +334,13 @@ def _cli_main() -> int:
             print(f"Benchmark error: {exc}", file=sys.stderr)
         return 1
     finally:
-        sys.stdout = ipc_out
+        if owns_ipc_out:
+            try:
+                ipc_out.flush()
+                ipc_out.close()
+            except Exception:
+                pass
+        sys.stdout = orig_stdout
 
 
 if __name__ == "__main__":

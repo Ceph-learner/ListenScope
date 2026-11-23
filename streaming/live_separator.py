@@ -140,7 +140,11 @@ def _live_worker_entry(
 
 def _external_worker_cli(config_json: Path) -> int:
     """External `.venv-ai` live 2-stem worker communicating via JSON + base64 over stdin/stdout."""
-    ipc_out = sys.stdout
+    sys.stdout.flush()
+    sys.stderr.flush()
+    ipc_fd = os.dup(1)
+    os.dup2(2, 1)
+    ipc_out = os.fdopen(ipc_fd, "w", encoding="utf-8", buffering=1)
     sys.stdout = sys.stderr
 
     def _send(obj: dict[str, Any]) -> None:

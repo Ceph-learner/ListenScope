@@ -163,7 +163,6 @@ def test_e11_track_monitor_uses_per_thread_stop_event() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="E12")
 def test_e12_worker_ipc_duplicates_fd1_to_isolate_native_stdout() -> None:
     """ai/worker.py and streaming/live_separator.py must redirect OS fd 1 (os.dup / os.dup2) for IPC safety."""
     for rel in ("ai/worker.py", "streaming/live_separator.py", "streaming/benchmark.py"):

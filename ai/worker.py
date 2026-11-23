@@ -465,27 +465,32 @@ def spawn_worker_entry(
 
 
 def _cli_main() -> int:
-    ipc_out = sys.stdout
     parser = argparse.ArgumentParser(description="ListenScope isolated AI Worker CLI runner")
     parser.add_argument("--request-json", type=Path, required=True)
     parser.add_argument("--config-json", type=Path, required=True)
     parser.add_argument("--cancel-flag", type=Path, required=True)
     args = parser.parse_args()
 
-    req_dict = json.loads(args.request_json.read_text(encoding="utf-8"))
-    cfg_dict = json.loads(args.config_json.read_text(encoding="utf-8"))
-    req = _deserialize_request(req_dict)
-    cfg = AIConfig(**cfg_dict)
-
-    def _emit(prog: AIJobProgress) -> None:
-        print(
-            json.dumps({"type": "progress", "payload": _serialize_dataclass(prog)}),
-            file=ipc_out,
-            flush=True,
-        )
-
+    sys.stdout.flush()
+    sys.stderr.flush()
+    ipc_fd = os.dup(1)
+    os.dup2(2, 1)
+    ipc_out = os.fdopen(ipc_fd, "w", encoding="utf-8", buffering=1)
+    orig_stdout = sys.stdout
     sys.stdout = sys.stderr
     try:
+        req_dict = json.loads(args.request_json.read_text(encoding="utf-8"))
+        cfg_dict = json.loads(args.config_json.read_text(encoding="utf-8"))
+        req = _deserialize_request(req_dict)
+        cfg = AIConfig(**cfg_dict)
+
+        def _emit(prog: AIJobProgress) -> None:
+            print(
+                json.dumps({"type": "progress", "payload": _serialize_dataclass(prog)}),
+                file=ipc_out,
+                flush=True,
+            )
+
         res = execute_worker_job(
             req,
             cancel_check=args.cancel_flag.exists,
@@ -499,7 +504,12 @@ def _cli_main() -> int:
         )
         return 0 if res.state in (AIJobState.COMPLETED, AIJobState.CANCELLED) else 1
     finally:
-        sys.stdout = ipc_out
+        try:
+            ipc_out.flush()
+            ipc_out.close()
+        except Exception:
+            pass
+        sys.stdout = orig_stdout
 
 
 if __name__ == "__main__":
