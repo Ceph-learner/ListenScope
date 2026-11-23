@@ -237,15 +237,27 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.job_status_lbl = QtWidgets.QLabel("空闲：请在下方 120s 历史时间轴选择片段并启动 2-Stem 或 4-Stem 分轨")
         self.job_status_lbl.setWordWrap(True)
         self.job_status_lbl.setMinimumHeight(self.job_status_lbl.fontMetrics().height() + 4)
+        self._ai_job_start_t: Optional[float] = None
+        self._ai_last_chunk: int = 0
+        self._ai_last_chunk_t: float = 0.0
+        self._ai_chunk_ema: Optional[float] = None
+        self._ai_last_state: Optional[AIJobState] = None
+
         self.job_progress = SegmentedBatteryProgressBar(cells=16)
         self.job_progress.setRange(0, 100)
         self.job_progress.setValue(0)
-        self.job_progress.setFixedSize(212, 22)
+        self.job_progress.setMinimumWidth(160)
+        self.job_progress.setFixedHeight(22)
+        self.job_progress.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.progress_bar = self.job_progress
         self.cancel_btn = QtWidgets.QPushButton("取消任务")
         self.cancel_btn.setEnabled(False)
-        self.cancel_btn.clicked.connect(self.cancel_ai_requested.emit)
-        job_l.addWidget(self.job_status_lbl, 1)
-        job_l.addWidget(self.job_progress)
+        self.cancel_btn.clicked.connect(self._on_cancel_btn_clicked)
+        job_l.addWidget(self.job_status_lbl, 2)
+        job_l.addWidget(self.job_progress, 1)
         job_l.addWidget(self.cancel_btn)
         root.addWidget(job_box)
 
@@ -1278,13 +1290,30 @@ class StemMixerWidget(QtWidgets.QWidget):
             if row is not None:
                 row.sync_flags(track.muted, track.solo, track.volume)
 
+    def _on_cancel_btn_clicked(self) -> None:
+        if self._ai_last_state == AIJobState.LOADING_MODEL:
+            set_i18n_text(self.job_status_lbl, "正在取消加载并释放显存…")
+        else:
+            set_i18n_text(self.job_status_lbl, "正在取消任务并释放显存…")
+        self.cancel_ai_requested.emit()
+
     def update_ai_progress(self, prog: AIJobProgress) -> None:
+        import time as _time
+
         running = prog.state in (
             AIJobState.PREPARING,
             AIJobState.LOADING_MODEL,
             AIJobState.INFERRING,
             AIJobState.WRITING,
         )
+        now = _time.monotonic()
+        if running and (self._ai_job_start_t is None or prog.state == AIJobState.PREPARING):
+            self._ai_job_start_t = now
+            self._ai_last_chunk = 0
+            self._ai_last_chunk_t = now
+            self._ai_chunk_ema = None
+        self._ai_last_state = prog.state
+
         self.cancel_btn.setEnabled(running)
         self.clear_results_btn.setEnabled(bool(self._rows) and not running)
         self.job_progress.set_active(running)
@@ -1307,8 +1336,22 @@ class StemMixerWidget(QtWidgets.QWidget):
             if prog.total_chunks > 0 and prog.current_chunk > 0
             else ""
         )
+        eta_parts: list[str] = []
+        if self._ai_job_start_t is not None and running:
+            elapsed = max(0.0, now - self._ai_job_start_t)
+            eta_parts.append(f"已用 {elapsed:.0f}s")
+            if prog.total_chunks > 0 and prog.current_chunk > self._ai_last_chunk:
+                delta_c = prog.current_chunk - self._ai_last_chunk
+                per_chunk = max(0.05, (now - self._ai_last_chunk_t) / float(delta_c))
+                self._ai_chunk_ema = per_chunk if self._ai_chunk_ema is None else (0.35 * per_chunk + 0.65 * self._ai_chunk_ema)
+                self._ai_last_chunk = prog.current_chunk
+                self._ai_last_chunk_t = now
+            if self._ai_chunk_ema is not None and prog.total_chunks > prog.current_chunk:
+                rem = max(0.0, (prog.total_chunks - prog.current_chunk) * self._ai_chunk_ema)
+                eta_parts.append(f"预计剩余 {rem:.0f}s")
         msg_txt = prog.message or chunk_txt or stage_txt
-        set_i18n_text(self.job_status_lbl, f"{stage_txt}：{msg_txt}")
+        suffix = f" ({' · '.join(eta_parts)})" if eta_parts else ""
+        set_i18n_text(self.job_status_lbl, f"{stage_txt}：{msg_txt}{suffix}")
         if running:
             self.oom_banner.setVisible(False)
 

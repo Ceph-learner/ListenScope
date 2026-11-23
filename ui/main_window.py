@@ -2623,6 +2623,21 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             tone = "info"
         set_widget_tone(self.ai_status_badge, tone)
         self.mixer_widget.handle_ai_result(res)
+        if not self.isVisible() or self.isMinimized():
+            try:
+                QtWidgets.QApplication.alert(self, 0)
+            except Exception:
+                pass
+            if getattr(self, "_tray_icon", None) is not None:
+                try:
+                    self._tray_icon.showMessage(
+                        "ListenScope AI 分轨",
+                        f"分轨任务已结束: {res.state.value}",
+                        QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                        4000,
+                    )
+                except Exception:
+                    pass
 
     def update_live_metrics(self, metrics: LiveSeparationMetrics) -> None:
         self.live_widget.update_metrics(metrics)

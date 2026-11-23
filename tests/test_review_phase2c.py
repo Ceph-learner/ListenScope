@@ -181,7 +181,6 @@ def test_ub17_static_lock_split_from_freeze_screen() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="U-B18")
 def test_ub18_ai_progress_localized_stages_and_stretchable_bar() -> None:
     """StemMixerWidget AI progress must display localized stage text (not raw '[INFERRING]') and stretchable progress bar."""
     from audio.playback import StemMixerEngine
