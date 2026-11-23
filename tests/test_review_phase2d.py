@@ -249,3 +249,286 @@ def test_w2_process_loopback_stop_then_start_receives_audio_frames() -> None:
         )
     finally:
         backend.stop()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2D Addendum (Issue #40 updated: W10-W15 & W2 close-button behavior)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="W10")
+def test_w10_handle_ai_result_handles_every_ai_job_state_and_notifies_mixer() -> None:
+    """W10: handle_ai_result must accept every AIJobState without AttributeError and forward to mixer_widget."""
+    from audio.playback import StemMixerEngine
+    from core.config import AIConfig, ResourceLimits
+    from core.models import AIJobResult, AIJobState
+    from core.system_probe import probe_system
+    from ui.main_window import ListenScopeMainWindow
+
+    app = _get_app()
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    seen: list[AIJobState] = []
+    orig_handler = win.mixer_widget.handle_ai_result
+
+    def _spy(res: AIJobResult) -> None:
+        seen.append(res.state)
+        orig_handler(res)
+
+    win.mixer_widget.handle_ai_result = _spy  # type: ignore[method-assign]
+    try:
+        for st in AIJobState:
+            res = AIJobResult(
+                task_id=f"job_{st.name.lower()}",
+                state=st,
+                message=f"state={st.name}",
+                error="simulated error" if st in (AIJobState.FAILED, AIJobState.OOM_ERROR) else None,
+            )
+            win.handle_ai_result(res)
+        app.processEvents()
+        assert len(seen) == len(list(AIJobState)), f"mixer_widget missed states: {set(AIJobState) - set(seen)}"
+    finally:
+        win.close()
+        mixer.close()
+
+
+@pytest.mark.xfail(strict=True, reason="W10")
+def test_w10_ast_guard_all_enum_references_exist() -> None:
+    """W10 AST guard: every AIJobState.<X> and OOMRecoveryAction.<X> reference in production code must exist."""
+    import ast
+    from core.models import AIJobState, OOMRecoveryAction
+
+    enum_map = {
+        "AIJobState": AIJobState,
+        "OOMRecoveryAction": OOMRecoveryAction,
+    }
+    bad: list[str] = []
+    files: list[Path] = [REPO_ROOT / "main.py"]
+    for folder in ("ai", "analysis", "audio", "core", "separation", "streaming", "ui"):
+        files.extend((REPO_ROOT / folder).rglob("*.py"))
+
+    for py in files:
+        tree = ast.parse(py.read_text("utf-8"), filename=str(py))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in enum_map
+            ):
+                enum_cls = enum_map[node.value.id]
+                if not hasattr(enum_cls, node.attr):
+                    bad.append(f"{py.relative_to(REPO_ROOT)}:{node.lineno} {node.value.id}.{node.attr}")
+    assert bad == [], f"Invalid Enum member references found: {bad}"
+
+
+@pytest.mark.xfail(strict=True, reason="W10")
+def test_w10_ui_tick_isolates_queue_handler_exceptions(tmp_path: Path) -> None:
+    """W10: each queue handler in _on_ui_tick must be isolated with try/except + logger.exception."""
+    from core.models import AIJobResult, AIJobState
+    from main import ListenScopeController
+
+    _get_app()
+    ctrl = ListenScopeController(use_mock_ai_for_demo=True, work_dir=tmp_path / "ws_w10")
+    try:
+        # Force handle_ai_result to raise; banner queue must still be drained in the same tick
+        def _boom(_res: AIJobResult) -> None:
+            raise RuntimeError("boom in ai result handler")
+
+        banners: list[str] = []
+        ctrl.window.handle_ai_result = _boom  # type: ignore[method-assign]
+        ctrl.window.show_banner_message = lambda msg, **_kw: banners.append(str(msg))  # type: ignore[method-assign]
+        ctrl._ui_ai_result_q.put(AIJobResult(task_id="t1", state=AIJobState.FAILED, error="err"))
+        ctrl._ui_banner_q.put("still-alive-banner")
+        ctrl._on_ui_tick()
+        assert "still-alive-banner" in banners, "_on_ui_tick aborted subsequent queue handlers on exception"
+    finally:
+        ctrl.shutdown()
+
+
+@pytest.mark.xfail(strict=True, reason="W11")
+def test_w11_realistic_mix_bpm_acc1_at_least_80pct_and_pads_return_none() -> None:
+    """W11: realistic_mix BPM Acc1 must be >= 80%, while steady sine & pure chord pad must still return None."""
+    from tests.bench.realistic_mix import run_realistic_mix_benchmark
+
+    report = run_realistic_mix_benchmark()
+    summary = report["summary"]
+    assert summary["neg_controls_none_pct"] == 100.0, f"Non-rhythmic negative controls leaked BPM: {report['negative_controls']}"
+    assert summary["acc1_pct"] >= 80.0, (
+        f"realistic_mix BPM Acc1 {summary['acc1_pct']}% < 80% "
+        f"(peakiness p50={summary['peakiness_p50']}, p95={summary['peakiness_p95']})"
+    )
+
+
+@pytest.mark.xfail(strict=True, reason="W12")
+def test_w12_polyphonic_mix_falls_back_to_lowpass_bass_pitch_or_poly_notice() -> None:
+    """W12: Polyphonic mix with E2 bass must show bass E2 (+-10c); pure chord pad shows poly notice; 440Hz sine shows A4."""
+    from analysis.worker import AnalysisWorker
+    from audio.ring_buffer import FixedRingBuffer
+    from core.config import AnalysisConfig, AudioConfig
+    from ui.spectrum_widget import SpectrumAnalysisWidget
+
+    sr = 48000
+    step = int(round(sr * 66.67 / 1000.0))
+
+    def _run_pcm(mono: np.ndarray):
+        acfg = AudioConfig(sample_rate=sr, channels=2, ring_buffer_seconds=5)
+        rb = FixedRingBuffer(acfg)
+        w = AnalysisWorker(rb, audio_config=acfg, analysis_config=AnalysisConfig())
+        stereo = np.stack([mono, mono], axis=1).astype(np.float32)
+        snap = None
+        for pos in range(0, stereo.shape[0], step):
+            chunk = stereo[pos : pos + step]
+            if chunk.shape[0] == 0:
+                break
+            rb.write(chunk)
+            snap = w.analyze_latest_once()
+        return snap
+
+    n = int(round(0.8 * sr))
+    t = np.arange(n, dtype=np.float64) / float(sr)
+
+    # 1. E2 bass (82.41 Hz) + C major chord pad (C4/E4/G4/B4)
+    e2_hz = 82.406889
+    bass = 0.28 * (0.7 * np.sin(2.0 * np.pi * e2_hz * t) + 0.3 * np.sin(2.0 * np.pi * 2.0 * e2_hz * t))
+    pad = sum(0.14 * np.sin(2.0 * np.pi * f * t) for f in (261.63, 329.63, 392.00, 493.88, 523.25))
+    snap_bass = _run_pcm((bass + pad).astype(np.float32))
+    assert snap_bass is not None and snap_bass.pitch.note_name == "E2" and snap_bass.pitch.frequency_hz is not None, (
+        f"Expected polyphonic bass fallback E2, got {snap_bass.pitch if snap_bass else None}"
+    )
+    cents_err = abs(1200.0 * np.log2(snap_bass.pitch.frequency_hz / e2_hz))
+    assert cents_err <= 10.0, f"Polyphonic bass E2 error {cents_err:.1f}c > 10c"
+
+    # 2. Pure chord pad without bass -> polyphonic notice, NOT '等待有效音高'
+    snap_pad = _run_pcm(pad.astype(np.float32))
+    assert snap_pad is not None and snap_pad.pitch.note_name is None
+    _get_app()
+    sw = SpectrumAnalysisWidget()
+    try:
+        sw.update_snapshot(snap_pad)
+        detail_txt = sw.pitch_detail.text()
+        assert "等待有效音高" not in detail_txt and ("多声部" in detail_txt or "Poly" in detail_txt), (
+            f"Pure chord pad still showed waiting text instead of polyphonic notice: {detail_txt!r}"
+        )
+    finally:
+        sw.close()
+
+    # 3. Single 440 Hz sine -> A4
+    snap_a4 = _run_pcm((0.35 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32))
+    assert snap_a4 is not None and snap_a4.pitch.note_name == "A4"
+
+
+@pytest.mark.xfail(strict=True, reason="W13")
+def test_w13_viewbox_data_height_waveform_autogain_and_chroma_seconds_axis() -> None:
+    """W13: ViewBox data area height >= 80px at 1420x900 & 1366x768; waveform auto-gain for -38 dBFS; chroma X-axis in seconds."""
+    from audio.playback import StemMixerEngine
+    from core.config import AIConfig, ResourceLimits
+    from core.system_probe import probe_system
+    from ui.main_window import ListenScopeMainWindow
+
+    app = _get_app()
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    try:
+        sw = win.spectrum_widget
+        for w, h in ((1420, 900), (1366, 768)):
+            win.resize(w, h)
+            win.show()
+            app.processEvents()
+            for name, plot in (
+                ("wave_plot", sw.wave_plot),
+                ("spec_plot", sw.spec_plot),
+                ("fft_plot", sw.fft_plot),
+                ("log_plot", sw.log_plot),
+            ):
+                vb_h = float(plot.getViewBox().sceneBoundingRect().height())
+                assert vb_h >= 80.0, f"{name} ViewBox data height {vb_h:.1f}px < 80px at {w}x{h}"
+
+        # Waveform auto-gain support & Chroma X-axis in seconds
+        sw_src = (REPO_ROOT / "ui" / "spectrum_widget.py").read_text("utf-8")
+        assert "auto_gain" in sw_src or "wave_auto_gain" in sw_src, "SpectrumAnalysisWidget missing waveform auto-gain"
+        chroma_src = (REPO_ROOT / "ui" / "chroma_widget.py").read_text("utf-8")
+        assert "秒" in chroma_src or "s)" in chroma_src, "Chroma heatmap X-axis not converted from frame index to seconds"
+    finally:
+        win.close()
+        mixer.close()
+
+
+@pytest.mark.xfail(strict=True, reason="W2-close")
+def test_w2_close_button_prompts_and_respects_remembered_choice_and_inno_setup(tmp_path: Path) -> None:
+    """W2 (updated): close button behavior persisted in schema 2, tray bubble i18n, and Inno Setup CloseApplications/AppMutex."""
+    from core.config import AIConfig, ResourceLimits
+    from core.settings_store import PersistedSettings, load_settings, save_settings
+
+    # 1. Settings schema 2 optional close_behavior field
+    assert hasattr(PersistedSettings, "close_behavior") or hasattr(PersistedSettings, "close_action"), (
+        "PersistedSettings missing optional close_behavior/close_action field (schema 2)"
+    )
+    field_name = "close_behavior" if hasattr(PersistedSettings, "close_behavior") else "close_action"
+    s = PersistedSettings(resource_limits=ResourceLimits(), ai_config=AIConfig(), **{field_name: "quit"})
+    p = tmp_path / "settings.json"
+    save_settings(s, path=p)
+    loaded = load_settings(path=p)
+    assert loaded.schema_version == 2
+    assert getattr(loaded, field_name) == "quit"
+
+    # 2. Inno Setup installer script includes CloseApplications=yes and AppMutex
+    iss = (REPO_ROOT / "scripts" / "installer.iss").read_text("utf-8")
+    assert "CloseApplications=yes" in iss, "scripts/installer.iss missing CloseApplications=yes"
+    assert "AppMutex=" in iss, "scripts/installer.iss missing AppMutex="
+
+
+@pytest.mark.xfail(strict=True, reason="W14")
+def test_w14_idle_low_ram_shows_amber_not_red_critical_and_records_report() -> None:
+    """W14: AI idle with ~2.6 GB free RAM shows amber '内存偏低' (not red Critical); docs/WINDOWS_TEST_REPORT.md records measurements."""
+    report_path = REPO_ROOT / "docs" / "WINDOWS_TEST_REPORT.md"
+    assert report_path.exists(), "docs/WINDOWS_TEST_REPORT.md not created with W14 real-machine measurements"
+    report_txt = report_path.read_text("utf-8")
+    for token in ("1830", "3893", "0.435"):
+        assert token in report_txt, f"docs/WINDOWS_TEST_REPORT.md missing measurement {token!r}"
+
+    mw_src = (REPO_ROOT / "ui" / "main_window.py").read_text("utf-8")
+    assert "内存偏低" in mw_src, "ui/main_window.py missing amber '内存偏低' state when AI is idle"
+    assert "pause_ram_before_ai_mb" in mw_src or "pause_ram_before_ai_mb" in (REPO_ROOT / "main.py").read_text("utf-8"), (
+        "AI rejection notice missing pause_ram_before_ai_mb setting guidance"
+    )
+
+
+@pytest.mark.xfail(strict=True, reason="W15")
+def test_w15_ui_polish_source_combo_stretch_and_smtc_concise_and_footer_spacing() -> None:
+    """W15: source_combo stretches in top bar, SMTC status label is concise with tooltip, and mixer badge has tooltip."""
+    from audio.playback import StemMixerEngine
+    from core.config import AIConfig, ResourceLimits
+    from core.system_probe import probe_system
+    from ui.main_window import ListenScopeMainWindow
+
+    _get_app()
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    try:
+        smtc_txt = win.chroma_widget.track_status_lbl.text()
+        assert len(smtc_txt) <= 32, f"SMTC status label still too long/technical ({len(smtc_txt)} chars): {smtc_txt!r}"
+        assert win.chroma_widget.track_status_lbl.toolTip().strip(), "SMTC status label missing detailed toolTip"
+        assert win.mixer_widget.deep_rhythm_badge_lbl.toolTip().strip(), "Mixer deep_rhythm_badge_lbl missing toolTip"
+        sp = win.source_combo.sizePolicy().horizontalPolicy()
+        assert sp in (QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding), (
+            f"source_combo horizontal sizePolicy is {sp}, not Expanding"
+        )
+    finally:
+        win.close()
+        mixer.close()
+
