@@ -34,3 +34,16 @@
   2. **音频重采样与 PCM 基础**：`E17` → `E18` → `E3` → `E4`（先修 `pcm_utils` 与单声道边界，再落地 `StreamingResampler` 并接入 `StemMixerEngine`）
   3. **Demucs 推理与资源/配置稳健性**：`E16` → `E6` → `E14`
   4. **线程生命周期与 GUI 非阻塞**：`E11` → `E15` → `E7` → `E8`
+
+---
+
+## 最终复审结论（复审者 Neon）
+
+- **复审状态**：**全部 13 条通过（批准合并至 `main`）**。
+- **首轮复审退回与返修核验**：首轮复审发现 `E2` 的 `popen_external_python` 在 `win32+frozen` 下未复刻 `-m` 启动器重写与 `cwd` 切换（会导致 `_internal` 通过 `cwd` 进入 `sys.path[0]`）；返修提交 `d4ad1a5` 已抽出共用 `_prepare_external_launch`，`run_external_python` 与 `popen_external_python` 统一调用，`creationflags` 按位或合并，三个调用方移除自拼 `PYTHONPATH`/`cwd`，`ai/worker.py` 增加运行库路径 debug 日志，并补充冻结态 mock 单测且未削弱任何断言。
+- **独立复测结果（Linux/offscreen 验证，非 Windows 11 实机/GPU/exe）**：
+  - 专项 `tests/test_review_phase2a.py`：**`14 passed`**
+  - 全量 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`：**`264 passed, 6 skipped`**（0 failed，0 xfailed）
+- **约束核查**：未违反 `docs/DECISIONS.md`（未给 Core 引入重型依赖、`5120/3072/2048 MiB` 阈值不变、`settings schema_version == 2` 不变、单 Worker / 6s 分块不变）。
+- **待目标机实测**：`E2` 已记录于 [`docs/review/WINDOWS_RETEST.md`](WINDOWS_RETEST.md)。
+
