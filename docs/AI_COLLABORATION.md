@@ -68,5 +68,21 @@
 - **下轮调度调整**：
   - Phase 2 全部云端开发与复审收官，暂停推进 Phase 3，转入目标机 Windows 11 统一实测 [WINDOWS_RETEST.md](review/WINDOWS_RETEST.md)。
 
+## 2026-11-23｜Issue #40 Phase 2D Windows 实测回归修复（Round 1 W1–W9 → Round 2 W10–W15）
 
-
+- **任务范围**：Issue #40 共 15 项（Round 1 `W1–W9` + Round 2 真实 QQ 音乐/高 DPI 实测追加的 `W10–W15` 与降级更新后的 `W2` 关闭按钮行为），合并于 `main` @ `8285509`（PR #41）。
+- **协同分工**：
+  - **验证者 / 复审者（Neon）**：
+    - 在 `.github/workflows/tests.yml` 新增 `windows-latest` offscreen pytest 作业并定位 W6 6 项失败根因（3 项在 Windows CI 直接复现）；完成 W2 全量 33 处线程与子进程审计；新增并冻结 W11 [realistic_mix.py](../tests/bench/realistic_mix.py) 与 [baseline_6fe01c5_realistic.json](../tests/bench/baseline_6fe01c5_realistic.json)；编写 20 条回归测试（[test_review_phase2d.py](../tests/test_review_phase2d.py)）与交接文档（[PHASE2D_VERIFY.md](review/PHASE2D_VERIFY.md)）。
+    - Round 1 复审（`5a740a6`）检出 P1 真 bug（`WasapiProcessLoopbackBackend.start()` 漏 `self._closing.clear()` 导致重启丢帧）与 P2/P3 缺漏，返修（`a77397c`）后通过。
+    - Round 2 复审（`3a031fc`）检出 2 项 P1 漏接（W14 在 2048–3072 MB 返回 `ResourceStatus.CRITICAL` 导致空闲仍显红 `Critical`；W2 `close_behavior` 未接 `main.py` 持久化与设置页）及 W12 静音误判 / W13 自动增益按钮 / W15 水印与轨名省略，返修（`8e1f220`）后终审 PASS。
+  - **修改者（Hydrogen）**：分 Round 1（`7ef60c7..a77397c`）与 Round 2（`3a031fc..8e1f220`）完成全部 W1–W15 修复与返工，保持 `tests/bench/` 与 `pyproject.toml` 0 字节改动，驱动双平台 CI 全绿。
+- **建议采纳与误报统计**：
+  - `CONFIRMED` + `NEEDS_TARGET`（云端契约/mock 复现）：15 条全部采纳并修复（其中 `W1, W2, W3, W5, W11, W12, W13, W14` 真机部分留待 Windows 11 实测）；
+  - 复审检出并拦截的真实回归：3 处（`process_loopback` 重启丢帧、W14 `CRITICAL` 徽章漏判、W2 `close_behavior` 未持久化）；`FALSE_POSITIVE`：0 条。
+- **测试与基准结果（Linux + Windows CI offscreen 验证）**：
+  - GitHub Actions Run [#45216747073](https://github.com/Ceph-learner/ListenScope/actions/runs/45216747073)（`8e1f220`）：`pytest`（`ubuntu-latest`，4m9s）与 `pytest-windows`（`windows-latest`，7m41s）双绿；
+  - `tests/test_review_phase2d.py`：`20 passed`；
+  - W11 `realistic_mix`：BPM Acc1 `40.0% → 86.67%`，Acc2 `66.67% → 100.0%`，非节奏负样本 `100.0%` 返回 `None`；冻结 `A-BENCH` 零退化。
+- **下轮调度调整**：
+  - 实机复测 `W1, W2, W3, W5, W11, W12, W13, W14` 通过后再关闭 #31/#32/#40 并进入 #37 发布准备；已在 #37 `R4-1` 备注同步修改 `pyproject.toml`、`scripts/installer.iss` 与 `core/version.py` 的 `_FALLBACK_BASE_VERSION` 为 `1.1.0`。
