@@ -1264,17 +1264,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._update_rounded_mask()
 
     def _update_rounded_mask(self) -> None:
-        """Apply a clean anti-aliased rounded mask in frameless mode unless Win11 DWM handles native rounding."""
-        if not getattr(self, "_frameless_applied", False) or self.isMaximized() or getattr(self, "_win11_dwm_rounded", False):
-            self.clearMask()
-            return
-        w, h = self.width(), self.height()
-        if w <= 0 or h <= 0:
-            return
-        path = QtGui.QPainterPath()
-        path.addRoundedRect(QtCore.QRectF(0, 0, w, h), 10.0, 10.0)
-        region = QtGui.QRegion(path.toFillPolygon().toPolygon())
-        self.setMask(region)
+        """Use native Win11 DWM rounding when available; avoid jagged QRegion polygon masks elsewhere."""
+        self.clearMask()
 
     def _hit_test_resize_edges(self, local_pos: QtCore.QPoint) -> QtCore.Qt.Edge:
         """Return Qt.Edge flags if `local_pos` (in MainWindow coordinates) lies inside the 8px resize rim."""

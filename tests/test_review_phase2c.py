@@ -229,7 +229,6 @@ def test_ufx3_system_animations_helper_help_badge_delay_and_explicit_banner_tone
     assert "def system_animations_enabled" in ui_texts, "Missing system_animations_enabled() helper under ui/"
 
 
-@pytest.mark.xfail(strict=True, reason="U-B22")
 def test_ub22_win10_rounded_mask_avoids_jagged_qregion_polygon() -> None:
     """NEEDS_TARGET contract: _update_rounded_mask must not apply jagged QRegion(path.toFillPolygon().toPolygon()) mask on Win10."""
     src = (REPO_ROOT / "ui" / "main_window.py").read_text("utf-8")
