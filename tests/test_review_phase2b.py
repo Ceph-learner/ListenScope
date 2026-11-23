@@ -361,7 +361,6 @@ def test_al4_bass_median_filter_does_not_average_two_neighbors_to_1_5f() -> None
     )
 
 
-@pytest.mark.xfail(strict=True, reason="A-L5")
 def test_al5_iter_aligned_mono_48k_frames_uses_streaming_resampler_without_chunk_glitches(tmp_path: Path) -> None:
     """44.1kHz input to _iter_aligned_mono_48k_frames must use StreamingResampler with no 0.5s chunk boundary glitches."""
     from analysis.stem_analyzer import _iter_aligned_mono_48k_frames

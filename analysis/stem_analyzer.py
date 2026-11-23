@@ -16,7 +16,7 @@ import wave
 
 import numpy as np
 
-from audio.pcm_utils import decode_wave_bytes, normalize_to_canonical_pcm
+from audio.pcm_utils import StreamingResampler, decode_wave_bytes, normalize_to_canonical_pcm
 from core.config import AnalysisConfig
 from core.models import (
     BassAnalysisResult,
@@ -114,23 +114,47 @@ def _iter_aligned_mono_48k_frames(
         max_samples = int(round(eff_duration * CANONICAL_SR))
         written_samples = 0
 
+        resamplers: list[Optional[StreamingResampler]] = [
+            StreamingResampler(sr, CANONICAL_SR, 1) if sr != CANONICAL_SR else None
+            for (_k, _h, sr, *_rest) in readers
+        ]
+        flushed = [False] * len(readers)
+
         try:
             while written_samples < max_samples:
                 chunks_48k: list[np.ndarray] = []
                 min_len = None
-                for kind, handle, sr, ch, _total_frames, weight in readers:
+                for r_idx, (kind, handle, sr, ch, _total_frames, weight) in enumerate(readers):
                     src_take = max(256, int(round(block_sec * sr)))
                     raw_arr = _read_reader_chunk_f32(kind, handle, src_take, ch)
+                    rs = resamplers[r_idx]
                     if raw_arr.shape[0] == 0:
+                        if rs is not None and not flushed[r_idx]:
+                            flushed[r_idx] = True
+                            mono_48k = rs.flush()[:, 0]
+                            if mono_48k.shape[0] > 0:
+                                chunks_48k.append(mono_48k * weight)
+                                min_len = mono_48k.shape[0] if min_len is None else min(min_len, mono_48k.shape[0])
+                                continue
                         min_len = 0
                         break
-                    mono_48k = normalize_to_canonical_pcm(
-                        raw_arr,
-                        src_rate=sr,
-                        src_channels=ch,
-                        dst_rate=CANONICAL_SR,
-                        dst_channels=1,
-                    )[:, 0]
+                    if rs is not None:
+                        mono_src = normalize_to_canonical_pcm(
+                            raw_arr,
+                            src_rate=sr,
+                            src_channels=ch,
+                            dst_rate=sr,
+                            dst_channels=1,
+                        )
+                        mono_48k = rs.process(mono_src)[:, 0]
+                    else:
+                        mono_48k = normalize_to_canonical_pcm(
+                            raw_arr,
+                            src_rate=sr,
+                            src_channels=ch,
+                            dst_rate=CANONICAL_SR,
+                            dst_channels=1,
+                        )[:, 0]
                     chunks_48k.append(mono_48k * weight)
                     min_len = mono_48k.shape[0] if min_len is None else min(min_len, mono_48k.shape[0])
 
