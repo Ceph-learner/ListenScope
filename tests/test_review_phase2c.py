@@ -517,3 +517,31 @@ def test_ub03_dark_dock_contrast_header_no_clip_1093_no_overflow_and_tab05_acces
         mixer.close()
 
 
+@pytest.mark.xfail(strict=True, reason="U-B34")
+def test_ub34_realtime_waveform_envelope_4s_uniform_band_for_440hz_and_1khz() -> None:
+    """U-B34: 4s realtime waveform min/max envelope for 440Hz & 1kHz sine must form a uniform +/-A band (no aliasing)."""
+    from analysis.worker import AnalysisWorker
+    from audio.ring_buffer import FixedRingBuffer
+    from core.config import AnalysisConfig, AudioConfig
+
+    acfg = AudioConfig(sample_rate=48000, channels=2, ring_buffer_seconds=10)
+    amp = 0.5
+    t = np.arange(48000 * 4, dtype=np.float32) / 48000.0
+    for freq in (440.0, 1000.0):
+        rb = FixedRingBuffer(acfg)
+        sig = (amp * np.sin(2.0 * np.pi * freq * t)).astype(np.float32)
+        rb.write(np.stack([sig, sig], axis=1))
+        w = AnalysisWorker(rb, audio_config=acfg, analysis_config=AnalysisConfig())
+        snap = w.analyze_latest_once()
+        wmin = np.asarray(snap.waveform_min, dtype=np.float32)
+        wmax = np.asarray(snap.waveform_max, dtype=np.float32)
+        assert wmax.size >= 256 and wmin.size == wmax.size
+        assert float(np.min(wmax)) >= 0.9 * amp, (
+            f"{freq} Hz waveform_max dipped to {float(np.min(wmax)):.3f} (need >= {0.9 * amp:.3f})"
+        )
+        assert float(np.max(wmin)) <= -0.9 * amp, (
+            f"{freq} Hz waveform_min rose to {float(np.max(wmin)):.3f} (need <= {-0.9 * amp:.3f})"
+        )
+
+
+
