@@ -103,7 +103,6 @@ def test_ub07_ui_tick_deduplicates_snapshots_throttles_hidden_and_uses_precise_t
     assert "resource_manager.sample()" not in m.group(0), "_on_ui_tick still calls resource_manager.sample() on GUI thread"
 
 
-@pytest.mark.xfail(strict=True, reason="U-FX1")
 def test_ufx1_frame_clock_exists_and_decouples_display_interpolation() -> None:
     """UI must provide a unified FrameClock (PreciseTimer, set_active(on, hz)) for 60/30 Hz display interpolation."""
     found = False

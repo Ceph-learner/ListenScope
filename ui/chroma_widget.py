@@ -106,6 +106,18 @@ class TuningCentsBar(QtWidgets.QWidget):
             return
         self.update()
 
+    def advance_frame(self, dt: float) -> None:
+        """Interpolate needle position on FrameClock ticks."""
+        diff = self._cents - self._display_cents
+        if abs(diff) <= 0.05:
+            if self._display_cents != self._cents:
+                self._display_cents = self._cents
+                self.update()
+            return
+        alpha = 1.0 - math.exp(-max(0.001, float(dt)) / 0.045)
+        self._display_cents += diff * alpha
+        self.update()
+
     def set_theme_colors(
         self,
         *,
@@ -1157,4 +1169,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         if chroma_history is not None and chroma_history.size > 0:
             self._chroma_img.setImage(chroma_history, autoLevels=False, levels=(0.0, 0.9))
+
+    def advance_frame(self, dt: float) -> None:
+        self.tuning_bar.advance_frame(dt)
 

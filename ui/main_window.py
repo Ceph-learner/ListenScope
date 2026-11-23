@@ -1064,6 +1064,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._acid_footer.static_lock_toggled.connect(self._on_static_lock_toggled)
         main_layout.addWidget(self._acid_footer)
 
+        from .frame_clock import FrameClock
+        self._frame_clock = FrameClock(self, default_hz=60)
+        self._frame_clock.tick.connect(self._on_frame_tick)
+
         self.center_on_screen()
         self._init_system_tray()
         install_tooltip_guard(self)
@@ -1088,11 +1092,33 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.setGeometry(x, y, target_w, target_h)
         self._initial_centered = True
 
+    def _on_frame_tick(self, dt: float) -> None:
+        if getattr(self, "_tearing_down", False) or not self.isVisible() or self.isMinimized():
+            self._frame_clock.set_active(False)
+            return
+        cur = self.tabs.currentWidget() if hasattr(self, "tabs") else None
+        if cur is getattr(self, "chroma_widget", None) and hasattr(self.chroma_widget, "advance_frame"):
+            self.chroma_widget.advance_frame(dt)
+        elif cur is getattr(self, "spectrum_widget", None) and hasattr(self.spectrum_widget, "advance_frame"):
+            self.spectrum_widget.advance_frame(dt)
+
+    def _sync_frame_clock(self) -> None:
+        if not hasattr(self, "_frame_clock"):
+            return
+        active = (not getattr(self, "_tearing_down", False)) and self.isVisible() and (not self.isMinimized())
+        self._frame_clock.set_active(active)
+
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
         if not self._initial_centered:
             self.center_on_screen()
         self._apply_windows_taskbar_and_rounding()
+        self._sync_frame_clock()
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        if hasattr(self, "_frame_clock"):
+            self._frame_clock.set_active(False)
+        super().hideEvent(event)
 
     def _init_system_tray(self) -> None:
         if self._tray_icon is not None:
@@ -1418,6 +1444,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self.win_max_btn.setText("❐" if m else "□")
             if hasattr(self, "_update_rounded_mask"):
                 self._update_rounded_mask()
+            if hasattr(self, "_sync_frame_clock"):
+                self._sync_frame_clock()
 
     def restore_saved_geometry(self, b64_geometry: str) -> None:
         raw = (b64_geometry or "").strip()
@@ -2047,6 +2075,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if getattr(self, "_tearing_down", False):
             return
         self._tearing_down = True
+        if hasattr(self, "_frame_clock"):
+            self._frame_clock.stop()
 
         for w_name in ("_shell_frame", "_topbar_frame"):
             w = getattr(self, w_name, None)
