@@ -234,8 +234,39 @@ def write_cubase_note_spans(
     return path, len(deduped)
 
 
+def _collect_tempo_map(mid: mido.MidiFile, default_bpm: float) -> list[tuple[int, int]]:
+    tempos: list[tuple[int, int]] = []
+    for tr in mid.tracks:
+        abs_tick = 0
+        for msg in tr:
+            abs_tick += int(msg.time)
+            if msg.is_meta and msg.type == "set_tempo":
+                tempos.append((abs_tick, int(msg.tempo)))
+    tempos.sort(key=lambda item: item[0])
+    if not tempos or tempos[0][0] > 0:
+        tempos.insert(0, (0, int(mido.bpm2tempo(float(default_bpm)))))
+    return tempos
+
+
+def _tick_to_seconds(abs_tick: int, tpb: int, tempo_map: list[tuple[int, int]]) -> float:
+    sec = 0.0
+    prev_tick = 0
+    cur_tempo = tempo_map[0][1]
+    for seg_tick, seg_tempo in tempo_map:
+        if seg_tick >= abs_tick:
+            break
+        if seg_tick > prev_tick:
+            sec += ((seg_tick - prev_tick) / float(tpb)) * (cur_tempo / 1_000_000.0)
+            prev_tick = seg_tick
+        cur_tempo = seg_tempo
+    if abs_tick > prev_tick:
+        sec += ((abs_tick - prev_tick) / float(tpb)) * (cur_tempo / 1_000_000.0)
+    return sec
+
+
 def normalize_midi_file_for_cubase(
     midi_path: Path | str,
+    out_path: Optional[Path | str] = None,
     *,
     track_name: str = "ListenScope MIDI",
     stem_name: str = "bass",
@@ -245,14 +276,19 @@ def normalize_midi_file_for_cubase(
 ) -> Path:
     """Normalize an arbitrary `.mid` file (e.g. Basic Pitch pretty_midi output) for reliable Cubase import."""
     src = Path(midi_path)
+    dst = Path(out_path) if out_path is not None else src
     mid = mido.MidiFile(str(src))
     tpb = max(24, int(mid.ticks_per_beat or 480))
     target_tpb = 480
-    scale = target_tpb / float(tpb)
 
-    bpm = float(default_bpm)
+    tempo_map = _collect_tempo_map(mid, default_bpm)
+    try:
+        bpm = max(20.0, min(300.0, float(mido.tempo2bpm(tempo_map[0][1]))))
+    except Exception:
+        bpm = float(default_bpm)
     num, den = sanitize_time_signature(*time_signature)
     channel, default_prog = gm_program_for_stem(stem_name)
+    ticks_per_sec = (bpm / 60.0) * float(target_tpb)
 
     spans: list[tuple[int, int, int, int, int]] = []
     for tr in mid.tracks:
@@ -260,16 +296,13 @@ def normalize_midi_file_for_cubase(
         active: dict[tuple[int, int], tuple[int, int]] = {}
         for msg in tr:
             abs_tick += int(msg.time)
-            t_scaled = max(0, int(round(abs_tick * scale)))
             if msg.is_meta:
-                if msg.type == "set_tempo" and bpm == default_bpm:
-                    try:
-                        bpm = max(20.0, min(300.0, float(mido.tempo2bpm(msg.tempo))))
-                    except Exception:
-                        pass
-                elif msg.type == "time_signature":
+                if msg.type == "time_signature":
                     num, den = sanitize_time_signature(msg.numerator, msg.denominator)
                 continue
+
+            abs_sec = _tick_to_seconds(abs_tick, tpb, tempo_map)
+            t_scaled = max(0, int(round(abs_sec * ticks_per_sec)))
 
             if msg.type == "note_on" and msg.velocity > 0:
                 ch = channel if msg.channel != 9 else 9
@@ -289,9 +322,9 @@ def normalize_midi_file_for_cubase(
         for (ch, note), (prev_s, prev_v) in active.items():
             spans.append((prev_s, prev_s + 120, ch, note, prev_v))
 
-    out_path, _count = write_cubase_note_spans(
+    written_path, _count = write_cubase_note_spans(
         spans,
-        src,
+        dst,
         track_name=track_name,
         tempo_bpm=bpm,
         channel=channel,
@@ -300,4 +333,4 @@ def normalize_midi_file_for_cubase(
         key_signature=key_signature,
         ticks_per_beat=target_tpb,
     )
-    return out_path
+    return written_path

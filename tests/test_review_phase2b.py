@@ -314,7 +314,6 @@ def test_am5_drum_band_crosstalk_1500hz_click_does_not_trigger_kick(tmp_path: Pa
     assert len(res.kick_times_sec) == 0, f"1.5 kHz clicks triggered {len(res.kick_times_sec)} false kicks: {res.kick_times_sec}"
 
 
-@pytest.mark.xfail(strict=True, reason="A-L2")
 def test_al2_midi_normalize_preserves_multi_tempo_onset_timing(tmp_path: Path) -> None:
     """Normalizing a 120->60 BPM multi-tempo MIDI must preserve real onset times in seconds."""
     from analysis.midi_common import normalize_midi_file_for_cubase
