@@ -36,7 +36,6 @@ def _write_wav_pcm16(path: Path, data: np.ndarray, sr: int) -> None:
         wf.writeframes(pcm16.tobytes())
 
 
-@pytest.mark.xfail(strict=True, reason="E2")
 def test_e2_ai_subprocesses_use_popen_external_python_not_raw_popen() -> None:
     """NEEDS_TARGET contract test: core/paths.py must provide popen_external_python and AI launchers must use it."""
     from core import paths

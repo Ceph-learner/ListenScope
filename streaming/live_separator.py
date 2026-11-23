@@ -40,7 +40,7 @@ from ai.resource_guard import release_torch_and_memory
 from audio.ring_buffer import FixedRingBuffer
 from core.config import AIConfig, AudioConfig, TargetHardwareSpec
 from core.models import LiveSeparationMetrics, ResourceStatus
-from core.paths import get_bundle_root, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
+from core.paths import get_bundle_root, popen_external_python, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
 from core.resource_manager import ResourceManager
 from core.system_probe import (
     _probe_gpus_nvml,
@@ -420,7 +420,7 @@ class ExperimentalLiveSeparator:
         env["PYTHONPATH"] = f"{bundle_root}{os.pathsep}{existing_pp}" if existing_pp else str(bundle_root)
 
         self._subproc_stderr_tail.clear()
-        proc = subprocess.Popen(
+        proc = popen_external_python(
             [
                 self.ai_python_executable,
                 "-m",

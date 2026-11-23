@@ -28,7 +28,7 @@ from core.models import (
     OOMRecoveryAction,
     ResourceSnapshot,
 )
-from core.paths import get_bundle_root, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
+from core.paths import get_bundle_root, popen_external_python, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
 from core.resource_manager import ResourceManager
 
 from .models import MODEL_REGISTRY
@@ -350,7 +350,7 @@ class AIJobManager:
 
             msg_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
             self._subproc_stderr_tail.clear()
-            proc = subprocess.Popen(
+            proc = popen_external_python(
                 [
                     self.ai_python_executable,
                     "-m",

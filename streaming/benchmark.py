@@ -19,7 +19,7 @@ from ai.backend import build_separation_backend
 from ai.models import MODEL_REGISTRY
 from ai.resource_guard import release_torch_and_memory
 from core.config import AIConfig, AudioConfig, TargetHardwareSpec
-from core.paths import get_bundle_root, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
+from core.paths import get_bundle_root, popen_external_python, prepend_ffmpeg_path_env, subprocess_no_window_kwargs
 from core.system_probe import (
     _probe_gpus_nvml,
     _probe_gpus_nvidia_smi,
@@ -194,7 +194,7 @@ def benchmark_live_model_isolated(
     if use_mock_backend:
         cmd.append("--use-mock-backend")
 
-    proc = subprocess.Popen(
+    proc = popen_external_python(
         cmd,
         cwd=str(bundle_root),
         env=env,

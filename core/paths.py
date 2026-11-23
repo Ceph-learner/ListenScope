@@ -90,6 +90,81 @@ def run_external_python(
         return result
 
 
+def _strip_bundle_from_path_var(raw_val: str, bundle_path: Path) -> str:
+    kept: list[str] = []
+    for entry in raw_val.split(os.pathsep):
+        if not entry:
+            continue
+        try:
+            if Path(entry).resolve().is_relative_to(bundle_path):
+                continue
+        except (OSError, ValueError):
+            pass
+        kept.append(entry)
+    return os.pathsep.join(kept)
+
+
+def popen_external_python(cmd: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
+    """Launch an external Python subprocess without inheriting PyInstaller/frozen env pollution."""
+    raw_env = kwargs.pop("env", None)
+    env = dict(raw_env if raw_env is not None else os.environ)
+    for var in (
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "_MEIPASS",
+        "_MEIPASS2",
+        "TCL_LIBRARY",
+        "TK_LIBRARY",
+        "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+    ):
+        env.pop(var, None)
+
+    frozen = bool(getattr(sys, "frozen", False))
+    if frozen:
+        meipass = getattr(sys, "_MEIPASS", None)
+        bundle_path = Path(meipass).resolve() if meipass else get_bundle_root()
+        if "PATH" in env:
+            env["PATH"] = _strip_bundle_from_path_var(env["PATH"], bundle_path)
+        if sys.platform != "win32" and "LD_LIBRARY_PATH" in env:
+            cleaned_ld = _strip_bundle_from_path_var(env["LD_LIBRARY_PATH"], bundle_path)
+            if cleaned_ld:
+                env["LD_LIBRARY_PATH"] = cleaned_ld
+            else:
+                env.pop("LD_LIBRARY_PATH", None)
+    elif sys.platform != "win32" and "LD_LIBRARY_PATH" in env:
+        # Filter any _MEI PyInstaller temp paths if inherited
+        parts = [p for p in env["LD_LIBRARY_PATH"].split(os.pathsep) if p and "_MEI" not in p]
+        if parts:
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(parts)
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+
+    env["PYTHONNOUSERSITE"] = "1"
+    env["PYTHONUTF8"] = "1"
+
+    no_win = subprocess_no_window_kwargs()
+    if "creationflags" in no_win:
+        kwargs.setdefault("creationflags", no_win["creationflags"])
+
+    if sys.platform == "win32" and frozen:
+        import ctypes
+
+        bundle = str(get_bundle_root())
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        set_dll_directory = kernel32.SetDllDirectoryW
+        set_dll_directory.argtypes = [ctypes.c_wchar_p]
+        with _external_launch_lock:
+            if not set_dll_directory(None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                return subprocess.Popen(cmd, env=env, **kwargs)
+            finally:
+                set_dll_directory(bundle)
+
+    return subprocess.Popen(cmd, env=env, **kwargs)
+
+
 def get_bundle_root() -> Path:
     """Return the root directory containing source modules / bundled datas.
 
