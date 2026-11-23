@@ -312,12 +312,12 @@ class HelpBadge(QtWidgets.QAbstractButton):
     def __init__(
         self,
         title: str,
-        explanation: str,
+        explanation: str = "",
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._orig_title = str(title).strip()
-        self._orig_explanation = str(explanation).strip()
+        self._orig_explanation = str(explanation).strip() or self._orig_title
         self._title = self._orig_title
         self._explanation = self._orig_explanation
         self._hover_progress: float = 0.0
@@ -325,10 +325,11 @@ class HelpBadge(QtWidgets.QAbstractButton):
 
         self.setObjectName("helpBadge")
         self.setText("?")
-        self.setFixedSize(22, 22)
+        badge_sz = max(24, self.fontMetrics().height() + 6)
+        self.setFixedSize(badge_sz, badge_sz)
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
         self.setCursor(QtCore.Qt.CursorShape.WhatsThisCursor)
-        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.TabFocus)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
 
         self._hover_anim = QtCore.QVariantAnimation(self)
@@ -455,6 +456,31 @@ class HelpBadge(QtWidgets.QAbstractButton):
         self._pressed = False
         self.update()
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # type: ignore[override]
+        key = event.key()
+        if key in (
+            QtCore.Qt.Key.Key_Return,
+            QtCore.Qt.Key.Key_Enter,
+            QtCore.Qt.Key.Key_Space,
+            QtCore.Qt.Key.Key_F1,
+        ):
+            if (
+                _SHARED_POPOVER is not None
+                and _is_qt_valid(_SHARED_POPOVER)
+                and _SHARED_POPOVER.isVisible()
+                and _SHARED_POPOVER._anchor is self
+            ):
+                _SHARED_POPOVER.hide()
+            else:
+                self._show_help_popup()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_Escape and _SHARED_POPOVER is not None and _is_qt_valid(_SHARED_POPOVER):
+            _SHARED_POPOVER.hide()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _show_help_popup(self) -> None:
         if not _HELP_MODE_ENABLED or self.isHidden() or self.parentWidget() is None:

@@ -153,7 +153,6 @@ def test_ub13_tooltip_filter_allows_native_tooltips_unless_lsSuppressTip_set() -
     assert blocked is False, "Global tooltip filter blocked native tooltip on normal button"
 
 
-@pytest.mark.xfail(strict=True, reason="U-B14")
 def test_ub14_help_badge_is_keyboard_focusable_and_at_least_24px() -> None:
     """HelpBadge must support Qt.TabFocus (without auto-popup on focus) and have size >= 24x24 px (WCAG 2.5.8)."""
     from ui.help_badge import HelpBadge
