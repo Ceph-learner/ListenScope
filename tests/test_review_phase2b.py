@@ -279,7 +279,6 @@ def test_am4_first_inversion_chords_not_misclassified_as_relative_minor() -> Non
     assert notes[0] % 12 == 4  # E bass
 
 
-@pytest.mark.xfail(strict=True, reason="A-L10")
 def test_al10_sevenths_enabled_preserves_triad_accuracy_and_supports_dim() -> None:
     """Enabling include_sevenths must keep triad accuracy >= 95% and recognize Bdim."""
     from analysis.chords import ChordDetector

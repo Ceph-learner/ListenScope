@@ -229,14 +229,20 @@ def _build_chord_templates(*, include_sevenths: bool = False) -> tuple[list[str]
         templates.append(np.roll(min_pattern, root_idx))
 
     if include_sevenths:
+        dim_p = np.array([1.0, 0, 0, 0.88, 0, 0, 0.90, 0, 0, 0, 0, 0], dtype=np.float32)
+        aug_p = np.array([1.0, 0, 0, 0, 0.88, 0, 0, 0, 0.88, 0, 0, 0], dtype=np.float32)
         maj7_p = np.array([1.0, 0, 0, 0, 0.82, 0, 0, 0.85, 0, 0, 0, 0.72], dtype=np.float32)
         min7_p = np.array([1.0, 0, 0, 0.82, 0, 0, 0, 0.85, 0, 0, 0.72, 0], dtype=np.float32)
         dom7_p = np.array([1.0, 0, 0, 0, 0.82, 0, 0, 0.85, 0, 0, 0.72, 0], dtype=np.float32)
         sus4_p = np.array([1.0, 0, 0, 0, 0, 0.82, 0, 0.90, 0, 0, 0, 0], dtype=np.float32)
-        for p in (maj7_p, min7_p, dom7_p, sus4_p):
+        for p in (dim_p, aug_p, maj7_p, min7_p, dom7_p, sus4_p):
             p /= np.linalg.norm(p)
 
         for root_idx, root_name in enumerate(PITCH_CLASSES):
+            names.append(f"{root_name}dim")
+            templates.append(np.roll(dim_p, root_idx))
+            names.append(f"{root_name}aug")
+            templates.append(np.roll(aug_p, root_idx))
             names.append(f"{root_name}maj7")
             templates.append(np.roll(maj7_p, root_idx))
             names.append(f"{root_name}m7")
@@ -282,6 +288,13 @@ class ChordDetector:
         self._include_sevenths = bool(include_sevenths)
         self._names, self._templates = _build_chord_templates(include_sevenths=self._include_sevenths)
         self._name_to_idx: dict[str, int] = {name: i for i, name in enumerate(self._names)}
+        self._score_bias = np.array(
+            [
+                -0.03 if _split_chord_root_quality(name)[1] in ("maj7", "m7", "7") else 0.0
+                for name in self._names
+            ],
+            dtype=np.float32,
+        )
         self._ema_alpha = ema_alpha
         self._min_correlation = min_correlation
         self._min_margin_for_high = min_margin_for_high
@@ -339,7 +352,7 @@ class ChordDetector:
 
         norm = float(np.linalg.norm(self._smoothed_chroma))
         vec = self._smoothed_chroma / max(norm, 1e-9)
-        scores = self._templates @ vec
+        scores = (self._templates @ vec) + self._score_bias
         order = np.argsort(scores)[::-1]
         best_idx, second_idx = int(order[0]), int(order[1])
         best_score = float(scores[best_idx])
