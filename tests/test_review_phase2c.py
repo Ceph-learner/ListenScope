@@ -92,7 +92,6 @@ def test_ub03_main_window_fits_small_screens_1093x566_and_1024x528() -> None:
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="U-B07")
 def test_ub07_ui_tick_deduplicates_snapshots_throttles_hidden_and_uses_precise_timer() -> None:
     """main.py must deduplicate snapshots by timestamp, throttle when hidden/minimized, use PreciseTimer, and sample resources off GUI thread."""
     src = (REPO_ROOT / "main.py").read_text("utf-8")
