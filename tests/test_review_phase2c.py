@@ -286,7 +286,6 @@ def test_am6_ui_tempo_half_double_buttons_present_in_chroma_widget() -> None:
     assert has_double and has_half, f"Missing tempo ×2/÷2 buttons in ChromaChordWidget (found: {btn_texts})"
 
 
-@pytest.mark.xfail(strict=True, reason="U-B31")
 def test_ub31_mixer_header_does_not_overlap_groupbox_and_progress_visible() -> None:
     """In main window at 1120x680, mixer header must not overlap AI SEPARATION groupbox and job_status_lbl must be readable."""
     from audio.playback import StemMixerEngine

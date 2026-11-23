@@ -223,16 +223,20 @@ class StemMixerWidget(QtWidgets.QWidget):
         root.setSpacing(5)
 
         self._header = TelemetryHeader("STEM WORKSTATION // MIX & MIDI", "分轨混音 · 深度扒谱 · MIDI 转录")
+        self._header.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        self._header.setMinimumHeight(max(44, self._header.sizeHint().height()))
         self._pulse_strip = TelemetryPulseStrip(bar_count=10)
         self._header.add_right_widget(self._pulse_strip)
         root.addWidget(self._header)
 
         # AI Job status & segmented battery progress bar
         job_box = QtWidgets.QGroupBox("AI SEPARATION // 分轨任务队列")
+        job_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
         job_l = QtWidgets.QHBoxLayout(job_box)
-        job_l.setContentsMargins(8, 4, 8, 4)
+        job_l.setContentsMargins(8, 6, 8, 6)
         self.job_status_lbl = QtWidgets.QLabel("空闲：请在下方 120s 历史时间轴选择片段并启动 2-Stem 或 4-Stem 分轨")
         self.job_status_lbl.setWordWrap(True)
+        self.job_status_lbl.setMinimumHeight(self.job_status_lbl.fontMetrics().height() + 4)
         self.job_progress = SegmentedBatteryProgressBar(cells=16)
         self.job_progress.setRange(0, 100)
         self.job_progress.setValue(0)
@@ -1285,7 +1289,26 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.clear_results_btn.setEnabled(bool(self._rows) and not running)
         self.job_progress.set_active(running)
         self.job_progress.setValue(int(round(prog.progress * 100)))
-        set_i18n_text(self.job_status_lbl, f"[{prog.state.value}] {prog.message}")
+        stage_labels = {
+            AIJobState.IDLE: "空闲",
+            AIJobState.PREPARING: "准备",
+            AIJobState.LOADING_MODEL: "加载模型",
+            AIJobState.INFERRING: "推理",
+            AIJobState.WRITING: "写出",
+            AIJobState.COMPLETED: "完成",
+            AIJobState.CANCELLED: "已取消",
+            AIJobState.FAILED: "失败",
+            AIJobState.OOM_ERROR: "显存不足",
+            AIJobState.EMERGENCY_STOPPED: "已急停",
+        }
+        stage_txt = stage_labels.get(prog.state, "处理中")
+        chunk_txt = (
+            f"第 {prog.current_chunk}/{prog.total_chunks} 块"
+            if prog.total_chunks > 0 and prog.current_chunk > 0
+            else ""
+        )
+        msg_txt = prog.message or chunk_txt or stage_txt
+        set_i18n_text(self.job_status_lbl, f"{stage_txt}：{msg_txt}")
         if running:
             self.oom_banner.setVisible(False)
 
