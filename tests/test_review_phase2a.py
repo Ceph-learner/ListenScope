@@ -194,11 +194,10 @@ def test_e15_live_separator_does_not_reuse_cleared_stop_event() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="E16")
 def test_e16_demucs_direct_path_standardizes_input_and_destandardizes_output() -> None:
     """_separate_with_demucs must standardize (x - mean)/std before apply_model and restore * std + mean."""
     src = (REPO_ROOT / "separation" / "demucs_backend.py").read_text("utf-8")
-    m = re.search(r"def _separate_with_demucs\(self.*?\n(?=    def )", src, re.DOTALL)
+    m = re.search(r"def _separate_with_demucs\(\s*self.*?\n(?=    def )", src, re.DOTALL)
     assert m is not None
     body = m.group(0)
     assert ".std(" in body and ".mean(" in body, "_separate_with_demucs missing reference mean/std normalization"
