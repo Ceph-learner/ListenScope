@@ -1,0 +1,51 @@
+{
+  "key": {
+    "mirex_score": 63.33,
+    "exact_acc": 50.0,
+    "major_I_IV_V_I_acc": 100.0,
+    "minor_i_iv_V_i_acc": 0.0
+  },
+  "rt_chord": {
+    "rt_progression_acc": 90.0,
+    "rt_inversion_acc": 4.44,
+    "triad_with_sevenths_on_acc": 87.5
+  },
+  "rt_tempo": {
+    "66.67ms": {
+      "acc1": 63.64,
+      "acc2": 90.91
+    },
+    "62.5ms": {
+      "acc1": 0.0,
+      "acc2": 0.0
+    },
+    "78.1ms": {
+      "acc1": 0.0,
+      "acc2": 0.0
+    }
+  },
+  "offline_tempo": {
+    "acc1_48k": 63.64,
+    "acc2_48k": 81.82,
+    "acc1_44k": 63.64,
+    "acc2_44k": 81.82,
+    "acc1": 63.64,
+    "acc2": 81.82
+  },
+  "rt_pitch": {
+    "pure_sine_acc": 100.0,
+    "pure_sine_median_cents": 0.7,
+    "harmonic_acc": 100.0,
+    "harmonic_median_cents": 0.7,
+    "weak_f0_acc": 0.0,
+    "weak_f0_median_cents": 999.0
+  },
+  "offline_bass": {
+    "pure_sine_acc_48k": 100.0,
+    "808_acc_48k": 100.0,
+    "repeated_a1_count_48k": 3,
+    "pure_sine_acc_44k": 100.0,
+    "808_acc_44k": 100.0,
+    "repeated_a1_count_44k": 3
+  }
+}

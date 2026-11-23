@@ -73,9 +73,12 @@ class ChromaExtractor:
 
         max_hist = max(1, int(self.config.chroma_history_seconds * self.config.analysis_rate_hz))
         self._lock = threading.Lock()
-        self._history: deque[np.ndarray] = deque(maxlen=max_hist)
-        self._weight_history: deque[np.float32] = deque(maxlen=max_hist)
-        self._bass_history: deque[np.ndarray] = deque(maxlen=max_hist)
+        self._hist_cap = max_hist
+        self._history = np.zeros((max_hist, 12), dtype=np.float32)
+        self._weight_history = np.zeros(max_hist, dtype=np.float32)
+        self._bass_history = np.zeros((max_hist, 12), dtype=np.float32)
+        self._hist_pos = 0
+        self._hist_len = 0
 
     def _build_chroma_filterbank(
         self,
@@ -135,13 +138,21 @@ class ChromaExtractor:
 
     @property
     def history_maxlen(self) -> int:
-        return self._history.maxlen or 0
+        return self._hist_cap
 
     def clear(self) -> None:
         with self._lock:
-            self._history.clear()
-            self._weight_history.clear()
-            self._bass_history.clear()
+            self._hist_pos = 0
+            self._hist_len = 0
+
+    def _append_history_locked(self, chroma: np.ndarray, weight: float, bass_chroma: np.ndarray) -> None:
+        idx = self._hist_pos
+        self._history[idx] = chroma
+        self._weight_history[idx] = np.float32(weight)
+        self._bass_history[idx] = bass_chroma
+        self._hist_pos = (idx + 1) % self._hist_cap
+        if self._hist_len < self._hist_cap:
+            self._hist_len += 1
 
     def extract_from_magnitude(
         self,
@@ -176,9 +187,7 @@ class ChromaExtractor:
 
         if record_history:
             with self._lock:
-                self._history.append(chroma)
-                self._weight_history.append(np.float32(weight))
-                self._bass_history.append(bass_chroma)
+                self._append_history_locked(chroma, weight, bass_chroma)
         return chroma
 
     def extract_from_pcm(
@@ -188,6 +197,18 @@ class ChromaExtractor:
         record_history: bool = True,
         is_silent: bool = False,
     ) -> np.ndarray:
+        chroma, _bass = self.extract_with_bass_from_pcm(
+            mono, record_history=record_history, is_silent=is_silent
+        )
+        return chroma
+
+    def extract_with_bass_from_pcm(
+        self,
+        mono: np.ndarray,
+        *,
+        record_history: bool = True,
+        is_silent: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
         if is_silent or mono is None or mono.size == 0 or not np.all(np.isfinite(mono)):
             chroma = np.zeros(12, dtype=np.float32)
             bass_chroma = np.zeros(12, dtype=np.float32)
@@ -227,7 +248,9 @@ class ChromaExtractor:
                     comp_bass = np.log1p(6.0 * norm_mag).astype(np.float32)
                     raw_c = np.power(np.maximum(self._hr_chroma_fb @ comp, 0.0), 1.3).astype(np.float32)
                     chroma, norm_c = self._l2_normalize(raw_c)
-                    bass_chroma, _ = self._l2_normalize(self._hr_bass_fb @ comp_bass)
+                    bass_chroma, norm_b = self._l2_normalize(self._hr_bass_fb @ comp_bass)
+                    if norm_b < 0.25 * max(norm_c, 1e-6):
+                        bass_chroma = np.zeros(12, dtype=np.float32)
                     if norm_c > 1e-9:
                         tonality = self._compute_tonality(hr_mag, self._hr_sfm_mask)
                         weight = float(tonality * np.sqrt(rms))
@@ -236,41 +259,36 @@ class ChromaExtractor:
 
         if record_history:
             with self._lock:
-                self._history.append(chroma)
-                self._weight_history.append(np.float32(weight))
-                self._bass_history.append(bass_chroma)
-        return chroma
+                self._append_history_locked(chroma, weight, bass_chroma)
+        return chroma, bass_chroma
+
+    def _ordered_slice_locked(self, buf: np.ndarray, take: Optional[int]) -> np.ndarray:
+        n = self._hist_len
+        if n == 0:
+            return np.empty((0,) + buf.shape[1:], dtype=buf.dtype)
+        count = n if take is None else min(n, max(1, take))
+        if self._hist_len < self._hist_cap:
+            start = n - count
+            return np.array(buf[start:n], dtype=buf.dtype, copy=True)
+        # Full ring: oldest is at self._hist_pos
+        start = (self._hist_pos - count) % self._hist_cap
+        if start + count <= self._hist_cap:
+            return np.array(buf[start : start + count], dtype=buf.dtype, copy=True)
+        first = self._hist_cap - start
+        return np.concatenate([buf[start:], buf[: count - first]], axis=0).astype(buf.dtype, copy=False)
 
     def recent_chroma_matrix(self, seconds: Optional[float] = None) -> np.ndarray:
+        take = max(1, int(seconds * self.config.analysis_rate_hz)) if seconds is not None else None
         with self._lock:
-            if not self._history:
-                return np.empty((0, 12), dtype=np.float32)
-            items = list(self._history)
-        if seconds is not None:
-            take = max(1, int(seconds * self.config.analysis_rate_hz))
-            items = items[-take:]
-        return np.stack(items, axis=0)
+            return self._ordered_slice_locked(self._history, take)
 
     def recent_chroma_bundle(
         self, seconds: Optional[float] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        take = max(1, int(seconds * self.config.analysis_rate_hz)) if seconds is not None else None
         with self._lock:
-            if not self._history:
-                return (
-                    np.empty((0, 12), dtype=np.float32),
-                    np.empty((0,), dtype=np.float32),
-                    np.empty((0, 12), dtype=np.float32),
-                )
-            c_items = list(self._history)
-            w_items = list(self._weight_history)
-            b_items = list(self._bass_history)
-        if seconds is not None:
-            take = max(1, int(seconds * self.config.analysis_rate_hz))
-            c_items = c_items[-take:]
-            w_items = w_items[-take:]
-            b_items = b_items[-take:]
-        return (
-            np.stack(c_items, axis=0),
-            np.asarray(w_items, dtype=np.float32),
-            np.stack(b_items, axis=0),
-        )
+            return (
+                self._ordered_slice_locked(self._history, take),
+                self._ordered_slice_locked(self._weight_history, take),
+                self._ordered_slice_locked(self._bass_history, take),
+            )

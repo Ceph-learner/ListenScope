@@ -113,6 +113,7 @@ def _fallback_monophonic_stem_to_notes(audio_path: Path, *, max_seconds: float =
     cur_start: float = 0.0
     cur_conf: float = 0.0
     cur_rms: float = 0.0
+    prev_rms: float = 0.0
 
     def _flush(end_sec: float) -> None:
         nonlocal cur_midi
@@ -150,12 +151,13 @@ def _fallback_monophonic_stem_to_notes(audio_path: Path, *, max_seconds: float =
             cur_start = t_sec
             cur_conf = p.confidence
             cur_rms = rms
-        elif midi_num != cur_midi:
+        elif midi_num != cur_midi or (rms > 1.6 * max(prev_rms, 1e-6) and (t_sec - cur_start) >= 0.08):
             _flush(t_sec)
             cur_midi = midi_num
             cur_start = t_sec
             cur_conf = p.confidence
             cur_rms = rms
+        prev_rms = rms
 
     if cur_midi is not None:
         _flush(mono.shape[0] / float(sr))

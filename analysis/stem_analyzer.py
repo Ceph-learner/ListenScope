@@ -16,7 +16,7 @@ import wave
 
 import numpy as np
 
-from audio.pcm_utils import decode_wave_bytes, normalize_to_canonical_pcm
+from audio.pcm_utils import StreamingResampler, decode_wave_bytes, normalize_to_canonical_pcm
 from core.config import AnalysisConfig
 from core.models import (
     BassAnalysisResult,
@@ -36,6 +36,7 @@ from .fft import SpectrumAnalyzer
 from .key_detection import KeyDetector
 from .pitch import PitchEstimator, freq_to_note_and_cents
 from .tempo import TempoEstimator
+from .yin import yin_frame_f0 as _yin_bass_frame_f0
 
 CANONICAL_SR = 48000
 MAX_EVENTS_CAP = 2000
@@ -114,23 +115,47 @@ def _iter_aligned_mono_48k_frames(
         max_samples = int(round(eff_duration * CANONICAL_SR))
         written_samples = 0
 
+        resamplers: list[Optional[StreamingResampler]] = [
+            StreamingResampler(sr, CANONICAL_SR, 1) if sr != CANONICAL_SR else None
+            for (_k, _h, sr, *_rest) in readers
+        ]
+        flushed = [False] * len(readers)
+
         try:
             while written_samples < max_samples:
                 chunks_48k: list[np.ndarray] = []
                 min_len = None
-                for kind, handle, sr, ch, _total_frames, weight in readers:
+                for r_idx, (kind, handle, sr, ch, _total_frames, weight) in enumerate(readers):
                     src_take = max(256, int(round(block_sec * sr)))
                     raw_arr = _read_reader_chunk_f32(kind, handle, src_take, ch)
+                    rs = resamplers[r_idx]
                     if raw_arr.shape[0] == 0:
+                        if rs is not None and not flushed[r_idx]:
+                            flushed[r_idx] = True
+                            mono_48k = rs.flush()[:, 0]
+                            if mono_48k.shape[0] > 0:
+                                chunks_48k.append(mono_48k * weight)
+                                min_len = mono_48k.shape[0] if min_len is None else min(min_len, mono_48k.shape[0])
+                                continue
                         min_len = 0
                         break
-                    mono_48k = normalize_to_canonical_pcm(
-                        raw_arr,
-                        src_rate=sr,
-                        src_channels=ch,
-                        dst_rate=CANONICAL_SR,
-                        dst_channels=1,
-                    )[:, 0]
+                    if rs is not None:
+                        mono_src = normalize_to_canonical_pcm(
+                            raw_arr,
+                            src_rate=sr,
+                            src_channels=ch,
+                            dst_rate=sr,
+                            dst_channels=1,
+                        )
+                        mono_48k = rs.process(mono_src)[:, 0]
+                    else:
+                        mono_48k = normalize_to_canonical_pcm(
+                            raw_arr,
+                            src_rate=sr,
+                            src_channels=ch,
+                            dst_rate=CANONICAL_SR,
+                            dst_channels=1,
+                        )[:, 0]
                     chunks_48k.append(mono_48k * weight)
                     min_len = mono_48k.shape[0] if min_len is None else min(min_len, mono_48k.shape[0])
 
@@ -165,19 +190,21 @@ def _iter_aligned_mono_48k_frames(
 
 
 def _coalesce_note_frames(
-    frame_notes: list[tuple[float, int, float, float]],
+    frame_notes: list[tuple[float, int, float, float]] | list[tuple[float, int, float, float, float]],
     *,
     hop_sec: float,
     min_note_duration_sec: float = 0.08,
     max_notes: int = MAX_EVENTS_CAP,
 ) -> list[StemNoteEvent]:
-    """Group quantized MIDI frame observations into clean note events."""
+    """Group quantized MIDI frame observations into clean note events, splitting on re-attacks."""
     events: list[StemNoteEvent] = []
     cur_midi: Optional[int] = None
     cur_start: float = 0.0
     cur_last_t: float = 0.0
     cur_freqs: list[float] = []
     cur_confs: list[float] = []
+    prev_rms: float = 0.0
+    reattack_armed: bool = False
 
     def _flush() -> None:
         if cur_midi is None or not cur_freqs:
@@ -196,21 +223,38 @@ def _coalesce_note_frames(
             )
         )
 
-    for t_sec, midi_num, freq_hz, conf in frame_notes:
+    for item in frame_notes:
+        t_sec = item[0]
+        midi_num = item[1]
+        freq_hz = item[2]
+        conf = item[3]
+        rms = item[4] if len(item) >= 5 else 0.0
+
         if midi_num < 0:
             _flush()
             cur_midi = None
             cur_freqs.clear()
             cur_confs.clear()
+            prev_rms = 0.0
+            reattack_armed = False
             continue
 
+        is_reattack = (
+            cur_midi is not None
+            and midi_num == cur_midi
+            and rms > 0.0
+            and prev_rms > 0.0
+            and rms > 1.6 * max(prev_rms, 1e-6)
+            and (t_sec - cur_start) >= min_note_duration_sec
+        )
         if cur_midi is None:
             cur_midi = midi_num
             cur_start = t_sec
             cur_last_t = t_sec
             cur_freqs = [freq_hz]
             cur_confs = [conf]
-        elif midi_num == cur_midi and (t_sec - cur_last_t) <= hop_sec * 2.5:
+            reattack_armed = False
+        elif midi_num == cur_midi and not is_reattack and (t_sec - cur_last_t) <= hop_sec * 2.5:
             cur_last_t = t_sec
             cur_freqs.append(freq_hz)
             cur_confs.append(conf)
@@ -223,126 +267,53 @@ def _coalesce_note_frames(
             cur_last_t = t_sec
             cur_freqs = [freq_hz]
             cur_confs = [conf]
+            reattack_armed = False
+        prev_rms = rms
 
     _flush()
     return events[:max_notes]
 
 
-def _yin_bass_frame_f0(
-    frame: np.ndarray,
-    mag: np.ndarray,
-    *,
-    sample_rate: int = CANONICAL_SR,
-    bin_hz: float = CANONICAL_SR / 8192.0,
-    min_hz: float = 28.0,
-    max_hz: float = 350.0,
-) -> tuple[float, float]:
-    """Estimate bass fundamental frequency using FFT-accelerated YIN (CMNDF) + harmonic verification."""
-    n = int(frame.shape[0])
-    w = n // 2
-    tau_min = max(2, int(round(sample_rate / float(max_hz))))
-    tau_max = min(w - 2, int(round(sample_rate / float(min_hz))))
-    if tau_max <= tau_min + 2:
-        return 0.0, 0.0
-
-    xf = frame.astype(np.float64)
-    xf = xf - float(np.mean(xf))
-    e0 = float(np.dot(xf[:w], xf[:w]))
-    if e0 <= 1e-12:
-        return 0.0, 0.0
-
-    fft_n = n * 2
-    acf = np.fft.irfft(np.conj(np.fft.rfft(xf[:w], n=fft_n)) * np.fft.rfft(xf, n=fft_n), n=fft_n)
-    cs = np.empty(n + 1, dtype=np.float64)
-    cs[0] = 0.0
-    np.cumsum(xf * xf, out=cs[1:])
-
-    e_tau = cs[w : w + tau_max + 1] - cs[: tau_max + 1]
-    diff = np.maximum(0.0, e0 + e_tau - 2.0 * acf[: tau_max + 1])
-
-    cmndf = np.ones(tau_max + 1, dtype=np.float64)
-    running = np.cumsum(diff[1:])
-    taus = np.arange(1, tau_max + 1, dtype=np.float64)
-    valid = running > 1e-12
-    cmndf[1:][valid] = diff[1:][valid] * taus[valid] / running[valid]
-
-    thresh = 0.18
-    tau = -1
-    idx = tau_min
-    while idx < tau_max:
-        if cmndf[idx] < thresh:
-            while idx + 1 < tau_max and cmndf[idx + 1] < cmndf[idx]:
-                idx += 1
-            tau = idx
-            break
-        idx += 1
-
-    if tau < 0:
-        rel = int(np.argmin(cmndf[tau_min : tau_max + 1]))
-        tau = tau_min + rel
-        if cmndf[tau] > 0.42:
-            return 0.0, 0.0
-
-    # Guard against octave-up lock on overtone-heavy bass notes where 2nd harmonic momentarily dips <0.18
-    cand2 = tau * 2
-    if cand2 + 3 <= tau_max:
-        win2 = cmndf[cand2 - 3 : cand2 + 4]
-        local_off = int(np.argmin(win2)) - 3
-        c2 = cand2 + local_off
-        if cmndf[c2] < 0.08 and cmndf[c2] < cmndf[tau] * 0.65:
-            sub_bin = max(1, min(mag.shape[0] - 1, int(round((sample_rate / float(c2)) / bin_hz))))
-            spec_med = float(np.median(mag[1 : min(mag.shape[0], int(round(max_hz / bin_hz)) + 2)])) + 1e-9
-            lo_b = max(1, sub_bin - 1)
-            hi_b = min(mag.shape[0], sub_bin + 2)
-            if float(np.max(mag[lo_b:hi_b])) > max(1.8 * spec_med, 0.1 * float(np.max(mag))):
-                tau = c2
-
-    if tau_min < tau < tau_max:
-        alpha = float(cmndf[tau - 1])
-        beta = float(cmndf[tau])
-        gamma = float(cmndf[tau + 1])
-        denom = alpha - 2.0 * beta + gamma
-        delta = max(-0.5, min(0.5, 0.5 * (alpha - gamma) / denom)) if abs(denom) > 1e-12 else 0.0
-        tau_est = float(tau) + delta
-    else:
-        tau_est = float(tau)
-
-    if tau_est <= 0.0:
-        return 0.0, 0.0
-    freq = float(sample_rate) / tau_est
-    conf = min(1.0, max(0.0, 1.0 - float(cmndf[tau])))
-    if not np.isfinite(freq) or freq < min_hz - 1.0 or freq > max_hz + 5.0 or conf < 0.50:
-        return 0.0, 0.0
-    return freq, conf
-
 
 def _detect_bass_modulation(events: list[StemNoteEvent]) -> tuple[bool, str]:
-    """Compare first-half vs second-half bass pitch-class weightings to surface key shift / modulation hints."""
+    """Compare first-half vs second-half bass key estimates to surface genuine modulation hints."""
     if len(events) < 4:
         return False, ""
     span = events[-1].end_sec - events[0].start_sec
     if span < 1.6:
         return False, ""
+
+    rows: list[np.ndarray] = []
+    weights: list[float] = []
+    for ev in events:
+        vec = np.zeros(12, dtype=np.float32)
+        vec[ev.pitch_midi % 12] = 1.0
+        rows.append(vec)
+        weights.append(max(0.05, ev.end_sec - ev.start_sec))
+
+    mat = np.stack(rows, axis=0)
+    w = np.asarray(weights, dtype=np.float32)
     mid = len(events) // 2
-    first_half = events[:mid]
-    second_half = events[mid:]
+    kd = KeyDetector(min_active_frames=1, min_correlation=0.65)
+    h1_idx, _, h1_corr, h1_margin = kd._score_mean_chroma(mat[:mid], frame_weights=w[:mid], bass_mat=mat[:mid])
+    h2_idx, _, h2_corr, h2_margin = kd._score_mean_chroma(mat[mid:], frame_weights=w[mid:], bass_mat=mat[mid:])
 
-    vec_a = np.zeros(12, dtype=np.float64)
-    vec_b = np.zeros(12, dtype=np.float64)
-    for ev in first_half:
-        vec_a[ev.pitch_midi % 12] += max(0.05, ev.end_sec - ev.start_sec)
-    for ev in second_half:
-        vec_b[ev.pitch_midi % 12] += max(0.05, ev.end_sec - ev.start_sec)
+    if (
+        h1_idx != h2_idx
+        and h1_corr >= 0.65
+        and h2_corr >= 0.65
+        and h1_margin >= 0.04
+        and h2_margin >= 0.04
+    ):
+        def _scale_pcs(idx: int) -> set[int]:
+            root = idx // 2
+            intervals = (0, 2, 4, 5, 7, 9, 11) if idx % 2 == 0 else (0, 2, 3, 5, 7, 8, 10)
+            return {(root + iv) % 12 for iv in intervals}
 
-    na = float(np.linalg.norm(vec_a))
-    nb = float(np.linalg.norm(vec_b))
-    if na <= 1e-6 or nb <= 1e-6:
-        return False, ""
-    cos_sim = float(np.dot(vec_a, vec_b) / (na * nb))
-    pc_a = PITCH_CLASSES[int(np.argmax(vec_a))]
-    pc_b = PITCH_CLASSES[int(np.argmax(vec_b))]
-    if cos_sim < 0.45 and pc_a != pc_b:
-        return True, f"前半段根音重心 {pc_a} → 后半段 {pc_b} (可能发生转调，最低音按实音 MIDI 标定)"
+        h1_pcs = {ev.pitch_midi % 12 for ev in events[:mid]}
+        h2_pcs = {ev.pitch_midi % 12 for ev in events[mid:]}
+        if not h1_pcs.issubset(_scale_pcs(h2_idx)) or not h2_pcs.issubset(_scale_pcs(h1_idx)):
+            return True, f"前半段调性 {kd._names[h1_idx]} → 后半段 {kd._names[h2_idx]} (可能发生转调，最低音按实音 MIDI 标定)"
     return False, ""
 
 
@@ -350,7 +321,7 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
     """Analyze separated bass stem in [28 Hz, 350 Hz] using FFT-accelerated YIN/CMNDF + subharmonic verification."""
     path = Path(bass_wav_path)
     fft_size = 8192
-    hop_size = 2048
+    hop_size = 512
     hop_sec = hop_size / float(CANONICAL_SR)
     bin_hz = CANONICAL_SR / float(fft_size)
     win = np.hanning(fft_size).astype(np.float32)
@@ -359,41 +330,51 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
         [(path, 1.0)], fft_size=fft_size, hop_size=hop_size, max_seconds=max_seconds
     )
 
-    frame_data: list[tuple[float, float, float]] = []
+    frame_data: list[tuple[float, float, float, float]] = []
     signal_detected = False
     silence_rms = 10.0 ** (AnalysisConfig().silence_threshold_dbfs / 20.0)
+    tail_len = min(fft_size, hop_size * 2)
 
     for center_sec, frame in frames_iter:
-        t_start = max(0.0, center_sec - hop_sec * 0.5)
+        frame_start_sec = max(0.0, center_sec - (fft_size * 0.5) / float(CANONICAL_SR))
         if not np.all(np.isfinite(frame)):
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         rms = float(np.sqrt(np.mean(np.square(frame))))
         if rms < silence_rms:
-            frame_data.append((t_start, 0.0, 0.0))
+            frame_data.append((frame_start_sec, 0.0, 0.0, 0.0))
             continue
         signal_detected = True
+
+        tail_rms = float(np.sqrt(np.mean(np.square(frame[-tail_len:]))))
+        # Refine onset timestamp using first 128-sample sub-block crossing energy threshold
+        sub = frame.reshape(-1, 128)
+        sub_rms = np.sqrt(np.mean(np.square(sub), axis=1))
+        thresh = max(silence_rms, 0.25 * float(np.max(sub_rms)))
+        hits = np.where(sub_rms >= thresh)[0]
+        onset_offset_sec = (int(hits[0]) * 128) / float(CANONICAL_SR) if hits.size > 0 else 0.0
+        t_onset = frame_start_sec + onset_offset_sec
 
         mag = np.abs(np.fft.rfft(frame * win)).astype(np.float32)
         freq, conf = _yin_bass_frame_f0(frame, mag, sample_rate=CANONICAL_SR, bin_hz=bin_hz)
         if freq <= 0.0:
-            frame_data.append((t_start, 0.0, 0.0))
+            frame_data.append((t_onset, 0.0, 0.0, tail_rms))
             continue
-        frame_data.append((t_start, freq, conf))
+        frame_data.append((t_onset, freq, conf, tail_rms))
 
     # 3-frame median filter across adjacent voiced frames eliminates single-frame octave glitches
-    raw_obs: list[tuple[float, int, float, float]] = []
-    for idx, (t_start, freq, conf) in enumerate(frame_data):
+    raw_obs: list[tuple[float, int, float, float, float]] = []
+    for idx, (t_start, freq, conf, tail_rms) in enumerate(frame_data):
         if freq <= 0.0:
-            raw_obs.append((t_start, -1, 0.0, 0.0))
+            raw_obs.append((t_start, -1, 0.0, 0.0, 0.0))
             continue
         nbrs = [freq]
         if idx > 0 and frame_data[idx - 1][1] > 0.0:
             nbrs.append(frame_data[idx - 1][1])
         if idx + 1 < len(frame_data) and frame_data[idx + 1][1] > 0.0:
             nbrs.append(frame_data[idx + 1][1])
-        med_freq = float(np.median(nbrs))
+        med_freq = float(np.median(nbrs)) if len(nbrs) == 3 else freq
         midi = max(0, min(127, int(round(69.0 + 12.0 * np.log2(med_freq / 440.0)))))
-        raw_obs.append((t_start, midi, med_freq, conf))
+        raw_obs.append((t_start, midi, med_freq, conf, tail_rms))
 
     events = _coalesce_note_frames(raw_obs, hop_sec=hop_sec, min_note_duration_sec=0.08)
     if events:
@@ -498,13 +479,27 @@ def _estimate_offline_bpm_from_flux(flux: np.ndarray, rate_hz: float) -> TempoEs
 
     lags = np.arange(min_lag, max_lag + 1, dtype=np.float32)
     bpms = 60.0 * rate_hz / lags
-    prior = np.exp(-0.5 * (np.log2(bpms / 118.0) / 0.55) ** 2).astype(np.float32)
+    prior = np.maximum(
+        np.exp(-0.5 * (np.log2(bpms / 100.0) / 0.45) ** 2),
+        0.8 * np.exp(-0.5 * (np.log2(bpms / 170.0) / 0.15) ** 2),
+    ).astype(np.float32)
     weighted = acf[min_lag : max_lag + 1] * prior
     best_rel = int(np.argmax(weighted))
     best_lag = min_lag + best_rel
     raw_acf = float(acf[best_lag])
     if not np.isfinite(raw_acf) or raw_acf < 0.14:
         return TempoEstimate(bpm=None, stability="Unknown", confidence_score=raw_acf if np.isfinite(raw_acf) else 0.0)
+
+    if (60.0 * rate_hz / max(1, best_lag)) < 95.0:
+        half_lag = int(round(best_lag * 0.5))
+        if min_lag <= half_lag <= max_lag:
+            lo_h = max(min_lag, half_lag - 1)
+            hi_h = min(max_lag, half_lag + 1)
+            sub_lag = lo_h + int(np.argmax(acf[lo_h : hi_h + 1]))
+            if float(acf[sub_lag]) >= 0.35 * raw_acf:
+                best_lag = sub_lag
+                best_rel = best_lag - min_lag
+                raw_acf = float(acf[best_lag])
 
     refined = float(best_lag)
     if 0 < best_rel < weighted.shape[0] - 1:
@@ -541,12 +536,18 @@ def analyze_drums_stem(drums_wav_path: Path | str, *, max_seconds: float = 120.0
     k_flux: list[float] = []
     s_flux: list[float] = []
     h_flux: list[float] = []
+    e_k: list[float] = []
+    e_s: list[float] = []
+    e_h: list[float] = []
     times: list[float] = []
 
     for center_sec, frame in frames_iter:
         if not np.all(np.isfinite(frame)):
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         mag = np.abs(np.fft.rfft(frame * win)).astype(np.float32)
+        e_k.append(float(np.sum(np.square(mag[kick_mask]))))
+        e_s.append(float(np.sum(np.square(mag[snare_mask]))))
+        e_h.append(float(np.sum(np.square(mag[hat_mask]))))
         log_mag = np.log1p(mag)
         mk = log_mag[kick_mask]
         ms = log_mag[snare_mask]
@@ -567,10 +568,27 @@ def analyze_drums_stem(drums_wav_path: Path | str, *, max_seconds: float = 120.0
     kf = np.asarray(k_flux, dtype=np.float32)
     sf_arr = np.asarray(s_flux, dtype=np.float32)
     hf = np.asarray(h_flux, dtype=np.float32)
+    ek_arr = np.asarray(e_k, dtype=np.float64)
+    es_arr = np.asarray(e_s, dtype=np.float64)
+    eh_arr = np.asarray(e_h, dtype=np.float64)
 
-    kicks = _pick_band_onsets(kf, t_arr, hop_sec=hop_sec, min_gap_sec=0.085, k_std=1.55)
+    raw_kicks = _pick_band_onsets(kf, t_arr, hop_sec=hop_sec, min_gap_sec=0.085, k_std=1.55)
     snares = _pick_band_onsets(sf_arr, t_arr, hop_sec=hop_sec, min_gap_sec=0.085, k_std=1.7)
-    hihats = _pick_band_onsets(hf, t_arr, hop_sec=hop_sec, min_gap_sec=0.055, k_std=1.5)
+    raw_hihats = _pick_band_onsets(hf, t_arr, hop_sec=hop_sec, min_gap_sec=0.055, k_std=1.5)
+
+    def _frame_idx(t_hit: float) -> int:
+        if t_arr.size == 0:
+            return 0
+        return min(int(t_arr.size - 1), max(0, int(np.searchsorted(t_arr, t_hit))))
+
+    kicks = [
+        t for t in raw_kicks
+        if (i := _frame_idx(t)) >= 0 and (ek_arr[i] / (ek_arr[i] + es_arr[i] + 1e-9)) > 0.35
+    ]
+    hihats = [
+        t for t in raw_hihats
+        if (i := _frame_idx(t)) >= 0 and (eh_arr[i] / (es_arr[i] + eh_arr[i] + 1e-9)) > 0.25
+    ]
 
     combined = kf * 1.4 + sf_arr * 1.1 + hf * 0.4
     tempo_est = _estimate_offline_bpm_from_flux(combined, rate_hz=rate_hz)
@@ -686,7 +704,11 @@ def analyze_harmony_and_chords(
     spec = SpectrumAnalyzer(sample_rate=CANONICAL_SR, config=cfg)
     hr_stride = 3  # ~15.6 Hz effective HR chroma rate (matches real-time 15 Hz worker & cuts offline CPU ~3x)
     chroma_cfg = AnalysisConfig(analysis_rate_hz=(CANONICAL_SR / float(cfg.hop_size)) / float(hr_stride))
-    chroma_ext = ChromaExtractor(sample_rate=CANONICAL_SR, config=chroma_cfg)
+    chroma_ext = ChromaExtractor(
+        sample_rate=CANONICAL_SR,
+        config=chroma_cfg,
+        fmin_hz=chroma_cfg.harmony_chroma_fmin_hz,
+    )
     chord_det = ChordDetector(ema_alpha=0.55, include_sevenths=include_sevenths)
     key_det = KeyDetector(min_active_frames=12)
 
@@ -704,6 +726,7 @@ def analyze_harmony_and_chords(
     flux_vals: list[float] = []
     prev_mag_like: Optional[np.ndarray] = None
     bucket_chromas: list[np.ndarray] = []
+    bucket_basses: list[np.ndarray] = []
     bucket_silent = 0
     bucket_count = 0
     bucket_start = 0.0
@@ -711,6 +734,7 @@ def analyze_harmony_and_chords(
     hr_buf = np.zeros(hr_window, dtype=np.float32)
     hr_filled = 0
     last_c12 = np.zeros(12, dtype=np.float32)
+    last_b12 = np.zeros(12, dtype=np.float32)
 
     for idx, (center_sec, frame) in enumerate(frames_iter):
         if not np.all(np.isfinite(frame)):
@@ -727,11 +751,14 @@ def analyze_harmony_and_chords(
 
         rms = float(np.sqrt(np.mean(np.square(frame))))
         is_silent = (not np.isfinite(rms)) or rms < silence_rms
-        _fft_mag, _fft_db, log_db = spec.analyze_frame(frame)
+        _fft_mag, _fft_db, log_db = spec.analyze_frame(frame, record=False)
         if idx % hr_stride == 0:
             hr_view = hr_buf[hr_window - hr_filled :] if hr_filled < hr_window else hr_buf
-            last_c12 = chroma_ext.extract_from_pcm(hr_view, record_history=True, is_silent=is_silent)
+            last_c12, last_b12 = chroma_ext.extract_with_bass_from_pcm(
+                hr_view, record_history=True, is_silent=is_silent
+            )
         c12 = np.zeros(12, dtype=np.float32) if is_silent else last_c12
+        b12 = np.zeros(12, dtype=np.float32) if is_silent else last_b12
 
         log_safe = np.clip(np.nan_to_num(log_db, nan=-120.0, posinf=20.0, neginf=-120.0), -120.0, 20.0)
         mag_like = np.power(10.0, log_safe / 20.0)
@@ -745,14 +772,16 @@ def analyze_harmony_and_chords(
         if bucket_count == 0:
             bucket_start = max(0.0, center_sec - hop_sec * 0.5)
         bucket_chromas.append(c12)
+        bucket_basses.append(b12)
         if is_silent:
             bucket_silent += 1
         bucket_count += 1
 
         if bucket_count >= win_frames:
             mean_c = np.mean(np.stack(bucket_chromas, axis=0), axis=0)
+            mean_b = np.mean(np.stack(bucket_basses, axis=0), axis=0)
             win_silent = bucket_silent > (bucket_count * 0.75)
-            est = chord_det.update(mean_c, is_silent=win_silent)
+            est = chord_det.update(mean_c, is_silent=win_silent, bass_chroma=mean_b)
             end_t = min(duration_sec, bucket_start + bucket_count * hop_sec)
             raw_segments.append(
                 ChordTimelineSegment(
@@ -765,13 +794,15 @@ def analyze_harmony_and_chords(
                 )
             )
             bucket_chromas.clear()
+            bucket_basses.clear()
             bucket_silent = 0
             bucket_count = 0
 
     if bucket_count > 0:
         mean_c = np.mean(np.stack(bucket_chromas, axis=0), axis=0)
+        mean_b = np.mean(np.stack(bucket_basses, axis=0), axis=0)
         win_silent = bucket_silent > (bucket_count * 0.75)
-        est = chord_det.update(mean_c, is_silent=win_silent)
+        est = chord_det.update(mean_c, is_silent=win_silent, bass_chroma=mean_b)
         end_t = min(duration_sec, bucket_start + bucket_count * hop_sec)
         if end_t - bucket_start >= 0.15:
             raw_segments.append(

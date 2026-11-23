@@ -26,6 +26,11 @@ _KEY_PROFILES: dict[str, tuple[np.ndarray, np.ndarray]] = {
         np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88], dtype=np.float32),
         np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17], dtype=np.float32),
     ),
+    # KeyFinder / Temperley harmonic-minor-aware profile
+    "keyfinder": (
+        np.array([5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0], dtype=np.float32),
+        np.array([5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0], dtype=np.float32),
+    ),
 }
 
 
@@ -155,6 +160,13 @@ class KeyDetector:
         final_scores = corrs + bonus
         order = np.argsort(final_scores)[::-1]
         best_idx, second_idx = int(order[0]), int(order[1])
+        if best_idx % 2 == 0:
+            r = best_idx // 2
+            min_idx = 2 * r + 1
+            maj_ev = float(mean_chroma[(r + 4) % 12]) + 0.5 * float(mean_chroma[(r + 9) % 12])
+            min_ev = float(mean_chroma[(r + 3) % 12]) + 0.5 * float(mean_chroma[(r + 8) % 12])
+            if min_ev > maj_ev and float(final_scores[best_idx] - final_scores[min_idx]) < 0.20:
+                best_idx, second_idx = min_idx, best_idx
         margin = float(final_scores[best_idx] - final_scores[second_idx])
         return best_idx, second_idx, float(corrs[best_idx]), margin
 
@@ -249,18 +261,27 @@ class KeyDetector:
         modulation = False
         if active.shape[0] >= self._min_active_frames * 2:
             mid = active.shape[0] // 2
-            h1_idx, _, h1_corr, _ = self._score_mean_chroma(
+            h1_idx, _, h1_corr, h1_margin = self._score_mean_chroma(
                 active[:mid],
                 frame_weights=active_w[:mid] if active_w is not None else None,
                 bass_mat=active_b[:mid] if active_b is not None else None,
             )
-            h2_idx, _, h2_corr, _ = self._score_mean_chroma(
+            h2_idx, _, h2_corr, h2_margin = self._score_mean_chroma(
                 active[mid:],
                 frame_weights=active_w[mid:] if active_w is not None else None,
                 bass_mat=active_b[mid:] if active_b is not None else None,
             )
-            if h1_idx != h2_idx and h1_corr >= 0.55 and h2_corr >= 0.55:
+            if (
+                h1_idx != h2_idx
+                and h1_corr >= 0.70
+                and h2_corr >= 0.70
+                and h1_margin >= 0.05
+                and h2_margin >= 0.05
+            ):
                 modulation = True
+                if h2_idx != b_idx and (h1_idx != b_idx or h2_corr > h1_corr):
+                    primary = self._names[h2_idx]
+                    secondary = self._names[h1_idx]
                 relation_notes.append(f"疑似转调: {self._names[h1_idx]} -> {self._names[h2_idx]}")
 
         if margin >= 0.08 and b_corr >= 0.65 and not modulation:

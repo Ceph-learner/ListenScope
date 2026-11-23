@@ -129,7 +129,7 @@ def test_krumhansl_schmuckler_key_detection_and_modulation() -> None:
 
 def test_tempo_estimator_tracks_120_bpm_pulses() -> None:
     cfg = AnalysisConfig(analysis_rate_hz=15.0, tempo_window_seconds=16)
-    tempo = TempoEstimator(config=cfg)
+    tempo = TempoEstimator(config=cfg, hop_frames=3200)
 
     # Simulate periodic drum beats every 0.5s (= 120 BPM) at 15 Hz frame rate
     total_frames = 180  # 12 seconds
@@ -153,7 +153,7 @@ def test_tempo_estimator_tracks_120_bpm_pulses() -> None:
 
 def test_tempo_detects_beats_with_silent_gaps():
     config = AnalysisConfig(analysis_rate_hz=16.0, tempo_window_seconds=12)
-    estimator = TempoEstimator(config=config)
+    estimator = TempoEstimator(config=config, hop_frames=3000)
     silent = np.full(config.log_freq_bins, -120.0, dtype=np.float32)
     attack = np.full_like(silent, -15.0)
     for frame in range(160):

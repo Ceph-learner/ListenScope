@@ -134,6 +134,7 @@ class AnalysisConfig:
     analysis_rate_hz: float = 15.0          # ~66ms cadence on CPU worker
     silence_threshold_dbfs: float = -60.0
     waveform_display_points: int = 512
+    harmony_chroma_fmin_hz: float = 130.81
 
     def __post_init__(self) -> None:
         if self.fft_size < 512:
