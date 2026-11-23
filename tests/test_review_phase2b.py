@@ -36,13 +36,13 @@ def _midi_to_hz(midi: float) -> float:
 
 
 def test_abench_benchmark_suite_runs_and_returns_all_metrics() -> None:
-    """A-BENCH prerequisite: benchmark module runs deterministically and returns all metric groups."""
+    """A-BENCH prerequisite: frozen benchmark module runs deterministically and returns expected metric groups."""
     from tests.bench.algo_benchmark import run_chord_benchmark, run_pitch_benchmark
 
     chord_res = run_chord_benchmark()
     pitch_res = run_pitch_benchmark()
-    assert "triad_acc" in chord_res and "inversion_acc" in chord_res
-    assert "pitch_std_acc" in pitch_res and "pitch_weak_f0_acc" in pitch_res
+    assert "rt_progression_acc" in chord_res and "rt_inversion_acc" in chord_res
+    assert "pure_sine_acc" in pitch_res and "harmonic_acc" in pitch_res and "weak_f0_acc" in pitch_res
 
 
 @pytest.mark.xfail(strict=True, reason="A-H1")
@@ -311,7 +311,7 @@ def test_am5_drum_band_crosstalk_1500hz_click_does_not_trigger_kick(tmp_path: Pa
     _write_wav_pcm16(wav_path, sig)
 
     res = analyze_drums_stem(wav_path)
-    assert len(res.kick_times) == 0, f"1.5 kHz clicks triggered {len(res.kick_times)} false kicks: {res.kick_times}"
+    assert len(res.kick_times_sec) == 0, f"1.5 kHz clicks triggered {len(res.kick_times_sec)} false kicks: {res.kick_times_sec}"
 
 
 @pytest.mark.xfail(strict=True, reason="A-L2")

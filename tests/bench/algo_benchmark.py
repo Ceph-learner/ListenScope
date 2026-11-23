@@ -1,14 +1,17 @@
-"""Reproducible synthetic algorithm benchmark (A-BENCH) for ListenScope Phase 2B.
+"""Frozen black-box synthetic algorithm benchmark (A-BENCH) for ListenScope Phase 2B.
 
-Run directly:
-    python -m tests.bench.algo_benchmark
+DO NOT MODIFY `tests/bench/` DURING ALGORITHM IMPLEMENTATION.
+Run:
+    python -m tests.bench.algo_benchmark --json
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+import argparse
 import json
 import sys
+import tempfile
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -21,17 +24,41 @@ if str(REPO_ROOT) not in sys.path:
 from analysis.chords import ChordDetector
 from analysis.chroma import PITCH_CLASSES, ChromaExtractor
 from analysis.key_detection import KeyDetector
-from analysis.pitch import PitchEstimator, freq_to_note_and_cents
-from analysis.fft import SpectrumAnalyzer
-from analysis.stem_analyzer import _estimate_offline_bpm_from_flux
-from analysis.tempo import TempoEstimator
-from core.config import AnalysisConfig
+from analysis.pitch import freq_to_note_and_cents
+from analysis.stem_analyzer import analyze_bass_stem, analyze_drums_stem
+from analysis.worker import AnalysisWorker
+from audio.ring_buffer import FixedRingBuffer
+from core.config import AnalysisConfig, AudioConfig
 
 SR = 48000
 
 
 def _midi_to_hz(midi: float) -> float:
     return float(440.0 * (2.0 ** ((midi - 69.0) / 12.0)))
+
+
+def _to_stereo(mono: np.ndarray) -> np.ndarray:
+    arr = np.asarray(mono, dtype=np.float32)
+    if arr.ndim == 2:
+        return np.ascontiguousarray(arr, dtype=np.float32)
+    return np.ascontiguousarray(np.stack([arr, arr], axis=1), dtype=np.float32)
+
+
+def _write_wav_pcm16(path: Path, mono: np.ndarray, sr: int) -> None:
+    stereo = _to_stereo(mono)
+    pcm16 = np.clip(stereo * 32767.0, -32768, 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(int(sr))
+        wf.writeframes(pcm16.tobytes())
+
+
+def _new_realtime_worker(ring_seconds: int = 30) -> tuple[FixedRingBuffer, AnalysisWorker]:
+    acfg = AudioConfig(sample_rate=SR, channels=2, ring_buffer_seconds=ring_seconds)
+    rb = FixedRingBuffer(acfg)
+    worker = AnalysisWorker(rb, audio_config=acfg, analysis_config=AnalysisConfig())
+    return rb, worker
 
 
 def _synth_chord_segment(
@@ -45,14 +72,12 @@ def _synth_chord_segment(
     n = int(round(dur_sec * sr))
     t = np.arange(n, dtype=np.float32) / float(sr)
     sig = np.zeros(n, dtype=np.float32)
-    # Bass note in C2 octave with gentle 2nd/3rd harmonics
     fb = _midi_to_hz(bass_midi)
     sig += bass_gain * (
         0.75 * np.sin(2.0 * np.pi * fb * t)
         + 0.25 * np.sin(2.0 * np.pi * 2.0 * fb * t)
         + 0.10 * np.sin(2.0 * np.pi * 3.0 * fb * t)
     )
-    # Upper voicing
     ug = 0.28 / max(1, len(upper_midis))
     for m in upper_midis:
         f = _midi_to_hz(m)
@@ -61,7 +86,6 @@ def _synth_chord_segment(
             + 0.22 * np.sin(2.0 * np.pi * 2.0 * f * t)
             + 0.08 * np.sin(2.0 * np.pi * 3.0 * f * t)
         )
-    # Soft attack/release envelope
     fade = min(int(0.015 * sr), n // 4)
     if fade > 1:
         ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
@@ -113,21 +137,18 @@ def _eval_key_pcm(pcm: np.ndarray, *, sr: int = SR) -> str:
     kd = KeyDetector()
     win = 16384
     hop = 2048
-    chromas: list[np.ndarray] = []
-    basses: list[np.ndarray] = []
     for s in range(0, max(1, pcm.shape[0] - win + 1), hop):
         seg = pcm[s : s + win]
         if seg.shape[0] < win:
             break
-        c12 = ce.extract_from_pcm(seg, record_history=True)
-        chromas.append(c12)
+        ce.extract_from_pcm(seg, record_history=True)
     mat, weights, bass_mat = ce.recent_chroma_bundle(seconds=30.0)
     est = kd.estimate(mat, frame_weights=weights, bass_window=bass_mat)
     return est.primary
 
 
 def run_key_benchmark() -> dict[str, float]:
-    """24 keys x (cadence + pop progression + scale) = 72 cases with C2 bass roots."""
+    """24 keys x (cadence + pop progression + scale) = 72 cases with C2 bass roots (unchanged)."""
     total_w = 0.0
     exact = 0
     total = 0
@@ -136,30 +157,26 @@ def run_key_benchmark() -> dict[str, float]:
 
     for root in range(12):
         r_name = PITCH_CLASSES[root]
-        b0 = 36 + root  # C2..B2
+        b0 = 36 + root
 
-        # Major I-IV-V-I
         ch_maj_cad = [
             (b0, [60 + root, 64 + root, 67 + root]),
             (36 + (root + 5) % 12, [60 + (root + 5) % 12, 64 + (root + 5) % 12, 67 + (root + 5) % 12]),
             (36 + (root + 7) % 12, [60 + (root + 7) % 12, 64 + (root + 7) % 12, 67 + (root + 7) % 12]),
             (b0, [60 + root, 64 + root, 67 + root]),
         ]
-        # Major vi-IV-I-V
         ch_maj_pop = [
             (36 + (root + 9) % 12, [60 + (root + 9) % 12, 63 + (root + 9) % 12, 67 + (root + 9) % 12]),
             (36 + (root + 5) % 12, [60 + (root + 5) % 12, 64 + (root + 5) % 12, 67 + (root + 5) % 12]),
             (b0, [60 + root, 64 + root, 67 + root]),
             (36 + (root + 7) % 12, [60 + (root + 7) % 12, 64 + (root + 7) % 12, 67 + (root + 7) % 12]),
         ]
-        # Minor i-iv-V-i (harmonic minor V)
         ch_min_cad = [
             (b0, [60 + root, 63 + root, 67 + root]),
             (36 + (root + 5) % 12, [60 + (root + 5) % 12, 63 + (root + 5) % 12, 67 + (root + 5) % 12]),
             (36 + (root + 7) % 12, [60 + (root + 7) % 12, 64 + (root + 7) % 12, 67 + (root + 7) % 12]),
             (b0, [60 + root, 63 + root, 67 + root]),
         ]
-        # Minor i-VI-III-VII
         ch_min_pop = [
             (b0, [60 + root, 63 + root, 67 + root]),
             (36 + (root + 8) % 12, [60 + (root + 8) % 12, 64 + (root + 8) % 12, 67 + (root + 8) % 12]),
@@ -195,49 +212,7 @@ def run_key_benchmark() -> dict[str, float]:
     }
 
 
-def run_chord_benchmark() -> dict[str, float]:
-    """Triads (24), first inversions (12), and triads with sevenths enabled (24)."""
-    ce = ChromaExtractor(sample_rate=SR)
-    triad_hits = 0
-    triad_with_7_hits = 0
-    inv_hits = 0
-
-    for root in range(12):
-        r_name = PITCH_CLASSES[root]
-        for is_minor in (False, True):
-            expected = f"{r_name}m" if is_minor else r_name
-            third = 3 if is_minor else 4
-            pcm = _synth_chord_segment(36 + root, [60 + root, 60 + root + third, 60 + root + 7], 0.8)
-            c12 = ce.extract_from_pcm(pcm[-16384:], record_history=False)
-
-            cd_triad = ChordDetector(include_sevenths=False)
-            est_t = cd_triad.update(c12, is_silent=False)
-            if est_t.primary == expected:
-                triad_hits += 1
-
-            cd_7 = ChordDetector(include_sevenths=True)
-            est_7 = cd_7.update(c12, is_silent=False)
-            if est_7.primary == expected:
-                triad_with_7_hits += 1
-
-        # First inversion major triad (e.g. C/E: bass=E2, upper=C4,E4,G4)
-        bass_pc = (root + 4) % 12
-        pcm_inv = _synth_chord_segment(36 + bass_pc, [60 + root, 64 + root, 67 + root], 0.8, bass_gain=0.60)
-        c_inv = ce.extract_from_pcm(pcm_inv[-16384:], record_history=False)
-        cd_inv = ChordDetector(include_sevenths=False)
-        est_inv = cd_inv.update(c_inv, is_silent=False)
-        # Accept either exact triad root or slash chord `Root/3rd`
-        if est_inv.primary in (r_name, f"{r_name}/{PITCH_CLASSES[bass_pc]}"):
-            inv_hits += 1
-
-    return {
-        "triad_acc": round(100.0 * triad_hits / 24.0, 2),
-        "triad_with_sevenths_on_acc": round(100.0 * triad_with_7_hits / 24.0, 2),
-        "inversion_acc": round(100.0 * inv_hits / 12.0, 2),
-    }
-
-
-def _synth_click_track(bpm: float, dur_sec: float = 10.0, *, style: str = "click", sr: int = SR) -> np.ndarray:
+def _synth_click_track(bpm: float, dur_sec: float = 20.0, *, style: str = "click", sr: int = SR) -> np.ndarray:
     n = int(round(dur_sec * sr))
     sig = np.zeros(n, dtype=np.float32)
     beat_sec = 60.0 / bpm
@@ -300,117 +275,310 @@ def _bpm_acc(pred: float | None, target: float) -> tuple[bool, bool]:
     return acc1, acc2
 
 
-def run_tempo_benchmark() -> dict[str, float]:
-    """Click / Rock / DnB across 60..174 BPM for real-time TempoEstimator and offline flux BPM."""
-    cases = [
-        (60.0, "click"),
-        (90.0, "click"),
-        (120.0, "click"),
-        (140.0, "click"),
-        (174.0, "click"),
-        (60.0, "rock"),
-        (90.0, "rock"),
-        (120.0, "rock"),
-        (140.0, "rock"),
-        (174.0, "dnb"),
-    ]
-    cfg = AnalysisConfig()
-    rt_a1 = rt_a2 = off_a1 = off_a2 = 0
-    step_rt = int(round(SR / cfg.analysis_rate_hz))  # 3200 samples @ 15 Hz
-    fft_size = cfg.fft_size
+_TEMPO_CASES: list[tuple[float, str]] = [
+    (60.0, "click"),
+    (90.0, "click"),
+    (120.0, "click"),
+    (140.0, "click"),
+    (174.0, "click"),
+    (60.0, "rock"),
+    (90.0, "rock"),
+    (120.0, "rock"),
+    (140.0, "rock"),
+    (174.0, "rock"),
+    (174.0, "dnb"),
+]
 
-    for bpm, style in cases:
-        pcm = _synth_click_track(bpm, dur_sec=10.0, style=style)
-        # Real-time TempoEstimator at nominal 15 Hz
-        spec_an = SpectrumAnalyzer(sample_rate=SR, config=cfg)
-        te = TempoEstimator(config=cfg)
-        est = None
-        for pos in range(0, pcm.shape[0] - fft_size + 1, step_rt):
-            _, _, log_db = spec_an.analyze_frame(pcm[pos : pos + fft_size])
-            est = te.update(log_db, is_silent=False)
-        a1, a2 = _bpm_acc(est.bpm if est else None, bpm)
-        rt_a1 += int(a1)
-        rt_a2 += int(a2)
 
-        # Offline flux BPM at 93.75 Hz (hop=512)
-        hop = 512
-        win = np.hanning(2048).astype(np.float32)
-        prev_lm = None
-        flux_list: list[float] = []
-        for pos in range(0, pcm.shape[0] - 2048 + 1, hop):
-            lm = np.log1p(np.abs(np.fft.rfft(pcm[pos : pos + 2048] * win)).astype(np.float32))
-            flux_list.append(0.0 if prev_lm is None else float(np.mean(np.maximum(0.0, lm - prev_lm))))
-            prev_lm = lm
-        off_est = _estimate_offline_bpm_from_flux(np.asarray(flux_list, dtype=np.float32), rate_hz=SR / float(hop))
-        oa1, oa2 = _bpm_acc(off_est.bpm, bpm)
-        off_a1 += int(oa1)
-        off_a2 += int(oa2)
+def run_realtime_tempo_benchmark() -> dict[str, Any]:
+    """11 cases x 20s through FixedRingBuffer + AnalysisWorker at 66.67, 62.5, 78.1 ms scheduler periods."""
+    periods_ms = (66.67, 62.5, 78.1)
+    by_period: dict[str, dict[str, float]] = {}
+    precomputed = [(bpm, style, _to_stereo(_synth_click_track(bpm, dur_sec=20.0, style=style, sr=SR))) for bpm, style in _TEMPO_CASES]
 
-    n = len(cases)
-    return {
-        "rt_acc1": round(100.0 * rt_a1 / n, 2),
-        "rt_acc2": round(100.0 * rt_a2 / n, 2),
-        "offline_acc1": round(100.0 * off_a1 / n, 2),
-        "offline_acc2": round(100.0 * off_a2 / n, 2),
-    }
+    for p_ms in periods_ms:
+        step = int(round(SR * p_ms / 1000.0))
+        a1_hits = 0
+        a2_hits = 0
+        for bpm, _style, stereo in precomputed:
+            rb, worker = _new_realtime_worker(ring_seconds=25)
+            snap = None
+            for pos in range(0, stereo.shape[0], step):
+                chunk = stereo[pos : pos + step]
+                if chunk.shape[0] == 0:
+                    break
+                rb.write(chunk)
+                snap = worker.analyze_latest_once()
+            pred = snap.tempo.bpm if snap is not None else None
+            a1, a2 = _bpm_acc(pred, bpm)
+            a1_hits += int(a1)
+            a2_hits += int(a2)
+        n = len(precomputed)
+        by_period[f"{p_ms}ms"] = {
+            "acc1": round(100.0 * a1_hits / n, 2),
+            "acc2": round(100.0 * a2_hits / n, 2),
+        }
+    return by_period
+
+
+def run_offline_tempo_benchmark() -> dict[str, float]:
+    """11 cases x 20s WAV through analyze_drums_stem at both 44.1kHz and 48kHz."""
+    out: dict[str, float] = {}
+    with tempfile.TemporaryDirectory(prefix="ls_bench_drums_") as td:
+        td_path = Path(td)
+        for sr in (48000, 44100):
+            a1_hits = 0
+            a2_hits = 0
+            for idx, (bpm, style) in enumerate(_TEMPO_CASES):
+                wav_path = td_path / f"drums_{sr}_{idx}_{int(bpm)}_{style}.wav"
+                pcm = _synth_click_track(bpm, dur_sec=20.0, style=style, sr=sr)
+                _write_wav_pcm16(wav_path, pcm, sr=sr)
+                res = analyze_drums_stem(wav_path, max_seconds=25.0)
+                a1, a2 = _bpm_acc(res.estimated_bpm, bpm)
+                a1_hits += int(a1)
+                a2_hits += int(a2)
+            n = len(_TEMPO_CASES)
+            tag = "48k" if sr == 48000 else "44k"
+            out[f"acc1_{tag}"] = round(100.0 * a1_hits / n, 2)
+            out[f"acc2_{tag}"] = round(100.0 * a2_hits / n, 2)
+    out["acc1"] = round(0.5 * (out["acc1_48k"] + out["acc1_44k"]), 2)
+    out["acc2"] = round(0.5 * (out["acc2_48k"] + out["acc2_44k"]), 2)
+    return out
+
+
+def _eval_rt_pitch_note(mono_055s: np.ndarray, f0: float) -> tuple[bool, float | None]:
+    rb, worker = _new_realtime_worker(ring_seconds=5)
+    stereo = _to_stereo(mono_055s)
+    step = int(round(SR * 66.67 / 1000.0))
+    snap = None
+    for pos in range(0, stereo.shape[0], step):
+        chunk = stereo[pos : pos + step]
+        if chunk.shape[0] == 0:
+            break
+        rb.write(chunk)
+        snap = worker.analyze_latest_once()
+    true_name, _ = freq_to_note_and_cents(f0)
+    if snap is not None and snap.pitch.note_name == true_name and snap.pitch.frequency_hz is not None:
+        return True, abs(1200.0 * np.log2(snap.pitch.frequency_hz / f0))
+    return False, None
 
 
 def run_pitch_benchmark() -> dict[str, float]:
-    """E1-C6 harmonic sweep + weak-f0 E1-E3 octave-error benchmark."""
-    fft_size = 4096
-    win = np.hanning(fft_size).astype(np.float32)
-    pe = PitchEstimator(sample_rate=SR, fft_size=fft_size)
+    """Real-time pitch via FixedRingBuffer + AnalysisWorker: E1-C6 pure sine & 1/k harmonics + E1-E3 weak f0."""
+    dur_n = int(round(0.55 * SR))
+    t = np.arange(dur_n, dtype=np.float32) / float(SR)
+    sweep_midis = list(range(28, 85, 2))  # E1..C6 (29 notes)
 
-    # 1. Standard 1/k harmonic sweep E1 (28) to C6 (84) step 2
-    std_hits = 0
-    std_errs: list[float] = []
-    std_midis = list(range(28, 85, 2))
-    t = np.arange(fft_size, dtype=np.float32) / float(SR)
-    for m in std_midis:
+    sine_hits = 0
+    sine_errs: list[float] = []
+    harm_hits = 0
+    harm_errs: list[float] = []
+
+    for m in sweep_midis:
         f0 = _midi_to_hz(m)
-        sig = sum((1.0 / k) * np.sin(2.0 * np.pi * k * f0 * t) for k in range(1, 5) if k * f0 < SR * 0.45)
-        sig = (sig / (np.max(np.abs(sig)) + 1e-9) * 0.5).astype(np.float32)
-        mag = np.abs(np.fft.rfft(sig * win)).astype(np.float32)
-        est = pe.estimate_from_magnitude(mag, is_silent=False)
-        true_name, _ = freq_to_note_and_cents(f0)
-        if est.note_name == true_name and est.frequency_hz is not None:
-            std_hits += 1
-            std_errs.append(abs(1200.0 * np.log2(est.frequency_hz / f0)))
+        sig_sine = (0.5 * np.sin(2.0 * np.pi * f0 * t)).astype(np.float32)
+        ok, err = _eval_rt_pitch_note(sig_sine, f0)
+        if ok and err is not None:
+            sine_hits += 1
+            sine_errs.append(err)
 
-    # 2. Weak fundamental (f0 amp=0.15) across E1..E3 (MIDI 28..52)
+        sig_harm = sum((1.0 / k) * np.sin(2.0 * np.pi * k * f0 * t) for k in range(1, 5) if k * f0 < SR * 0.45)
+        sig_harm = (sig_harm / (float(np.max(np.abs(sig_harm))) + 1e-9) * 0.5).astype(np.float32)
+        ok_h, err_h = _eval_rt_pitch_note(sig_harm, f0)
+        if ok_h and err_h is not None:
+            harm_hits += 1
+            harm_errs.append(err_h)
+
+    weak_midis = list(range(28, 53))  # E1..E3 (25 notes)
     weak_hits = 0
-    weak_midis = list(range(28, 53))
+    weak_errs: list[float] = []
     for m in weak_midis:
         f0 = _midi_to_hz(m)
-        sig = (
+        sig_w = (
             0.15 * np.sin(2.0 * np.pi * f0 * t)
             + 1.00 * np.sin(2.0 * np.pi * 2.0 * f0 * t)
             + 0.70 * np.sin(2.0 * np.pi * 3.0 * f0 * t)
             + 0.40 * np.sin(2.0 * np.pi * 4.0 * f0 * t)
         ).astype(np.float32)
-        sig *= 0.5 / (float(np.max(np.abs(sig))) + 1e-9)
-        mag = np.abs(np.fft.rfft(sig * win)).astype(np.float32)
-        est = pe.estimate_from_magnitude(mag, is_silent=False)
-        true_name, _ = freq_to_note_and_cents(f0)
-        if est.note_name == true_name:
+        sig_w *= 0.5 / (float(np.max(np.abs(sig_w))) + 1e-9)
+        ok_w, err_w = _eval_rt_pitch_note(sig_w, f0)
+        if ok_w and err_w is not None:
             weak_hits += 1
+            weak_errs.append(err_w)
 
     return {
-        "pitch_std_acc": round(100.0 * std_hits / len(std_midis), 2),
-        "pitch_std_median_cents": round(float(np.median(std_errs)) if std_errs else 999.0, 2),
-        "pitch_weak_f0_acc": round(100.0 * weak_hits / len(weak_midis), 2),
+        "pure_sine_acc": round(100.0 * sine_hits / len(sweep_midis), 2),
+        "pure_sine_median_cents": round(float(np.median(sine_errs)) if sine_errs else 999.0, 2),
+        "harmonic_acc": round(100.0 * harm_hits / len(sweep_midis), 2),
+        "harmonic_median_cents": round(float(np.median(harm_errs)) if harm_errs else 999.0, 2),
+        "weak_f0_acc": round(100.0 * weak_hits / len(weak_midis), 2),
+        "weak_f0_median_cents": round(float(np.median(weak_errs)) if weak_errs else 999.0, 2),
     }
+
+
+def run_chord_benchmark() -> dict[str, float]:
+    """Real-time chord via FixedRingBuffer + AnalysisWorker (C-G-Am-F, C/E-F/A-G/B) + 24-triad 7th-mode check."""
+    step = int(round(SR * 66.67 / 1000.0))
+
+    # 1. Real-time progression: C - G - Am - F (2s each)
+    prog_specs = [
+        ("C", 36, [60, 64, 67]),
+        ("G", 43, [67, 71, 74]),
+        ("Am", 33, [57, 60, 64]),
+        ("F", 41, [65, 69, 72]),
+    ]
+    rb, worker = _new_realtime_worker(ring_seconds=15)
+    prog_hits = 0
+    prog_total = 0
+    for expected, bass_m, uppers in prog_specs:
+        seg = _to_stereo(_synth_chord_segment(bass_m, uppers, 2.0, sr=SR))
+        for pos in range(0, seg.shape[0], step):
+            chunk = seg[pos : pos + step]
+            if chunk.shape[0] == 0:
+                break
+            rb.write(chunk)
+            snap = worker.analyze_latest_once()
+            prog_total += 1
+            if snap.chord.primary == expected:
+                prog_hits += 1
+
+    # 2. Real-time inversions: C/E - F/A - G/B (2s each)
+    inv_specs = [
+        (("C", "C/E"), 40, [60, 64, 67]),
+        (("F", "F/A"), 45, [65, 69, 72]),
+        (("G", "G/B"), 47, [67, 71, 74]),
+    ]
+    rb_inv, worker_inv = _new_realtime_worker(ring_seconds=15)
+    inv_hits = 0
+    inv_total = 0
+    for accepted, bass_m, uppers in inv_specs:
+        seg = _to_stereo(_synth_chord_segment(bass_m, uppers, 2.0, sr=SR, bass_gain=0.60))
+        for pos in range(0, seg.shape[0], step):
+            chunk = seg[pos : pos + step]
+            if chunk.shape[0] == 0:
+                break
+            rb_inv.write(chunk)
+            snap = worker_inv.analyze_latest_once()
+            inv_total += 1
+            if snap.chord.primary in accepted:
+                inv_hits += 1
+
+    # 3. 24-triad accuracy with include_sevenths=True (tracks A-L10 regression)
+    ce = ChromaExtractor(sample_rate=SR)
+    triad_with_7_hits = 0
+    for root in range(12):
+        r_name = PITCH_CLASSES[root]
+        for is_minor in (False, True):
+            expected = f"{r_name}m" if is_minor else r_name
+            third = 3 if is_minor else 4
+            pcm = _synth_chord_segment(36 + root, [60 + root, 60 + root + third, 60 + root + 7], 0.8)
+            c12 = ce.extract_from_pcm(pcm[-16384:], record_history=False)
+            est_7 = ChordDetector(include_sevenths=True).update(c12, is_silent=False)
+            if est_7.primary == expected:
+                triad_with_7_hits += 1
+
+    return {
+        "rt_progression_acc": round(100.0 * prog_hits / max(1, prog_total), 2),
+        "rt_inversion_acc": round(100.0 * inv_hits / max(1, inv_total), 2),
+        "triad_with_sevenths_on_acc": round(100.0 * triad_with_7_hits / 24.0, 2),
+    }
+
+
+def _synth_808_note(f0: float, dur_sec: float, sr: int) -> np.ndarray:
+    n = int(round(dur_sec * sr))
+    t = np.arange(n, dtype=np.float32) / float(sr)
+    # Classic 808: fast pitch drop on first 25ms + sustained sub fundamental + light saturation harmonics
+    freq = f0 * (1.0 + 0.8 * np.exp(-t * 95.0))
+    phase = 2.0 * np.pi * np.cumsum(freq) / float(sr)
+    env = np.exp(-t * 2.6).astype(np.float32)
+    fade_in = min(int(0.005 * sr), n // 4)
+    if fade_in > 1:
+        env[:fade_in] *= np.linspace(0.0, 1.0, fade_in, dtype=np.float32)
+    sig = (0.78 * np.sin(phase) + 0.16 * np.sin(2.0 * phase) + 0.06 * np.sin(3.0 * phase)) * env
+    return sig.astype(np.float32)
+
+
+def run_offline_bass_benchmark() -> dict[str, Any]:
+    """Offline analyze_bass_stem: E1-C4 pure sine & 808 + 4 consecutive A1 notes at 44.1k and 48k."""
+    sweep_midis = list(range(28, 61, 2))  # E1 (28) .. C4 (60), 17 notes
+    note_sec = 0.45
+    gap_sec = 0.08
+    out: dict[str, Any] = {}
+
+    with tempfile.TemporaryDirectory(prefix="ls_bench_bass_") as td:
+        td_path = Path(td)
+        for sr in (48000, 44100):
+            tag = "48k" if sr == 48000 else "44k"
+            gap = np.zeros(int(round(gap_sec * sr)), dtype=np.float32)
+            for timbre in ("pure_sine", "808"):
+                parts: list[np.ndarray] = []
+                expected_centers: list[tuple[float, str]] = []
+                cursor = 0.0
+                for m in sweep_midis:
+                    f0 = _midi_to_hz(m)
+                    name, _ = freq_to_note_and_cents(f0)
+                    if timbre == "pure_sine":
+                        n = int(round(note_sec * sr))
+                        t = np.arange(n, dtype=np.float32) / float(sr)
+                        tone = (0.6 * np.sin(2.0 * np.pi * f0 * t)).astype(np.float32)
+                    else:
+                        tone = _synth_808_note(f0, note_sec, sr)
+                    parts.append(tone)
+                    parts.append(gap)
+                    expected_centers.append((cursor + note_sec * 0.5, name))
+                    cursor += note_sec + gap_sec
+                wav_path = td_path / f"bass_{timbre}_{tag}.wav"
+                _write_wav_pcm16(wav_path, np.concatenate(parts, axis=0), sr=sr)
+                res = analyze_bass_stem(wav_path, max_seconds=30.0)
+                hits = 0
+                for center_t, exp_name in expected_centers:
+                    matched = any(ev.start_sec <= center_t <= ev.end_sec and ev.note_name == exp_name for ev in res.notes)
+                    hits += int(matched)
+                out[f"{timbre}_acc_{tag}"] = round(100.0 * hits / len(sweep_midis), 2)
+
+            # 4 consecutive A1 notes
+            f_a1 = _midi_to_hz(33)
+            note_n = int(round(0.45 * sr))
+            t_a1 = np.arange(note_n, dtype=np.float32) / float(sr)
+            rep_parts = []
+            for _ in range(4):
+                env = np.exp(-t_a1 * 6.5).astype(np.float32)
+                env[: int(0.005 * sr)] *= np.linspace(0.0, 1.0, int(0.005 * sr), dtype=np.float32)
+                rep_parts.append(
+                    ((0.65 * np.sin(2.0 * np.pi * f_a1 * t_a1) + 0.25 * np.sin(4.0 * np.pi * f_a1 * t_a1)) * env).astype(
+                        np.float32
+                    )
+                )
+            rep_path = td_path / f"bass_rep_a1_{tag}.wav"
+            _write_wav_pcm16(rep_path, np.concatenate(rep_parts, axis=0), sr=sr)
+            rep_res = analyze_bass_stem(rep_path, max_seconds=10.0)
+            out[f"repeated_a1_count_{tag}"] = len(rep_res.notes)
+
+    return out
 
 
 def run_all_benchmarks() -> dict[str, Any]:
     return {
         "key": run_key_benchmark(),
-        "chord": run_chord_benchmark(),
-        "tempo": run_tempo_benchmark(),
-        "pitch": run_pitch_benchmark(),
+        "rt_chord": run_chord_benchmark(),
+        "rt_tempo": run_realtime_tempo_benchmark(),
+        "offline_tempo": run_offline_tempo_benchmark(),
+        "rt_pitch": run_pitch_benchmark(),
+        "offline_bass": run_offline_bass_benchmark(),
     }
 
 
-if __name__ == "__main__":
+def main() -> int:
+    parser = argparse.ArgumentParser(description="ListenScope A-BENCH frozen algorithm benchmark")
+    parser.add_argument("--json", action="store_true", help="Output machine-readable JSON only")
+    args = parser.parse_args()
     results = run_all_benchmarks()
-    print(json.dumps(results, indent=2, ensure_ascii=False))
+    if args.json:
+        print(json.dumps(results, indent=2, ensure_ascii=False))
+    else:
+        print(json.dumps(results, indent=2, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
