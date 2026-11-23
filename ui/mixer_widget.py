@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 from pathlib import Path
 from typing import Optional
 
@@ -990,11 +991,16 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         # Live active/next chord HUD & table row sync
         if self._chord_segments:
+            chord_starts = getattr(self, "_chord_starts", None)
+            if chord_starts is None or len(chord_starts) != len(self._chord_segments):
+                chord_starts = [float(s.start_sec) for s in self._chord_segments]
+                self._chord_starts = chord_starts
+            cand = bisect.bisect_right(chord_starts, pos + 1e-4) - 1
             active_idx = -1
-            for idx, seg in enumerate(self._chord_segments):
+            if 0 <= cand < len(self._chord_segments):
+                seg = self._chord_segments[cand]
                 if seg.start_sec - 1e-4 <= pos < seg.end_sec:
-                    active_idx = idx
-                    break
+                    active_idx = cand
             if active_idx == -1 and pos >= self._chord_segments[-1].start_sec - 1e-4:
                 active_idx = len(self._chord_segments) - 1
             if 0 <= active_idx < len(self._chord_segments):
@@ -1019,11 +1025,20 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         # Highlight sounding MIDI note during active playback
         if self._midi_notes and self.mixer_engine.is_playing:
+            note_starts = getattr(self, "_note_starts", None)
+            if note_starts is None or len(note_starts) != len(self._midi_notes):
+                note_starts = [float(n.start_sec) for n in self._midi_notes]
+                self._note_starts = note_starts
             note_idx = -1
-            for idx, n in enumerate(self._midi_notes):
+            cand = bisect.bisect_right(note_starts, pos + 1e-4) - 1
+            while cand >= 0:
+                n = self._midi_notes[cand]
                 if n.start_sec - 1e-4 <= pos <= n.end_sec:
-                    note_idx = idx
+                    note_idx = cand
                     break
+                if pos - n.start_sec > 8.0:
+                    break
+                cand -= 1
             if 0 <= note_idx < self.midi_table.rowCount() and self.midi_table.currentRow() != note_idx:
                 self.midi_table.blockSignals(True)
                 self.midi_table.selectRow(note_idx)
@@ -1488,6 +1503,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         rows = list(report.chord_timeline[:400])
         self._chord_segments = rows
+        self._chord_starts = [float(s.start_sec) for s in rows]
         self.chord_timeline_table.setRowCount(len(rows))
         for idx, seg in enumerate(rows):
             dur_s = max(0.0, float(seg.end_sec - seg.start_sec))
@@ -1538,6 +1554,7 @@ class StemMixerWidget(QtWidgets.QWidget):
             self.analysis_tabs.setCurrentIndex(2)
         show = list(result.notes[:250])
         self._midi_notes = show
+        self._note_starts = [float(n.start_sec) for n in show]
         self.midi_table.setRowCount(len(show))
         for idx, n in enumerate(show):
             vals = [n.note_name, str(n.pitch_midi), f"{n.start_sec:.2f}", f"{n.end_sec:.2f}", str(n.velocity)]

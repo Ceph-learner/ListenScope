@@ -253,7 +253,6 @@ def test_ub22_win10_rounded_mask_avoids_jagged_qregion_polygon() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="U-B26")
 def test_ub26_mixer_widget_uses_bisect_for_chord_and_midi_lookup() -> None:
     """ui/mixer_widget.py must use bisect.bisect_right instead of O(N) linear scan every tick."""
     src = (REPO_ROOT / "ui" / "mixer_widget.py").read_text("utf-8")
