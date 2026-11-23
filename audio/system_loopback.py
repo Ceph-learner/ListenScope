@@ -14,7 +14,7 @@ from core.config import AudioConfig
 from core.models import CaptureMode, CaptureStats
 
 from .capture_base import AudioCaptureBackend, CaptureStatsTracker
-from .pcm_utils import normalize_to_canonical_pcm
+from .pcm_utils import StreamingResampler, normalize_to_canonical_pcm
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +185,11 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         reconnects = 0
         clean_chunks_since_reconnect = 0
         has_transient_reconnect_notice = False
+        resampler: Optional[StreamingResampler] = (
+            StreamingResampler(src_rate, self.audio_config.sample_rate, self.audio_config.channels)
+            if src_rate != self.audio_config.sample_rate
+            else None
+        )
 
         while not self._stop_event.is_set():
             with self._lock:
@@ -199,14 +204,25 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                     if clean_chunks_since_reconnect >= 25:
                         self._stats.set_error(None)
                         has_transient_reconnect_notice = False
-                chunk = normalize_to_canonical_pcm(
-                    raw_bytes,
-                    src_rate=src_rate,
-                    src_channels=src_channels,
-                    src_dtype=src_dtype,
-                    dst_rate=self.audio_config.sample_rate,
-                    dst_channels=self.audio_config.channels,
-                )
+                if resampler is not None:
+                    decoded = normalize_to_canonical_pcm(
+                        raw_bytes,
+                        src_rate=src_rate,
+                        src_channels=src_channels,
+                        src_dtype=src_dtype,
+                        dst_rate=src_rate,
+                        dst_channels=self.audio_config.channels,
+                    )
+                    chunk = resampler.process(decoded)
+                else:
+                    chunk = normalize_to_canonical_pcm(
+                        raw_bytes,
+                        src_rate=src_rate,
+                        src_channels=src_channels,
+                        src_dtype=src_dtype,
+                        dst_rate=self.audio_config.sample_rate,
+                        dst_channels=self.audio_config.channels,
+                    )
                 if chunk.shape[0] > 0:
                     self.queue.put_drop_oldest(chunk)
                     self._stats.record_chunk(
@@ -242,6 +258,15 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                         src_rate = int(new_dev["defaultSampleRate"])
                         new_ch = int(new_dev.get("maxInputChannels") or 0) or int(new_dev.get("maxOutputChannels") or 0)
                         src_channels = max(1, new_ch)
+                        if src_rate != self.audio_config.sample_rate:
+                            if resampler is not None and resampler.src_rate == src_rate:
+                                resampler.reset()
+                            else:
+                                resampler = StreamingResampler(
+                                    src_rate, self.audio_config.sample_rate, self.audio_config.channels
+                                )
+                        else:
+                            resampler = None
                         self._device_name = str(new_dev.get("name", self._device_name))
                         self._stats.set_process_name(self._device_name)
                         self._stats.set_error(f"检测到播放设备切换，已重连至: {self._device_name}")

@@ -46,7 +46,6 @@ def test_e2_ai_subprocesses_use_popen_external_python_not_raw_popen() -> None:
         assert "subprocess.Popen(" not in src, f"{rel} still calls raw subprocess.Popen instead of popen_external_python"
 
 
-@pytest.mark.xfail(strict=True, reason="E3")
 def test_e3_streaming_resampler_matches_whole_signal_without_chunk_boundary_clicks() -> None:
     """Stateful scipy StreamingResampler must match whole-signal 44.1k->48k resample with SNR > 70 dB."""
     from audio import pcm_utils
