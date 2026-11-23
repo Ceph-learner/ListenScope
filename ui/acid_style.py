@@ -1036,6 +1036,93 @@ class MarqueeLabel(QtWidgets.QLabel):
         p.end()
 
 
+class FlowLayout(QtWidgets.QLayout):
+    """Responsive wrapping layout so horizontal button/control rows never clip on narrow screens."""
+
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        margin: int = 0,
+        h_spacing: int = 6,
+        v_spacing: int = 4,
+    ) -> None:
+        super().__init__(parent)
+        self._items: list[QtWidgets.QLayoutItem] = []
+        self._h_space = int(h_spacing)
+        self._v_space = int(v_spacing)
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def __del__(self) -> None:
+        while self._items:
+            self.takeAt(0)
+
+    def addItem(self, item: QtWidgets.QLayoutItem) -> None:  # type: ignore[override]
+        self._items.append(item)
+
+    def count(self) -> int:  # type: ignore[override]
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QtWidgets.QLayoutItem | None:  # type: ignore[override]
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int) -> QtWidgets.QLayoutItem | None:  # type: ignore[override]
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self) -> QtCore.Qt.Orientation:  # type: ignore[override]
+        return QtCore.Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # type: ignore[override]
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # type: ignore[override]
+        return self._do_layout(QtCore.QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QtCore.QRect) -> None:  # type: ignore[override]
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        return self.minimumSize()
+
+    def minimumSize(self) -> QtCore.QSize:  # type: ignore[override]
+        size = QtCore.QSize()
+        for item in self._items:
+            w = item.widget()
+            if w is not None and w.isHidden():
+                continue
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QtCore.QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect: QtCore.QRect, *, test_only: bool) -> int:
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x = effective.x()
+        y = effective.y()
+        line_h = 0
+        for item in self._items:
+            w = item.widget()
+            if w is not None and w.isHidden():
+                continue
+            sz = item.sizeHint()
+            next_x = x + sz.width() + self._h_space
+            if next_x - self._h_space > effective.right() and line_h > 0:
+                x = effective.x()
+                y += line_h + self._v_space
+                next_x = x + sz.width() + self._h_space
+                line_h = 0
+            if not test_only:
+                item.setGeometry(QtCore.QRect(QtCore.QPoint(x, y), sz))
+            x = next_x
+            line_h = max(line_h, sz.height())
+        return y + line_h - rect.y() + m.bottom()
+
+
 class MarqueeComboBox(QtWidgets.QComboBox):
     """ComboBox that smoothly scrolls overflowing current name & widens popup so items avoid '...'."""
 

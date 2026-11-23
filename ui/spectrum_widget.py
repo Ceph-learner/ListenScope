@@ -71,8 +71,12 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self._last_level_val: int = -1
         self._default_spec_lut: Optional[np.ndarray] = None
         self._metric_overlays: list[AcidGraphicOverlay] = []
+        self._compact_mode: bool = False
+        self._eyebrow_labels: list[QtWidgets.QLabel] = []
+        self._metric_cards: list[QtWidgets.QFrame] = []
 
         root = QtWidgets.QVBoxLayout(self)
+        self._root_layout = root
         root.setContentsMargins(10, 6, 10, 8)
         root.setSpacing(6)
         self._header = TelemetryHeader("AUDIO SPECTRUM // REALTIME", "实时频谱与波形分析")
@@ -150,14 +154,32 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             ),
         ):
             card = self._metric_card(eyebrow, caption, value, detail, accent_rail=rail, help_tip=help_tip)
+            self._metric_cards.append(card)
             ov = AcidGraphicOverlay(card, stencil="")
             ov.setVisible(False)
             self._metric_overlays.append(ov)
             metrics.addWidget(card, stretch)
         root.addLayout(metrics)
-        self._plot_grid = QtWidgets.QGridLayout()
+        self._plot_stack = QtWidgets.QStackedWidget()
+        self._grid_page = QtWidgets.QWidget()
+        self._plot_grid = QtWidgets.QGridLayout(self._grid_page)
+        self._plot_grid.setContentsMargins(0, 0, 0, 0)
         self._plot_grid.setSpacing(8)
-        root.addLayout(self._plot_grid, 1)
+        self._plot_stack.addWidget(self._grid_page)
+
+        self._compact_tabs = QtWidgets.QTabWidget()
+        self._compact_tab1 = QtWidgets.QWidget()
+        self._compact_tab1_l = QtWidgets.QHBoxLayout(self._compact_tab1)
+        self._compact_tab1_l.setContentsMargins(0, 2, 0, 0)
+        self._compact_tab1_l.setSpacing(6)
+        self._compact_tab2 = QtWidgets.QWidget()
+        self._compact_tab2_l = QtWidgets.QHBoxLayout(self._compact_tab2)
+        self._compact_tab2_l.setContentsMargins(0, 2, 0, 0)
+        self._compact_tab2_l.setSpacing(6)
+        self._compact_tabs.addTab(self._compact_tab1, "波形与 FFT 频谱")
+        self._compact_tabs.addTab(self._compact_tab2, "频带能量与声谱图")
+        self._plot_stack.addWidget(self._compact_tabs)
+        root.addWidget(self._plot_stack, 1)
 
         # Row 1: Waveform
         self.wave_plot = pg.PlotWidget()
@@ -304,8 +326,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         if self._default_spec_lut is not None:
             self._spec_img.setLookupTable(self._default_spec_lut)
 
-    @staticmethod
     def _metric_card(
+        self,
         eyebrow: str,
         caption: str,
         value,
@@ -325,6 +347,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         top_row.setSpacing(6)
         eb = QtWidgets.QLabel(eyebrow)
         eb.setObjectName("telemetryEyebrow")
+        self._eyebrow_labels.append(eb)
         title = QtWidgets.QLabel(caption)
         title.setObjectName("analysisCaption")
         top_row.addWidget(eb)
@@ -342,10 +365,58 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         layout.addStretch(1)
         return card
 
+    def set_compact_mode(self, compact: bool) -> None:
+        compact = bool(compact)
+        if self._compact_mode == compact:
+            return
+        self._compact_mode = compact
+        if compact:
+            self._root_layout.setContentsMargins(6, 2, 6, 2)
+            self._root_layout.setSpacing(2)
+            self._plot_grid.setSpacing(4)
+            self._header.setMaximumHeight(34)
+        else:
+            self._root_layout.setContentsMargins(10, 6, 10, 8)
+            self._root_layout.setSpacing(6)
+            self._plot_grid.setSpacing(8)
+            self._header.setMaximumHeight(16777215)
+        for eb in self._eyebrow_labels:
+            eb.setVisible(not compact)
+        self.pitch_detail.setVisible(not compact)
+        self.level_meter.setVisible(not compact)
+        for card in self._metric_cards:
+            card.setMaximumHeight(44 if compact else 16777215)
+            lay = card.layout()
+            if lay is not None:
+                lay.setContentsMargins(8 if compact else 11, 2 if compact else 7, 8 if compact else 11, 2 if compact else 7)
+                lay.setSpacing(0 if compact else 2)
+        self._arrange_plots()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        win = self.window()
+        win_h = win.height() if win is not None else self.height()
+        self.set_compact_mode(win_h <= 780 or self.height() < 460)
+        self._header.setVisible(self.height() >= 255)
+
     def _arrange_plots(self) -> None:
-        positions, rows, columns = ANALYSIS_VIEWS[self.view_combo.currentData()]
-        for card, position in zip(self._chart_cards, positions):
+        for card in self._chart_cards:
             self._plot_grid.removeWidget(card)
+            self._compact_tab1_l.removeWidget(card)
+            self._compact_tab2_l.removeWidget(card)
+
+        if self._compact_mode:
+            self._compact_tab1_l.addWidget(self._chart_cards[0], 1)
+            self._compact_tab1_l.addWidget(self._chart_cards[1], 1)
+            self._compact_tab2_l.addWidget(self._chart_cards[2], 1)
+            self._compact_tab2_l.addWidget(self._chart_cards[3], 1)
+            self._plot_stack.setCurrentWidget(self._compact_tabs)
+            return
+
+        self._plot_stack.setCurrentWidget(self._grid_page)
+        view_key = self.view_combo.currentData()
+        positions, rows, columns = ANALYSIS_VIEWS[view_key]
+        for card, position in zip(self._chart_cards, positions):
             self._plot_grid.addWidget(card, *position)
         for index, weight in enumerate(rows):
             self._plot_grid.setRowStretch(index, weight)

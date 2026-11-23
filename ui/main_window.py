@@ -79,6 +79,7 @@ from .acid_style import (
     AcidTabBar,
     ChamferBadge,
     ElidedLabel,
+    FlowLayout,
     HazardStripeBar,
     MarqueeComboBox,
     SignalLockDot,
@@ -507,7 +508,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("ListenScope — AUDIO TELEMETRY · A/B LOOP · SAFE AI SEPARATION")
-        self.setMinimumSize(940, 620)
+        self.setMinimumSize(760, 520)
         self.setMouseTracking(True)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
         app_icon = _load_app_icon()
@@ -530,6 +531,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._system_is_dark = detect_system_is_dark()
         self._acid_variant: Optional[str] = None
         self._static_lock: bool = False
+        self._bottom_panel_collapsed: bool = False
+        self._ab_more_user_override: Optional[bool] = None
+        self._compact_window_mode: bool = False
         self._active_settings_dialog: Optional[SettingsDialog] = None
         self._style_hints_connected = False
         self._frameless_applied: Optional[bool] = None
@@ -578,7 +582,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._topbar_frame = topbar_frame = QtWidgets.QFrame()
         topbar_frame.setObjectName("acidTopbar")
         topbar_frame.installEventFilter(self)
-        topbar_v = QtWidgets.QVBoxLayout(topbar_frame)
+        self._topbar_v = topbar_v = QtWidgets.QVBoxLayout(topbar_frame)
         topbar_v.setContentsMargins(10, 6, 10, 5)
         topbar_v.setSpacing(5)
 
@@ -695,7 +699,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_cmd.addWidget(self._win_ctrl_box)
         topbar_v.addLayout(row_cmd)
 
-        divider = QtWidgets.QFrame()
+        self._topbar_divider = divider = QtWidgets.QFrame()
         divider.setObjectName("acidDivider")
         divider.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         topbar_v.addWidget(divider)
@@ -706,7 +710,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._src_pill = QtWidgets.QLabel("AUDIO_IN // 音源")
         self._src_pill.setObjectName("telemetryPill")
         self.source_combo = MarqueeComboBox()
-        self.source_combo.setMinimumWidth(200)
+        self.source_combo.setMinimumWidth(140)
         self.source_combo.setMaximumWidth(400)
         self.source_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -788,20 +792,34 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.mixer_widget, "// 03 STEM MIXER & MIDI · 分轨与MIDI")
         self.tabs.addTab(self.resource_panel, "// 04 TELEMETRY & LOGS · 资源与日志")
         self.tabs.addTab(self.live_widget, "// 05 LIVE ENGINE · 近实时分轨")
-        main_layout.addWidget(self.tabs, 1)
+        self._bottom_collapse_btn = QtWidgets.QPushButton("▾ 收起 A/B")
+        self._bottom_collapse_btn.setCheckable(True)
+        self._bottom_collapse_btn.setToolTip("折叠或展开底部 120 秒历史缓冲与 A/B 分轨面板")
+        self._bottom_collapse_btn.toggled.connect(self.set_bottom_panel_collapsed)
+        self.tabs.setCornerWidget(self._bottom_collapse_btn, QtCore.Qt.Corner.TopRightCorner)
+
+        self._main_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self._main_splitter.setChildrenCollapsible(False)
+        self._main_splitter.setHandleWidth(4)
+        self._main_splitter.addWidget(self.tabs)
+
+        self._bottom_dock = QtWidgets.QWidget()
+        bottom_dock_l = QtWidgets.QVBoxLayout(self._bottom_dock)
+        bottom_dock_l.setContentsMargins(0, 0, 0, 0)
+        bottom_dock_l.setSpacing(2)
 
         self._workspace_rail = WorkspaceRailHandle()
         self._workspace_rail.rail_dragged.connect(self._on_workspace_rail_dragged)
         self._workspace_rail.rail_reset_requested.connect(self._on_workspace_rail_reset)
-        main_layout.addWidget(self._workspace_rail)
+        bottom_dock_l.addWidget(self._workspace_rail)
 
         # 3. BOTTOM 120s HISTORY TIMELINE + A/B LOOP + AI TRIGGER BAR
         self._history_box = bottom_box = QtWidgets.QGroupBox("RING BUFFER // 120秒历史缓冲与 A/B 片段 (~46MB) + AI 离线分轨")
-        bottom_l = QtWidgets.QVBoxLayout(bottom_box)
-        bottom_l.setContentsMargins(8, 5, 8, 5)
-        bottom_l.setSpacing(4)
+        self._bottom_l = bottom_l = QtWidgets.QVBoxLayout(bottom_box)
+        bottom_l.setContentsMargins(8, 4, 8, 4)
+        bottom_l.setSpacing(3)
 
-        row_a = QtWidgets.QHBoxLayout()
+        row_a = FlowLayout(margin=0, h_spacing=6, v_spacing=3)
         self.history_coverage_lbl = QtWidgets.QLabel("已缓冲: 0.0 / 120.0 s")
         self.history_coverage_lbl.setObjectName("monoTelemetry")
         self.recent_10_btn = QtWidgets.QPushButton("选最近 10s")
@@ -858,6 +876,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_export_wav_btn.clicked.connect(self._on_ab_export_clicked)
         self.import_audio_btn.clicked.connect(self._on_import_audio_clicked)
 
+        self.ab_more_btn = QtWidgets.QPushButton("⋯ 更多")
+        self.ab_more_btn.setCheckable(True)
+        self.ab_more_btn.setToolTip("展开或收起 A/B 微调、导出、缩放与书签控件")
+        self.ab_more_btn.clicked.connect(self._on_ab_more_toggled)
+
         row_a.addWidget(self.history_coverage_lbl)
         row_a.addWidget(
             HelpBadge(
@@ -870,36 +893,39 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_a.addWidget(self.recent_10_btn)
         row_a.addWidget(self.recent_30_btn)
         row_a.addWidget(self.recent_60_btn)
-        row_a.addWidget(self.start_ago_spin)
-        row_a.addWidget(self.end_ago_spin)
-        row_a.addWidget(self.apply_ab_btn)
-        row_a.addWidget(self.ab_a_back_btn)
-        row_a.addWidget(self.ab_a_fwd_btn)
-        row_a.addWidget(self.ab_b_back_btn)
-        row_a.addWidget(self.ab_b_fwd_btn)
-        row_a.addStretch(1)
+        row_a.addWidget(self.ab_play_btn)
+        row_a.addWidget(self.ab_stop_btn)
+        row_a.addWidget(self.ab_loop_chk)
+        row_a.addWidget(self.ab_speed_combo)
+        row_a.addWidget(self.ab_more_btn)
+        bottom_l.addLayout(row_a)
 
-        row_a_transport.addWidget(self.ab_play_btn)
-        row_a_transport.addWidget(self.ab_stop_btn)
+        self._ab_more_panel = QtWidgets.QWidget()
+        more_v = QtWidgets.QVBoxLayout(self._ab_more_panel)
+        more_v.setContentsMargins(0, 0, 0, 0)
+        more_v.setSpacing(3)
+        more_flow = FlowLayout(margin=0, h_spacing=6, v_spacing=3)
+        more_flow.addWidget(self.start_ago_spin)
+        more_flow.addWidget(self.end_ago_spin)
+        more_flow.addWidget(self.apply_ab_btn)
+        more_flow.addWidget(self.ab_a_back_btn)
+        more_flow.addWidget(self.ab_a_fwd_btn)
+        more_flow.addWidget(self.ab_b_back_btn)
+        more_flow.addWidget(self.ab_b_fwd_btn)
         self.ab_snap_btn = QtWidgets.QPushButton("贴近零点")
         self.ab_snap_btn.clicked.connect(self.ab_snap_requested.emit)
-        row_a_transport.addWidget(self.ab_snap_btn)
-        row_a_transport.addWidget(
+        more_flow.addWidget(self.ab_snap_btn)
+        more_flow.addWidget(
             HelpBadge(
                 "贴近零点微调与不变调变速",
                 "• 贴近零点：停止回放后点击，将在当前 A 与 B 边界各 ±5ms 范围内寻找最接近 0 的采样点对齐，消除循环端点咔哒声。\n"
                 "• 不变调倍速 (0.5x–1.25x)：基于纯 CPU WSOLA 时域拉伸算法，放慢听清快速贝斯/吉他十六分音符跑动而不改变音高。",
             )
         )
-        row_a_transport.addSpacing(4)
-        row_a_transport.addWidget(self.ab_loop_chk)
-        row_a_transport.addSpacing(4)
-        row_a_transport.addWidget(self.ab_speed_combo)
-        row_a_transport.addWidget(self.ab_export_wav_btn)
-        row_a_transport.addWidget(self.import_audio_btn)
-        row_a_transport.addStretch(1)
-        bottom_l.addLayout(row_a)
-        bottom_l.addLayout(row_a_transport)
+        more_flow.addWidget(self.ab_export_wav_btn)
+        more_flow.addWidget(self.import_audio_btn)
+        more_v.addLayout(more_flow)
+        bottom_l.addWidget(self._ab_more_panel)
 
         # Interactive 120s Waveform Overview + Draggable A/B Selector + Live Playhead
         self.history_overview_plot = pg.PlotWidget()
@@ -951,13 +977,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             button = QtWidgets.QToolButton()
             button.setText(text)
             button.setAccessibleName(label)
+            button.setToolTip(label)
             button.clicked.connect(lambda _checked=False, factor=factor: self.zoom_history(factor))
-            row_a_transport.addWidget(button)
+            more_flow.addWidget(button)
         self.history_reset = QtWidgets.QPushButton("120 秒总览")
         self.history_reset.clicked.connect(lambda: self.history_overview_plot.setXRange(-120, 0, padding=0))
-        row_a_transport.addWidget(self.history_reset)
+        more_flow.addWidget(self.history_reset)
 
-        bookmark_row = QtWidgets.QHBoxLayout()
+        bookmark_row = FlowLayout(margin=0, h_spacing=6, v_spacing=3)
         bookmark_row.addWidget(QtWidgets.QLabel("A/B 书签(<=12):"))
         self.bookmark_label_edit = QtWidgets.QLineEdit()
         self.bookmark_label_edit.setPlaceholderText("书签名称 (如 副歌/Solo，可留空)")
@@ -967,7 +994,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.bookmark_save_btn.clicked.connect(self._on_bookmark_save_clicked)
 
         self.bookmark_combo = MarqueeComboBox()
-        self.bookmark_combo.setMinimumWidth(180)
+        self.bookmark_combo.setMinimumWidth(160)
         self.bookmark_jump_btn = QtWidgets.QPushButton("跳转此书签")
         self.bookmark_jump_btn.setEnabled(False)
         self.bookmark_jump_btn.clicked.connect(self._on_bookmark_jump_clicked)
@@ -977,7 +1004,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         bookmark_row.addWidget(self.bookmark_label_edit)
         bookmark_row.addWidget(self.bookmark_save_btn)
-        bookmark_row.addWidget(self.bookmark_combo, 1)
+        bookmark_row.addWidget(self.bookmark_combo)
         bookmark_row.addWidget(self.bookmark_jump_btn)
         bookmark_row.addWidget(self.bookmark_del_btn)
         bookmark_row.addWidget(
@@ -986,16 +1013,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 "保存的书签会绑定到采样帧绝对时间戳：即使音乐继续播放、缓冲向前滚动，点击「跳转此书签」仍能精准跟随后移的音频段落，直到该片段滑出 120 秒窗口。",
             )
         )
-        bottom_l.addLayout(bookmark_row)
+        more_v.addLayout(bookmark_row)
 
-        row_b = QtWidgets.QHBoxLayout()
-        row_b.setSpacing(8)
+        row_b = FlowLayout(margin=0, h_spacing=6, v_spacing=3)
         self.ai_2stem_combo = MarqueeComboBox()
         self.ai_2stem_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.ai_2stem_combo.setMinimumContentsLength(18)
-        self.ai_2stem_combo.setMaximumWidth(300)
+        self.ai_2stem_combo.setMaximumWidth(260)
         self._refresh_model_combos()
         self.ai_gpu_chk = QtWidgets.QCheckBox("优先 GPU")
         self.update_hardware_report(hardware_report, auto_sync_gpu_chk=True)
@@ -1015,7 +1041,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_b.addWidget(QtWidgets.QLabel("2-Stem 模型:"))
         row_b.addWidget(self.ai_2stem_combo)
         row_b.addWidget(self.segment_spin)
-        row_b.addSpacing(4)
         row_b.addWidget(self.ai_gpu_chk)
         row_b.addWidget(
             HelpBadge(
@@ -1024,12 +1049,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 "若 GPU 显存或系统内存接近保护阈值，将自动拦截或停止以保护播放器不卡顿。",
             )
         )
-        row_b.addStretch(1)
         row_b.addWidget(self.sep_2stem_btn)
         row_b.addWidget(self.sep_4stem_btn)
         bottom_l.addLayout(row_b)
 
-        main_layout.addWidget(bottom_box)
+        bottom_dock_l.addWidget(bottom_box)
+        self._main_splitter.addWidget(self._bottom_dock)
+        self._main_splitter.setStretchFactor(0, 3)
+        self._main_splitter.setStretchFactor(1, 1)
+        main_layout.addWidget(self._main_splitter, 1)
 
         self._acid_footer = AcidBarcodeFooter()
         self._acid_footer.setVisible(False)
@@ -1271,7 +1299,68 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
+        self._apply_responsive_layout()
         self._update_rounded_mask()
+
+    def _on_ab_more_toggled(self, checked: bool) -> None:
+        self._ab_more_user_override = bool(checked)
+        self._ab_more_panel.setVisible(bool(checked))
+
+    def set_bottom_panel_collapsed(self, collapsed: bool) -> None:
+        collapsed = bool(collapsed)
+        self._bottom_panel_collapsed = collapsed
+        self._bottom_dock.setVisible(not collapsed)
+        self._bottom_collapse_btn.blockSignals(True)
+        self._bottom_collapse_btn.setChecked(collapsed)
+        self._bottom_collapse_btn.setText("▸ 展开 A/B" if collapsed else "▾ 收起 A/B")
+        self._bottom_collapse_btn.blockSignals(False)
+        if not collapsed:
+            self._apply_responsive_layout()
+
+    def toggle_bottom_panel(self, collapsed: Optional[bool] = None) -> None:
+        target = (not self._bottom_panel_collapsed) if collapsed is None else bool(collapsed)
+        self.set_bottom_panel_collapsed(target)
+
+    def _apply_responsive_layout(self) -> None:
+        w = max(1, self.width())
+        h = max(1, self.height())
+        compact_h = h < 760
+        compact_w = w <= 500
+        self._compact_window_mode = compact_h or compact_w
+
+        # Tighten shell and topbar padding on short/narrow screens
+        self._workspace_layout.setContentsMargins(4 if compact_h else 8, 2 if compact_h else 6, 4 if compact_h else 8, 2 if compact_h else 6)
+        self._workspace_layout.setSpacing(2 if compact_h else 5)
+        self._topbar_v.setContentsMargins(8 if compact_h else 10, 2 if compact_h else 6, 8 if compact_h else 10, 2 if compact_h else 5)
+        self._topbar_v.setSpacing(2 if compact_h else 5)
+        self._brand_eye.setVisible(not compact_h)
+        self._topbar_divider.setVisible(not compact_h)
+        self._shortcut_pill.setVisible(not compact_h and not compact_w)
+        self._skin_badge.setVisible(not compact_h and not compact_w)
+
+        # Collapse secondary A/B controls on short screens unless user explicitly expanded them
+        if self._ab_more_user_override is None:
+            show_more = not compact_h
+            self._ab_more_panel.setVisible(show_more)
+            self.ab_more_btn.blockSignals(True)
+            self.ab_more_btn.setChecked(show_more)
+            self.ab_more_btn.blockSignals(False)
+
+        if not self._bottom_panel_collapsed:
+            practice = getattr(self.appearance, "layout", "split") == "practice"
+            if compact_h and not practice:
+                self.history_overview_plot.setMinimumHeight(34)
+                self.history_overview_plot.setMaximumHeight(44)
+                self._bottom_l.setContentsMargins(6, 2, 6, 2)
+                self._bottom_l.setSpacing(2)
+            else:
+                self.history_overview_plot.setMinimumHeight(112 if practice else 48)
+                self.history_overview_plot.setMaximumHeight(140 if practice else 64)
+                self._bottom_l.setContentsMargins(8, 4, 8, 4)
+                self._bottom_l.setSpacing(3)
+
+        if hasattr(self, "spectrum_widget"):
+            self.spectrum_widget.set_compact_mode(compact_h or self.spectrum_widget.height() < 420)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if (
@@ -1914,18 +2003,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         was_visible = self.isVisible()
         saved_geom = self.geometry() if was_visible else None
         practice = layout == "practice"
-        main = self._workspace_layout
-        main.removeWidget(self._workspace_rail)
-        main.removeWidget(self._history_box)
-        tabs_idx = main.indexOf(self.tabs)
+        splitter = self._main_splitter
         if practice:
-            main.insertWidget(tabs_idx, self._history_box)
-            main.insertWidget(tabs_idx + 1, self._workspace_rail)
+            if splitter.indexOf(self._bottom_dock) != 0:
+                splitter.insertWidget(0, self._bottom_dock)
         else:
-            main.insertWidget(tabs_idx + 1, self._workspace_rail)
-            main.insertWidget(tabs_idx + 2, self._history_box)
-        self.history_overview_plot.setMinimumHeight(112 if practice else 56)
-        self.history_overview_plot.setMaximumHeight(140 if practice else 70)
+            if splitter.indexOf(self.tabs) != 0:
+                splitter.insertWidget(0, self.tabs)
+        self._apply_responsive_layout()
         self.mixer_widget.apply_workspace_layout(layout)
         if was_visible and saved_geom is not None and saved_geom.isValid() and not self.isMaximized():
             if self.geometry() != saved_geom:

@@ -40,7 +40,6 @@ def test_ub02_fft_display_uses_log_frequency_resampling_with_dense_bass_bins() -
     assert bass_pts >= 24, f"27.5-110 Hz only has {bass_pts} FFT display points (linear [::4] starvation)"
 
 
-@pytest.mark.xfail(strict=True, reason="U-B03")
 def test_ub03_main_window_fits_small_screens_1093x566_and_1024x528() -> None:
     """CONFIRMED: minimumSize <=780x540, realtime PlotWidgets >=120px (>=100px at 1024x528), buttons inside window, collapsible bottom A/B panel."""
     import pyqtgraph as pg

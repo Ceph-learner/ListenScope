@@ -36,6 +36,7 @@ class PersistedSettings:
     appearance: Appearance = Appearance()
     progression_mode: str = "chords"
     window_geometry: str = ""
+    bottom_panel_collapsed: bool = False
 
 
 def default_settings_path() -> Path:
@@ -180,6 +181,7 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
     )
     raw_geom = payload.get("window_geometry", "")
     window_geometry = str(raw_geom).strip() if isinstance(raw_geom, str) else ""
+    bottom_collapsed = bool(payload.get("bottom_panel_collapsed", False))
     return PersistedSettings(
         resource_limits=limits,
         ai_config=ai_cfg,
@@ -188,6 +190,7 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
         appearance=Appearance.from_mapping(payload.get("appearance")),
         progression_mode=_progression_mode(payload.get("progression_mode")),
         window_geometry=window_geometry,
+        bottom_panel_collapsed=bottom_collapsed,
         **practice,
     )
 
@@ -217,6 +220,7 @@ def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None
         "appearance": asdict(settings.appearance),
         "progression_mode": _progression_mode(settings.progression_mode),
         "window_geometry": str(getattr(settings, "window_geometry", "") or "").strip(),
+        "bottom_panel_collapsed": bool(getattr(settings, "bottom_panel_collapsed", False)),
         **practice,
     }
     tmp_path: Optional[Path] = None
