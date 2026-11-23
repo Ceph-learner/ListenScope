@@ -133,7 +133,7 @@ class AnalysisWorker:
 
         wf_min, wf_max = self.spectrum.compute_waveform_envelope(mono)
         fft_mag, fft_db, log_db = self.spectrum.analyze_frame(mono)
-        pitch_est = self.pitch.estimate_from_magnitude(fft_mag, is_silent=is_silent)
+        pitch_est = self.pitch.estimate_from_pcm(mono, is_silent=is_silent)
 
         self._last_analyzed_frame = end_abs
         record_hist = not (pcm.shape[0] == 0 and self._reset_boundary is not None)

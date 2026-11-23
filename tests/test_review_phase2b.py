@@ -97,7 +97,6 @@ def test_am6_high_tempo_174_bpm_not_locked_to_half_time() -> None:
     assert est.bpm is not None and abs(est.bpm - 174.0) / 174.0 < 0.03, f"174 BPM click measured as {est.bpm}"
 
 
-@pytest.mark.xfail(strict=True, reason="A-H3")
 def test_ah3_realtime_pitch_weak_fundamental_e1_to_e3_accuracy() -> None:
     """PitchEstimator must handle weak fundamental (f0 amp=0.15) across E1..E3 with >=95% note accuracy via YIN."""
     from analysis.pitch import PitchEstimator, freq_to_note_and_cents
@@ -122,7 +121,6 @@ def test_ah3_realtime_pitch_weak_fundamental_e1_to_e3_accuracy() -> None:
     assert hits / len(midis) >= 0.95, f"Weak-f0 accuracy only {hits}/{len(midis)}"
 
 
-@pytest.mark.xfail(strict=True, reason="A-M2")
 def test_am2_red_noise_returns_unknown_not_fake_e1_with_saturated_confidence() -> None:
     """Red/pink noise must be rejected as Unknown (tonality gate), not reported as E1 with confidence ~1.0."""
     from analysis.pitch import PitchEstimator
@@ -145,7 +143,6 @@ def test_am2_red_noise_returns_unknown_not_fake_e1_with_saturated_confidence() -
     )
 
 
-@pytest.mark.xfail(strict=True, reason="A-L9")
 def test_al9_short_256_sample_buffer_returns_unknown_not_bogus_pitch() -> None:
     """Short 256-sample buffer must return Unknown instead of zero-padded bogus pitch."""
     from analysis.pitch import PitchEstimator

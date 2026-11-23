@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 
 from core.models import PitchEstimate
 
-from .chroma import PITCH_CLASSES
+from .chroma import ChromaExtractor, PITCH_CLASSES
+from .yin import yin_frame_f0
 
 
 def freq_to_note_and_cents(freq_hz: float) -> tuple[str, float]:
@@ -23,17 +26,70 @@ def freq_to_note_and_cents(freq_hz: float) -> tuple[str, float]:
 
 
 class PitchEstimator:
-    """Fast harmonic-product / spectral peak fundamental frequency estimator (CPU-only)."""
+    """YIN + spectral peak fundamental frequency estimator with tonality & length gates (CPU-only)."""
 
     def __init__(self, sample_rate: int = 48000, fft_size: int = 4096) -> None:
         self.sample_rate = sample_rate
         self.fft_size = fft_size
         self._freqs = np.fft.rfftfreq(fft_size, d=1.0 / sample_rate)
         self._bin_hz = sample_rate / float(fft_size)
+        self._sfm_mask = (self._freqs >= 40.0) & (self._freqs <= 3000.0)
 
-    def estimate_from_magnitude(self, fft_mag: np.ndarray, *, is_silent: bool) -> PitchEstimate:
+    def estimate_from_pcm(self, mono: np.ndarray, *, is_silent: bool = False) -> PitchEstimate:
+        if is_silent or mono is None or mono.size == 0 or not np.all(np.isfinite(mono)):
+            return PitchEstimate(frequency_hz=None, note_name="-", cents_offset=0.0, confidence=0.0)
+
+        x = np.asarray(mono, dtype=np.float32).ravel()
+        min_samples = max(self.fft_size // 2, 2 * int(self.sample_rate / 40.0))
+        if x.size < min_samples:
+            return PitchEstimate(frequency_hz=None, note_name="Unknown", cents_offset=0.0, confidence=0.0)
+
+        win_n = min(x.size, 7200)
+        seg = x[-win_n:]
+        win = np.hanning(win_n).astype(np.float32)
+        mag = np.abs(np.fft.rfft(seg * win)).astype(np.float32)
+        freqs = np.fft.rfftfreq(win_n, d=1.0 / float(self.sample_rate))
+        sfm_mask = (freqs >= 40.0) & (freqs <= 3000.0)
+        tonality = ChromaExtractor._compute_tonality(mag, sfm_mask)
+        if tonality < 0.2:
+            return PitchEstimate(frequency_hz=None, note_name="Unknown", cents_offset=0.0, confidence=round(tonality, 3))
+
+        freq, conf = yin_frame_f0(
+            seg,
+            mag=mag,
+            sample_rate=self.sample_rate,
+            bin_hz=float(self.sample_rate) / float(win_n),
+            min_hz=38.0,
+            max_hz=1600.0,
+        )
+        if freq <= 0.0:
+            return PitchEstimate(frequency_hz=None, note_name="Unknown", cents_offset=0.0, confidence=round(float(conf), 3))
+
+        note_name, cents = freq_to_note_and_cents(freq)
+        return PitchEstimate(
+            frequency_hz=round(freq, 2),
+            note_name=note_name,
+            cents_offset=round(cents, 1),
+            confidence=round(min(1.0, max(0.0, float(conf))), 3),
+        )
+
+    def estimate_from_magnitude(
+        self,
+        fft_mag: np.ndarray,
+        *,
+        is_silent: bool,
+        valid_len: Optional[int] = None,
+    ) -> PitchEstimate:
         if is_silent or fft_mag.size == 0 or not np.all(np.isfinite(fft_mag)):
             return PitchEstimate(frequency_hz=None, note_name="-", cents_offset=0.0, confidence=0.0)
+
+        if valid_len is not None and valid_len < self.fft_size // 2:
+            return PitchEstimate(frequency_hz=None, note_name="Unknown", cents_offset=0.0, confidence=0.0)
+
+        if fft_mag.shape[0] == self._sfm_mask.shape[0]:
+            tonality = ChromaExtractor._compute_tonality(fft_mag, self._sfm_mask)
+            if tonality < 0.2:
+                return PitchEstimate(frequency_hz=None, note_name="Unknown", cents_offset=0.0, confidence=round(tonality, 3))
 
         min_bin = max(1, int(round(40.0 / self._bin_hz)))
         max_bin = min(fft_mag.shape[0] - 2, int(round(1600.0 / self._bin_hz)))
