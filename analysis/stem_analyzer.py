@@ -190,19 +190,21 @@ def _iter_aligned_mono_48k_frames(
 
 
 def _coalesce_note_frames(
-    frame_notes: list[tuple[float, int, float, float]],
+    frame_notes: list[tuple[float, int, float, float]] | list[tuple[float, int, float, float, float]],
     *,
     hop_sec: float,
     min_note_duration_sec: float = 0.08,
     max_notes: int = MAX_EVENTS_CAP,
 ) -> list[StemNoteEvent]:
-    """Group quantized MIDI frame observations into clean note events."""
+    """Group quantized MIDI frame observations into clean note events, splitting on re-attacks."""
     events: list[StemNoteEvent] = []
     cur_midi: Optional[int] = None
     cur_start: float = 0.0
     cur_last_t: float = 0.0
     cur_freqs: list[float] = []
     cur_confs: list[float] = []
+    prev_rms: float = 0.0
+    reattack_armed: bool = False
 
     def _flush() -> None:
         if cur_midi is None or not cur_freqs:
@@ -221,21 +223,38 @@ def _coalesce_note_frames(
             )
         )
 
-    for t_sec, midi_num, freq_hz, conf in frame_notes:
+    for item in frame_notes:
+        t_sec = item[0]
+        midi_num = item[1]
+        freq_hz = item[2]
+        conf = item[3]
+        rms = item[4] if len(item) >= 5 else 0.0
+
         if midi_num < 0:
             _flush()
             cur_midi = None
             cur_freqs.clear()
             cur_confs.clear()
+            prev_rms = 0.0
+            reattack_armed = False
             continue
 
+        is_reattack = (
+            cur_midi is not None
+            and midi_num == cur_midi
+            and rms > 0.0
+            and prev_rms > 0.0
+            and rms > 1.6 * max(prev_rms, 1e-6)
+            and (t_sec - cur_start) >= min_note_duration_sec
+        )
         if cur_midi is None:
             cur_midi = midi_num
             cur_start = t_sec
             cur_last_t = t_sec
             cur_freqs = [freq_hz]
             cur_confs = [conf]
-        elif midi_num == cur_midi and (t_sec - cur_last_t) <= hop_sec * 2.5:
+            reattack_armed = False
+        elif midi_num == cur_midi and not is_reattack and (t_sec - cur_last_t) <= hop_sec * 2.5:
             cur_last_t = t_sec
             cur_freqs.append(freq_hz)
             cur_confs.append(conf)
@@ -248,6 +267,8 @@ def _coalesce_note_frames(
             cur_last_t = t_sec
             cur_freqs = [freq_hz]
             cur_confs = [conf]
+            reattack_armed = False
+        prev_rms = rms
 
     _flush()
     return events[:max_notes]
@@ -288,7 +309,7 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
     """Analyze separated bass stem in [28 Hz, 350 Hz] using FFT-accelerated YIN/CMNDF + subharmonic verification."""
     path = Path(bass_wav_path)
     fft_size = 8192
-    hop_size = 2048
+    hop_size = 512
     hop_sec = hop_size / float(CANONICAL_SR)
     bin_hz = CANONICAL_SR / float(fft_size)
     win = np.hanning(fft_size).astype(np.float32)
@@ -297,32 +318,42 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
         [(path, 1.0)], fft_size=fft_size, hop_size=hop_size, max_seconds=max_seconds
     )
 
-    frame_data: list[tuple[float, float, float]] = []
+    frame_data: list[tuple[float, float, float, float]] = []
     signal_detected = False
     silence_rms = 10.0 ** (AnalysisConfig().silence_threshold_dbfs / 20.0)
+    tail_len = min(fft_size, hop_size * 2)
 
     for center_sec, frame in frames_iter:
-        t_start = max(0.0, center_sec - hop_sec * 0.5)
+        frame_start_sec = max(0.0, center_sec - (fft_size * 0.5) / float(CANONICAL_SR))
         if not np.all(np.isfinite(frame)):
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
         rms = float(np.sqrt(np.mean(np.square(frame))))
         if rms < silence_rms:
-            frame_data.append((t_start, 0.0, 0.0))
+            frame_data.append((frame_start_sec, 0.0, 0.0, 0.0))
             continue
         signal_detected = True
+
+        tail_rms = float(np.sqrt(np.mean(np.square(frame[-tail_len:]))))
+        # Refine onset timestamp using first 128-sample sub-block crossing energy threshold
+        sub = frame.reshape(-1, 128)
+        sub_rms = np.sqrt(np.mean(np.square(sub), axis=1))
+        thresh = max(silence_rms, 0.25 * float(np.max(sub_rms)))
+        hits = np.where(sub_rms >= thresh)[0]
+        onset_offset_sec = (int(hits[0]) * 128) / float(CANONICAL_SR) if hits.size > 0 else 0.0
+        t_onset = frame_start_sec + onset_offset_sec
 
         mag = np.abs(np.fft.rfft(frame * win)).astype(np.float32)
         freq, conf = _yin_bass_frame_f0(frame, mag, sample_rate=CANONICAL_SR, bin_hz=bin_hz)
         if freq <= 0.0:
-            frame_data.append((t_start, 0.0, 0.0))
+            frame_data.append((t_onset, 0.0, 0.0, tail_rms))
             continue
-        frame_data.append((t_start, freq, conf))
+        frame_data.append((t_onset, freq, conf, tail_rms))
 
     # 3-frame median filter across adjacent voiced frames eliminates single-frame octave glitches
-    raw_obs: list[tuple[float, int, float, float]] = []
-    for idx, (t_start, freq, conf) in enumerate(frame_data):
+    raw_obs: list[tuple[float, int, float, float, float]] = []
+    for idx, (t_start, freq, conf, tail_rms) in enumerate(frame_data):
         if freq <= 0.0:
-            raw_obs.append((t_start, -1, 0.0, 0.0))
+            raw_obs.append((t_start, -1, 0.0, 0.0, 0.0))
             continue
         nbrs = [freq]
         if idx > 0 and frame_data[idx - 1][1] > 0.0:
@@ -331,7 +362,7 @@ def analyze_bass_stem(bass_wav_path: Path | str, *, max_seconds: float = 120.0) 
             nbrs.append(frame_data[idx + 1][1])
         med_freq = float(np.median(nbrs)) if len(nbrs) == 3 else freq
         midi = max(0, min(127, int(round(69.0 + 12.0 * np.log2(med_freq / 440.0)))))
-        raw_obs.append((t_start, midi, med_freq, conf))
+        raw_obs.append((t_start, midi, med_freq, conf, tail_rms))
 
     events = _coalesce_note_frames(raw_obs, hop_sec=hop_sec, min_note_duration_sec=0.08)
     if events:

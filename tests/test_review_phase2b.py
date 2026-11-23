@@ -159,7 +159,6 @@ def test_al9_short_256_sample_buffer_returns_unknown_not_bogus_pitch() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="A-H4")
 def test_ah4_repeated_same_pitch_bass_notes_not_merged(tmp_path: Path) -> None:
     """Four consecutive re-articulated A1 bass notes (20ms decay/re-attack) must yield 4 events, not 1."""
     from analysis.stem_analyzer import analyze_bass_stem
@@ -180,7 +179,6 @@ def test_ah4_repeated_same_pitch_bass_notes_not_merged(tmp_path: Path) -> None:
     assert len(res.notes) == 4, f"Expected 4 repeated A1 notes, got {len(res.notes)}: {res.notes}"
 
 
-@pytest.mark.xfail(strict=True, reason="A-L6")
 def test_al6_bass_note_onset_timestamp_not_systematically_late(tmp_path: Path) -> None:
     """Bass note starting at 0.510s must have detected start_sec within +/- 15 ms (currently +23 ms)."""
     from analysis.stem_analyzer import analyze_bass_stem
