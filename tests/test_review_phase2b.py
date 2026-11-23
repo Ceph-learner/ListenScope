@@ -199,7 +199,6 @@ def test_al6_bass_note_onset_timestamp_not_systematically_late(tmp_path: Path) -
     assert err_ms <= 15.0, f"Bass onset timestamp off by {err_ms:.1f} ms (got {res.notes[0].start_sec}s)"
 
 
-@pytest.mark.xfail(strict=True, reason="A-H5")
 def test_ah5_minor_cadence_with_c2_bass_not_misclassified_as_parallel_major() -> None:
     """24-key minor i-iv-V-i cadences with C2 bass must achieve >=90% accuracy (currently 0%)."""
     from tests.bench.algo_benchmark import run_key_benchmark

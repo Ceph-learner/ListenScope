@@ -26,6 +26,11 @@ _KEY_PROFILES: dict[str, tuple[np.ndarray, np.ndarray]] = {
         np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88], dtype=np.float32),
         np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17], dtype=np.float32),
     ),
+    # KeyFinder / Temperley harmonic-minor-aware profile
+    "keyfinder": (
+        np.array([5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0], dtype=np.float32),
+        np.array([5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0], dtype=np.float32),
+    ),
 }
 
 
@@ -155,6 +160,13 @@ class KeyDetector:
         final_scores = corrs + bonus
         order = np.argsort(final_scores)[::-1]
         best_idx, second_idx = int(order[0]), int(order[1])
+        if best_idx % 2 == 0:
+            r = best_idx // 2
+            min_idx = 2 * r + 1
+            maj_ev = float(mean_chroma[(r + 4) % 12]) + 0.5 * float(mean_chroma[(r + 9) % 12])
+            min_ev = float(mean_chroma[(r + 3) % 12]) + 0.5 * float(mean_chroma[(r + 8) % 12])
+            if min_ev > maj_ev and float(final_scores[best_idx] - final_scores[min_idx]) < 0.20:
+                best_idx, second_idx = min_idx, best_idx
         margin = float(final_scores[best_idx] - final_scores[second_idx])
         return best_idx, second_idx, float(corrs[best_idx]), margin
 
