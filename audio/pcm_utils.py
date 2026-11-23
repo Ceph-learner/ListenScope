@@ -69,7 +69,12 @@ def normalize_to_canonical_pcm(
         if arr.size == 0:
             return np.empty((0, dst_channels), dtype=np.float32)
         if arr.dtype != np.float32:
-            if np.issubdtype(arr.dtype, np.signedinteger):
+            if arr.dtype == np.uint8:
+                arr = (arr.astype(np.float32) - 128.0) / 128.0
+            elif np.issubdtype(arr.dtype, np.unsignedinteger):
+                half = float(2 ** (arr.dtype.itemsize * 8 - 1))
+                arr = (arr.astype(np.float32) - half) / half
+            elif np.issubdtype(arr.dtype, np.signedinteger):
                 max_val = float(2 ** (arr.dtype.itemsize * 8 - 1))
                 arr = arr.astype(np.float32) / max_val
             else:
@@ -81,8 +86,11 @@ def normalize_to_canonical_pcm(
             return np.empty((0, dst_channels), dtype=np.float32)
         arr = arr[:usable].reshape(-1, src_channels)
     elif arr.ndim == 2:
-        if arr.shape[1] != src_channels and arr.shape[0] == src_channels:
-            arr = arr.T
+        if arr.shape[1] != src_channels:
+            if arr.shape[0] == src_channels:
+                arr = arr.T
+            else:
+                raise ValueError(f"Expected {src_channels} channels, got shape {arr.shape}")
     else:
         raise ValueError(f"Expected 1D or 2D PCM array, got shape {arr.shape}")
 

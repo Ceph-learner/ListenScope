@@ -204,7 +204,6 @@ def test_e16_demucs_direct_path_standardizes_input_and_destandardizes_output() -
     assert ".std(" in body and ".mean(" in body, "_separate_with_demucs missing reference mean/std normalization"
 
 
-@pytest.mark.xfail(strict=True, reason="E17")
 def test_e17_normalize_to_canonical_pcm_uint8_centering_and_channel_validation() -> None:
     """uint8 must center around 128 into [-1, 1], and 2D channel mismatch must raise ValueError."""
     from audio.pcm_utils import normalize_to_canonical_pcm
