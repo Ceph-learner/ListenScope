@@ -200,3 +200,52 @@ def test_w9_dev_build_displays_real_version_with_git_short_sha() -> None:
     assert re.search(r"-dev\+[0-9a-f]{7,}", disp), f"Dev version string missing '-dev+<shortSHA>': {disp!r}"
     acid_src = (REPO_ROOT / "ui" / "acid_style.py").read_text("utf-8")
     assert "LISTENSCOPE_V1.0.1" not in acid_src, "ui/acid_style.py still hardcodes LISTENSCOPE_V1.0.1 in footer"
+
+
+def test_w2_process_loopback_stop_then_start_receives_audio_frames() -> None:
+    """W2 P1 regression: WasapiProcessLoopbackBackend must clear _closing on start() so stop->start still receives PCM."""
+    from audio.process_loopback import WasapiProcessLoopbackBackend
+    from core.config import AudioConfig
+
+    callbacks: dict[str, object] = {}
+
+    class _FakeTap:
+        def start(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def _tap_factory(*, pid: int, on_data, resample_quality: str):
+        callbacks["on_data"] = on_data
+        return _FakeTap()
+
+    backend = WasapiProcessLoopbackBackend(
+        pid=1234,
+        process_name="QQMusic.exe",
+        audio_config=AudioConfig(sample_rate=48000, channels=2),
+        tap_factory=_tap_factory,
+        pid_exists_fn=lambda _pid: True,
+        allow_non_windows=True,
+    )
+    backend._cached_fmt = {"sample_rate": 48000, "channels": 2, "dtype": "float32"}
+
+    pcm = np.full((960, 2), 0.25, dtype=np.float32).tobytes()
+    backend.start()
+    try:
+        callbacks["on_data"](pcm, 960)  # type: ignore[operator]
+        chunk1 = backend.read_chunk(timeout=0.5)
+        assert chunk1 is not None and chunk1.shape == (960, 2)
+    finally:
+        backend.stop()
+
+    # Restart after stop(): _closing must be cleared so new frames are not dropped
+    backend.start()
+    try:
+        callbacks["on_data"](pcm, 960)  # type: ignore[operator]
+        chunk2 = backend.read_chunk(timeout=0.5)
+        assert chunk2 is not None and chunk2.shape == (960, 2), (
+            "WasapiProcessLoopbackBackend dropped audio frames after stop() -> start() restart"
+        )
+    finally:
+        backend.stop()

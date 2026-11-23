@@ -19,6 +19,9 @@ _ACTIVE_SUBPROCS: set[subprocess.Popen[Any]] = set()
 
 def register_active_subprocess(proc: subprocess.Popen[Any]) -> subprocess.Popen[Any]:
     with _active_subprocs_lock:
+        exited = [p for p in _ACTIVE_SUBPROCS if p.poll() is not None]
+        for p in exited:
+            _ACTIVE_SUBPROCS.discard(p)
         _ACTIVE_SUBPROCS.add(proc)
     return proc
 

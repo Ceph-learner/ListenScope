@@ -51,3 +51,6 @@ tmp/
 .idea/
 *.swp
 *.swo
+
+# Generated build metadata
+core/_build_info.py

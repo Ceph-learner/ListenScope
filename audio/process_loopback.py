@@ -100,6 +100,7 @@ class WasapiProcessLoopbackBackend(AudioCaptureBackend):
                 raise RuntimeError(f"目标进程 PID={self._pid} ({self._process_name}) 不存在。")
 
             self.queue.reset_open()
+            self._closing.clear()
             self._stop_event.clear()
             with self._timing_lock:
                 self._last_chunk_time = time.monotonic()
