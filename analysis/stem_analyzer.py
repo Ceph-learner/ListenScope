@@ -751,7 +751,7 @@ def analyze_harmony_and_chords(
 
         rms = float(np.sqrt(np.mean(np.square(frame))))
         is_silent = (not np.isfinite(rms)) or rms < silence_rms
-        _fft_mag, _fft_db, log_db = spec.analyze_frame(frame)
+        _fft_mag, _fft_db, log_db = spec.analyze_frame(frame, record=False)
         if idx % hr_stride == 0:
             hr_view = hr_buf[hr_window - hr_filled :] if hr_filled < hr_window else hr_buf
             last_c12 = chroma_ext.extract_from_pcm(hr_view, record_history=True, is_silent=is_silent)

@@ -378,7 +378,6 @@ def test_al5_iter_aligned_mono_48k_frames_uses_streaming_resampler_without_chunk
     assert max_err < 0.005, f"44.1kHz offline resampling has 0.5s chunk-boundary glitch (max_err={max_err:.4f})"
 
 
-@pytest.mark.xfail(strict=True, reason="A-PERF")
 def test_aperf_spectrum_analyze_frame_supports_record_false() -> None:
     """SpectrumAnalyzer.analyze_frame must accept record=False to avoid writing UI spectrogram history during offline analysis."""
     from analysis.fft import SpectrumAnalyzer
