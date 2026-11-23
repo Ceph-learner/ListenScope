@@ -87,3 +87,17 @@
   3. **AI 分轨采样率修复**：`E1`（完成后交付 Windows `.venv-ai` 实测）
   4. **i18n 与配色/状态修复**：`U-B28` → `U-B06` → `U-B10` → `U-B09` → `U-B16` → `U-B29` → `U-B11` → `U-B25`
   5. **UI 控件、窗口与交互增强**：`U-B12` → `U-B20` → `U-B21` → `U-B23` → `U-B24` → `U-B01` → `U-B05` → `U-B04`
+
+---
+
+## 复审结论（Neon @ `f0be34a`）
+
+- **复审结果**：**全部 30 条复审通过（Linux/offscreen 验证）**，未发现逻辑漏洞、测试断言削弱或违反 `docs/DECISIONS.md` 的改动。
+- **独立复测数据**（Ubuntu 24.04 + Python 3.12 + `QT_QPA_PLATFORM=offscreen`）：
+  - `tests/test_review_phase1.py`：**`30 passed in 24.02s`**（0 xfailed，0 failed）；
+  - 全量 `pytest -q --tb=short`：**`249 passed, 6 skipped in 458.67s`**（0 failed）；
+  - `pyproject.toml` PEP 621 校验：**通过**。
+- **核对重点**：
+  - `docs/DECISIONS.md` 约束全数保持（`PersistedSettings.schema_version == 2`、6s 分块、单 Worker、5120/3072/2048 MiB 阈值、PySide6 `<6.10`、三环境隔离）。
+  - `E1`、`U-B04`、`U-B21` 已通过云端契约测试与代码复审，仍保留 `NEEDS_TARGET` 状态，待目标机 Windows 11 + RTX 5060 Ti 实测后补录 `docs/WINDOWS_TEST_REPORT.md`。
+
