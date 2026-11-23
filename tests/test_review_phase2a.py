@@ -169,7 +169,6 @@ def test_e12_worker_ipc_duplicates_fd1_to_isolate_native_stdout() -> None:
         assert "os.dup(" in src and "os.dup2(" in src, f"{rel} only redirects sys.stdout, not OS fd 1"
 
 
-@pytest.mark.xfail(strict=True, reason="E14")
 def test_e14_corrupt_settings_backed_up_and_save_uses_unique_temp_with_fsync(tmp_path: Path) -> None:
     """load_settings must preserve corrupt JSON as .corrupt-*.json, and save_settings must fsync temp file."""
     from core.settings_store import load_settings

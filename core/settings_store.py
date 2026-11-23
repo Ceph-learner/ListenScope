@@ -6,7 +6,11 @@ from dataclasses import asdict, dataclass, fields
 import json
 import logging
 import math
+import os
 from pathlib import Path
+import shutil
+import tempfile
+import time
 from typing import Any, Optional
 
 from .config import AIConfig, ResourceLimits
@@ -127,8 +131,15 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
         payload = json.loads(target.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("settings root JSON must be an object")
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
         logger.warning("Failed to parse settings file %s (%s); using safe defaults.", target, exc)
+        if target.exists():
+            backup = target.with_name(f"{target.stem}.corrupt-{int(time.time())}.json")
+            try:
+                target.replace(backup)
+                logger.warning("Backed up corrupt settings file to %s", backup)
+            except Exception as backup_exc:
+                logger.warning("Failed to back up corrupt settings file %s: %s", target, backup_exc)
         return PersistedSettings(
             resource_limits=default_limits,
             ai_config=default_ai,
@@ -208,9 +219,28 @@ def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None
         "window_geometry": str(getattr(settings, "window_geometry", "") or "").strip(),
         **practice,
     }
-    tmp = target.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(target)
+    tmp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+            mode="w",
+            encoding="utf-8",
+        ) as f:
+            tmp_path = Path(f.name)
+            f.write(json.dumps(payload, ensure_ascii=False, indent=2))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target)
+    except Exception:
+        if tmp_path is not None and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise
     return target
 
 
