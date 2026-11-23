@@ -1384,7 +1384,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         if not self._bottom_panel_collapsed:
             practice = getattr(self.appearance, "layout", "split") == "practice"
-            self.recent_60_btn.setVisible(not (compact_h and w < 1150 and not practice))
+            narrow_compact = compact_h and w < 1150 and not practice
+            self.recent_60_btn.setVisible(not narrow_compact)
+            self.ai_2stem_combo.setMaximumWidth(190 if narrow_compact else 240)
             if compact_h and not practice:
                 self.history_overview_plot.setMinimumHeight(34)
                 self.history_overview_plot.setMaximumHeight(44)
@@ -1396,7 +1398,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self._bottom_l.setContentsMargins(8, 4, 8, 4)
                 self._bottom_l.setSpacing(3)
             self._bottom_l.activate()
-            min_dock_h = max(0, self._history_box.sizeHint().height() + 4)
+            dock_w = max(300, self._bottom_dock.width() if self._bottom_dock.width() > 0 else w - 16)
+            box_hfw = self._history_box.heightForWidth(dock_w) if self._history_box.hasHeightForWidth() else 0
+            min_dock_h = max(0, self._history_box.sizeHint().height(), box_hfw) + 4
             if self._bottom_dock.height() > 0 and self._bottom_dock.height() < min_dock_h:
                 sizes = self._main_splitter.sizes()
                 if len(sizes) == 2 and sum(sizes) > min_dock_h + 120:
