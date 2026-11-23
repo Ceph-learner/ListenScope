@@ -53,3 +53,17 @@
 - **基线测试（`86938ef`，Linux/offscreen 验证）**：全量 `283 passed, 6 skipped`
 - **本批修改后专项测试（`tests/test_review_phase2c.py`，Linux/offscreen 验证）**：**23 passed**（0 failed，0 xfailed）
 - **判定统计（共 21 条）**：`CONFIRMED` 19 条 + `NEEDS_TARGET` 2 条已全部实现并移除 `xfail`（Windows 真机 DPI/Snap/系统动画/Win10 边缘保留在 `docs/review/WINDOWS_RETEST.md`）。
+
+---
+
+## 最终复审结论（复审者 Neon）
+
+- **复审状态**：**全部 21 条通过（批准合并至 `main`）**。
+- **首轮退回与返修核验**：首轮截图审查发现 `U-B08`（英文暗色截图残留 5 处中文）与 `U-B03`（暗色底部面板浅灰底、坐标轴对比度偏低及频谱副标题微裁切）；返修提交 `e6b0bd8` 已全部修复，并新增 `en/ja/ko` 全可见控件零残留遍历测试与暗色对比度/1093 布局单测，6 张 `p2c_after_*.png`（55–166 KB）逐张视觉复检全部通过。
+- **冻结基准与独立复测（Linux/offscreen 验证，非 Windows 11 实机/GPU/exe）**：
+  - `git diff 86938ef..HEAD -- tests/bench/`：**0 字节**；
+  - `A-BENCH` 对照 `docs/review/bench_after_p2b.json`：**`REGRESSIONS: NONE`**；
+  - 专项 `tests/test_review_phase2c.py`：**`23 passed`**（未削弱任何断言）；
+  - 全量 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`：**`306 passed, 6 skipped`**（0 failed）。
+- **专项代码核查**：`FrameClock` 全工程单实例且隐藏/最小化/关闭均停表；后台资源采样线程不触碰 Qt 控件；快捷键 `F` 受 `_TextInputGuard` 保护；`AnalysisSnapshot` 旧字段完全兼容；未违反 `docs/DECISIONS.md`。
+

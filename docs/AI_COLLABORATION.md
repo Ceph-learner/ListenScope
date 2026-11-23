@@ -51,4 +51,22 @@
 - **下轮调度调整**：
   - 进入 `2C UI`（`fix/review-p2c-ui`），并入 `A-M6` 的 `×2/÷2` 按钮、`U-B07` 基于 2A `E6` 后台采样实现，并补充 offscreen 合成数据 `QWidget.grab()` 截图留证。
 
+## 2026-11-22｜Issue #32 Phase 2C UI（验证 + 截图 → 修改 → 复审 → 返修复审）
+
+- **任务范围**：Issue #32 UI 17 条 + `A-M6-UI` + 截图审查新增的 `U-B31`、`U-B32`、`P2C-PERF`（共 21 条）。
+- **协同分工**：
+  - **验证者 / 复审者（Neon）**：在 `fix/review-p2c-ui` 编写 21 条严格 `xfail` 测试（[test_review_phase2c.py](../tests/test_review_phase2c.py)）并留存 4 张修改前 offscreen 截图；首轮复审通过 19 条，通过视觉核对 `p2c_after_*.png` 检出 `U-B08`（英文残留 5 处中文）与 `U-B03`（暗色底部面板浅灰底与频谱副标题微裁切）并退回；二次复审全量通过，并整理全流程 Windows 实测清单 [WINDOWS_RETEST.md](review/WINDOWS_RETEST.md)（9 项，约 38 分钟）。
+  - **修改者（Hydrogen）**：分 3 组完成全部 21 条修复并提交 6 张 `p2c_after_*.png`；返修（`e6b0bd8`）补齐四语翻译与零残留遍历测试、修复暗色 Dock 与高对比度坐标轴及 1093 布局并重拍全部 6 张截图。
+- **建议采纳与误报统计**：
+  - `CONFIRMED`：19 条（全部采纳并修复）；
+  - `NEEDS_TARGET`：2 条（`U-FX3`、`U-B22`；另 `U-B03` 真机 DPI/Snap 保留于实测清单）；
+  - `FALSE_POSITIVE`：0 条。
+- **测试结果（Linux/offscreen 验证）**：
+  - `tests/test_review_phase2c.py`：`23 passed`；
+  - 全量 `QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short`：`306 passed, 6 skipped`（0 failed）；
+  - 冻结 `A-BENCH`（`tests/bench/` 0 字节改动）：对照 `bench_after_p2b.json` `REGRESSIONS: NONE`。
+- **下轮调度调整**：
+  - Phase 2 全部云端开发与复审收官，暂停推进 Phase 3，转入目标机 Windows 11 统一实测 [WINDOWS_RETEST.md](review/WINDOWS_RETEST.md)。
+
+
 
