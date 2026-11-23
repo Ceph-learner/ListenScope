@@ -615,13 +615,14 @@ class ListenScopeController:
             self.window.chroma_widget.sync_auto_reset_ui(track_status_text=msg)
             return
 
-        self._track_monitor_stop.clear()
+        stop_event = threading.Event()
+        self._track_monitor_stop = stop_event
         self.window.chroma_widget.sync_auto_reset_ui(
             track_status_text=f"曲目监测 (SMTC/{backend_name}): 正在等待 {target_process_name or '播放会话'} 元数据..."
         )
         self._track_monitor_thread = threading.Thread(
             target=self._track_monitor_loop,
-            args=(target_process_name,),
+            args=(target_process_name, stop_event),
             name="ListenScope-SmtcTrackWatch",
             daemon=True,
         )
@@ -651,11 +652,16 @@ class ListenScopeController:
             except Exception:
                 pass
 
-    def _track_monitor_loop(self, _target_process_name: Optional[str]) -> None:
+    def _track_monitor_loop(
+        self,
+        _target_process_name: Optional[str],
+        stop_event: Optional[threading.Event] = None,
+    ) -> None:
+        ev = stop_event if stop_event is not None else self._track_monitor_stop
         reader = WindowsMediaSessionReader()
         last_status_key: Optional[tuple[Any, ...]] = None
         try:
-            while not self._track_monitor_stop.is_set() and not getattr(self, "_shutdown_done", False):
+            while not ev.is_set() and not getattr(self, "_shutdown_done", False):
                 snaps, _backend = reader.query_sessions()
                 decision = self._track_tracker.update(snaps)
                 cur_sess = decision.selected_session
@@ -670,7 +676,7 @@ class ListenScopeController:
                 if decision.triggered_reset or key != last_status_key:
                     last_status_key = key
                     self._enqueue_track_decision(decision)
-                if self._track_monitor_stop.wait(1.0):
+                if ev.wait(1.0):
                     break
         finally:
             reader.close()

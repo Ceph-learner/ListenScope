@@ -151,7 +151,6 @@ def test_e8_stem_work_dir_prunes_old_job_directories(tmp_path: Path) -> None:
     ), "Missing stem job directory retention/pruning helper"
 
 
-@pytest.mark.xfail(strict=True, reason="E11")
 def test_e11_track_monitor_uses_per_thread_stop_event() -> None:
     """_start_track_monitor must create a fresh stop Event per thread instead of calling .clear() on a shared one."""
     src = (REPO_ROOT / "main.py").read_text("utf-8")
