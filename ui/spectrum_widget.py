@@ -53,6 +53,16 @@ class _FftFrequencyAxis(pg.AxisItem):
             ticks = [(minVal + maxVal) / 2]
         return [(min_spacing, sorted(ticks))]
 
+    def tickValues(self, minVal, maxVal, size):
+        if not self.logMode:
+            return self.logTickValues(minVal, maxVal, size, [])
+        return super().tickValues(minVal, maxVal, size)
+
+    def tickStrings(self, values, scale, spacing):
+        if not self.logMode:
+            return self.logTickStrings(values, scale, spacing)
+        return super().tickStrings(values, scale, spacing)
+
     def logTickStrings(self, values, scale, spacing):
         labels = []
         for tick in values:
@@ -67,6 +77,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._cached_wave_x: Optional[np.ndarray] = None
+        self._cached_fft_freqs: Optional[list[float]] = None
+        self._fft_x: Optional[np.ndarray] = None
         self._cached_texts: dict[str, str] = {}
         self._last_level_val: int = -1
         self._default_spec_lut: Optional[np.ndarray] = None
@@ -194,7 +206,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.fft_plot.setBackground("#F8FAFC")
         self.fft_plot.setLabel("bottom", "频率 (Hz)", **{"font-size": "9pt"})
         self.fft_plot.setYRange(-105, 5)
-        self.fft_plot.setLogMode(x=True, y=False)
+        self.fft_plot.setLogMode(x=False, y=False)
         self.fft_plot.showGrid(x=True, y=True, alpha=0.22)
         self._fft_curve = self.fft_plot.plot(pen=pg.mkPen("#00A878", width=1.5))
         log_axis = _FftFrequencyAxis(orientation="bottom")
@@ -483,9 +495,16 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._wave_min_curve.setData(self._cached_wave_x, np.asarray(snap.waveform_min, dtype=np.float32))
 
         if snap.fft_freqs_hz and snap.fft_db:
-            freqs = np.asarray(snap.fft_freqs_hz, dtype=np.float32)
-            mask = freqs > 0
-            self._fft_curve.setData(freqs[mask], np.asarray(snap.fft_db, dtype=np.float32)[mask])
+            if self._cached_fft_freqs is not snap.fft_freqs_hz and self._cached_fft_freqs != snap.fft_freqs_hz:
+                freqs = np.asarray(snap.fft_freqs_hz, dtype=np.float32)
+                valid = freqs > 0
+                self._cached_fft_freqs = snap.fft_freqs_hz
+                self._fft_valid_mask = valid
+                self._fft_x = np.log10(freqs[valid]).astype(np.float32)
+            fft_y = np.asarray(snap.fft_db, dtype=np.float32)
+            if self._fft_x is not None and fft_y.shape[0] == self._fft_valid_mask.shape[0]:
+                y_sel = fft_y[self._fft_valid_mask] if not np.all(self._fft_valid_mask) else fft_y
+                self._fft_curve.setData(self._fft_x, y_sel, skipFiniteCheck=True)
 
         if snap.log_freqs_hz and len(snap.log_freqs_hz) == len(snap.log_spectrum_db):
             self._log_curve.setData(snap.log_freqs_hz, snap.log_spectrum_db)

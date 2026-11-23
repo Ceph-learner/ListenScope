@@ -21,7 +21,6 @@ def _get_app() -> QtWidgets.QApplication:
     return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
-@pytest.mark.xfail(strict=True, reason="U-B02")
 def test_ub02_fft_display_uses_log_frequency_resampling_with_dense_bass_bins() -> None:
     """AnalysisWorker must emit log-resampled FFT display bins (~221 pts, >=12 pts in 27.5-110 Hz), not linear [::4]."""
     from analysis.worker import AnalysisWorker

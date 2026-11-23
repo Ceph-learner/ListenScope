@@ -63,6 +63,27 @@ class AnalysisWorker:
         self._reset_boundary: tuple[int, int] | None = None
         self._dropped_cycles: int = 0
 
+        # 1/24-octave log-frequency FFT display grid (27.5 Hz .. 16 kHz, 221 bins)
+        self._disp_f = np.geomspace(
+            max(20.0, float(self.config.min_freq_hz)),
+            max(1000.0, float(self.config.max_freq_hz)),
+            221,
+        ).astype(np.float32)
+        self._disp_f_list = self._disp_f.tolist()
+        fft_freqs = self.spectrum.fft_freqs
+        half_step = 2.0 ** (1.0 / 48.0)
+        self._disp_max_ranges: list[tuple[int, int, int]] = []
+        self._disp_interp_idx: list[int] = []
+        for i, fc in enumerate(self._disp_f):
+            lo_idx = int(np.searchsorted(fft_freqs, float(fc) / half_step, side="left"))
+            hi_idx = int(np.searchsorted(fft_freqs, float(fc) * half_step, side="right"))
+            if hi_idx - lo_idx >= 2:
+                self._disp_max_ranges.append((i, lo_idx, hi_idx))
+            else:
+                self._disp_interp_idx.append(i)
+        self._disp_interp_idx_arr = np.asarray(self._disp_interp_idx, dtype=np.intp)
+        self._disp_interp_f_arr = self._disp_f[self._disp_interp_idx_arr] if self._disp_interp_idx else np.empty(0, dtype=np.float32)
+
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive() and not self._stop_event.is_set()
@@ -225,18 +246,22 @@ class AnalysisWorker:
 
         tempo_est = self.tempo.maybe_estimate()
 
-        # Decimate display bins cleanly for UI transmission (avoid huge list allocations)
+        # Log-frequency 1/24-octave display resampling (dense bass bins + high-freq max-pooling)
         fft_freqs = self.spectrum.fft_freqs
-        mask = (fft_freqs >= self.config.min_freq_hz) & (fft_freqs <= self.config.max_freq_hz)
-        fft_freqs_sel = fft_freqs[mask][::4]
-        fft_db_sel = fft_db[mask][::4]
+        disp_db = np.empty(self._disp_f.shape[0], dtype=np.float32)
+        if self._disp_interp_idx_arr.size > 0:
+            disp_db[self._disp_interp_idx_arr] = np.interp(
+                self._disp_interp_f_arr, fft_freqs, fft_db
+            ).astype(np.float32)
+        for out_i, lo_i, hi_i in self._disp_max_ranges:
+            disp_db[out_i] = float(np.max(fft_db[lo_i:hi_i]))
 
         snap = AnalysisSnapshot(
             timestamp=time.time(),
             waveform_min=wf_min.tolist(),
             waveform_max=wf_max.tolist(),
-            fft_freqs_hz=fft_freqs_sel.tolist(),
-            fft_db=fft_db_sel.tolist(),
+            fft_freqs_hz=self._disp_f_list,
+            fft_db=disp_db.tolist(),
             log_freqs_hz=self.spectrum.log_freqs.tolist(),
             log_spectrum_db=log_db.tolist(),
             chroma_12=chroma_12.tolist(),
