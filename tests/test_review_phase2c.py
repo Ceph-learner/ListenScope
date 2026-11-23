@@ -259,7 +259,6 @@ def test_ub26_mixer_widget_uses_bisect_for_chord_and_midi_lookup() -> None:
     assert "bisect_right(" in src, "ui/mixer_widget.py still performs O(N) linear scan over chords/MIDI every tick"
 
 
-@pytest.mark.xfail(strict=True, reason="U-B27")
 def test_ub27_appearance_dialog_debounces_font_spinbox_changes() -> None:
     """ui/appearance.py must debounce SpinBox changes (>=100ms QTimer) instead of re-applying full QSS on every step."""
     src = (REPO_ROOT / "ui" / "appearance.py").read_text("utf-8")
