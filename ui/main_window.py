@@ -1473,6 +1473,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             estop_full = tr("btn_estop", get_current_language())
             self.emergency_stop_btn.setAccessibleName(estop_full)
             self.emergency_stop_btn.setText("" if w < 920 else estop_full)
+            self.emergency_stop_btn.setMinimumWidth(self.emergency_stop_btn.sizeHint().width())
+            self.emergency_stop_btn.adjustSize()
 
         # Default A/B panel to compact single-row mode; user can expand via '⋯ 更多'
         if self._ab_more_user_override is None:
