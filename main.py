@@ -1951,12 +1951,18 @@ class ListenScopeController:
         except Exception:
             pass
         cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, *sys.argv]
-        self.shutdown()
+        restart_cwd = str(self.work_dir.parent if self.work_dir.name == "workspace_outputs" else os.getcwd())
         try:
-            restart_cwd = str(self.work_dir.parent if self.work_dir.name == "workspace_outputs" else os.getcwd())
             launch_detached(cmd, cwd=restart_cwd)
         except Exception as exc:
             logging.getLogger(__name__).exception("Failed to relaunch ListenScope: %s", exc)
+            if hasattr(self, "window") and self.window is not None:
+                try:
+                    self.window.show_banner_message("重启失败，请手动重新打开", tone="warn")
+                except Exception:
+                    pass
+            return
+        self.shutdown()
         if hasattr(self, "window") and self.window is not None:
             try:
                 self.window.force_quit()

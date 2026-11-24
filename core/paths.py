@@ -221,8 +221,19 @@ def launch_detached(cmd: Any, **kwargs: Any) -> subprocess.Popen[Any]:
         if not (caller_flags & create_no_window):
             flags |= detached_process
         spawn_kw["creationflags"] = flags
-    else:
-        spawn_kw.setdefault("start_new_session", True)
+        try:
+            return subprocess.Popen(cmd, **spawn_kw)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 5 and (flags & create_breakaway):
+                _logger.warning(
+                    "launch_detached with CREATE_BREAKAWAY_FROM_JOB failed (winerror=5, likely nested in a non-breakaway outer Job); "
+                    "retrying without breakaway (child will remain in parent Job): %s",
+                    exc,
+                )
+                spawn_kw["creationflags"] = flags & ~create_breakaway
+                return subprocess.Popen(cmd, **spawn_kw)
+            raise
+    spawn_kw.setdefault("start_new_session", True)
     return subprocess.Popen(cmd, **spawn_kw)
 
 

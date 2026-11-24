@@ -34,7 +34,7 @@
 1. **125% 缩放窄窗口（1093×566 物理）**：确认顶栏无半截字、E-STOP 保留短标签、混音空状态主按钮无需滚动即可点击。
 2. **托盘图标与退出耗时**：确认托盘溢出区显示 3 竖条单色图标并随系统明暗切换；点击 `Quit ListenScope` 后 2 s 内主进程与子进程全部退出，日志可见各阶段 `shutdown stage=... elapsed_ms=...`。另在启动一次 2-Stem 分轨、AI 子进程运行中用 `taskkill /F /PID <主进程>` 强制结束主进程，5 秒内 AI/MIDI 子进程也应全部退出。
 3. **真实音频持续播放 BPM**：确认 15 s 内稳定出 BPM（不再等到 100+ s）。
-9. **重启与外部程序脱离 Job（Round 4）**：在设置里点「立即重启 ListenScope 生效」，新窗口要能正常起来并保持运行；打开导出文件夹后关闭 ListenScope，资源管理器窗口不能被一起关掉。
+9. **重启与外部程序脱离 Job（Round 4 / Round 5）**：分别在 **Cursor 终端里启动** 和 **双击 `.bat` / 资源管理器里启动** 两种方式下，各在设置里点一次「立即重启 ListenScope 生效」，确认新窗口均能正常起来并保持运行；另在打开导出文件夹后关闭 ListenScope，资源管理器窗口不能被一起关掉。
 
 ---
 
@@ -100,6 +100,19 @@ INFO     listenscope.shutdown:main.py:2320 shutdown total elapsed_ms=543.7
 | `core/version.py:59` / `core/system_probe.py:30` / `core/media_session.py:632` / `core/bootstrap_manager.py:333` | `git`、`nvidia-smi`、SMTC PowerShell、`taskkill` 等短生命周期同步 `subprocess.run` | 探针/取消辅助 | **保持不变**（同步短命令，留在 Job 内） |
 | `ui/resource_widget.py:289` / `ui/settings_dialog.py:111,115,714` | `QtGui.QDesktopServices.openUrl`（打开日志/导出目录、网页与系统设置） | 系统 Shell / DCOM | **保持不变**（经 Windows Shell/Explorer 进程间调用打开，非 `Popen` 子进程） |
 | 全仓 `os.startfile` / `QProcess.startDetached` | 全仓搜索 | — | **无调用** |
+
+---
+
+## Round 5（`launch_detached` winerror=5 兜底 + 先起新进程再退出 + 已知边界）
+
+| 项 | 修改内容与文件 | 测试名 | Linux/offscreen 验证结果 |
+|---|---|---|---|
+| **1. `launch_detached` `winerror=5` 回退重试** | [`core/paths.py`](../../core/paths.py) `launch_detached()`：Windows 下带 `CREATE_BREAKAWAY_FROM_JOB` 调用 `Popen` 若抛出 `OSError` 且 `winerror == 5`（典型场景：被套在不允许 breakaway 的外层 IDE/终端 Job 内），记录 `warning` 日志说明原因及子进程将留在父 Job 内，随后去掉 `CREATE_BREAKAWAY_FROM_JOB` 重试一次。 | `tests/test_review_phase2f.py::test_round5_launch_detached_retries_without_breakaway_on_winerror_5` | **PASSED** |
+| **2. `restart_application` 先启动新进程再 `shutdown()`** | [`main.py`](../../main.py) `restart_application()`：改为先执行 `launch_detached(cmd, cwd=restart_cwd)`，成功后再执行 `self.shutdown()` 与退出；若新进程启动失败则保留旧窗口、不调用 `shutdown()`，并弹出横幅「重启失败，请手动重新打开」（已在 [`core/i18n.py`](../../core/i18n.py) 补齐 `zh/en/ko/ja` 四语）。 | `tests/test_review_phase2f.py::test_round5_restart_application_keeps_window_and_skips_shutdown_on_failure` | **PASSED** |
+
+### 已知边界（本轮不改）
+- 如果在一键配置（`BootstrapCoordinator`）运行过程中退出 ListenScope，配置脚本的 `stdout` 管道会断开，可能导致安装中断；下次打开时重新运行一键配置即可恢复。
+
 
 
 

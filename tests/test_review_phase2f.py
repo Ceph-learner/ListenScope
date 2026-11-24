@@ -701,3 +701,75 @@ def test_round4_launch_detached_not_in_active_subprocs_and_job_breakaway() -> No
     main_src = (REPO_ROOT / "main.py").read_text("utf-8")
     assert "launch_detached(cmd, cwd=restart_cwd)" in main_src
 
+
+def test_round5_launch_detached_retries_without_breakaway_on_winerror_5(monkeypatch, caplog) -> None:
+    import logging
+    import core.paths as paths_mod
+
+    calls: list[int] = []
+
+    class _DummyProc:
+        pass
+
+    def _fake_popen(cmd, **kwargs):
+        flags = int(kwargs.get("creationflags", 0))
+        calls.append(flags)
+        if len(calls) == 1:
+            err = OSError("Access is denied")
+            err.winerror = 5
+            raise err
+        return _DummyProc()
+
+    monkeypatch.setattr(paths_mod.sys, "platform", "win32")
+    monkeypatch.setattr(paths_mod.subprocess, "Popen", _fake_popen)
+
+    with caplog.at_level(logging.WARNING):
+        proc = paths_mod.launch_detached(["ListenScope.exe"], cwd="C:/app")
+
+    assert isinstance(proc, _DummyProc)
+    assert len(calls) == 2
+    assert calls[0] & 0x01000000
+    assert not (calls[1] & 0x01000000)
+    assert any("winerror=5" in r.message for r in caplog.records)
+
+
+def test_round5_restart_application_keeps_window_and_skips_shutdown_on_failure(monkeypatch, tmp_path) -> None:
+    import main as main_mod
+    from core.i18n import translate_text
+
+    for lang in ("en", "ko", "ja"):
+        assert translate_text("重启失败，请手动重新打开", lang) != "重启失败，请手动重新打开"
+
+    called = {"shutdown": 0, "force_quit": 0, "banners": []}
+
+    class _FakeWindow:
+        def show_banner_message(self, text: str, tone: str = "info") -> None:
+            called["banners"].append((text, tone))
+
+        def force_quit(self) -> None:
+            called["force_quit"] += 1
+
+    class _FakeController:
+        work_dir = tmp_path / "workspace_outputs"
+        _settings_path = tmp_path / "settings.json"
+        window = _FakeWindow()
+
+        def _build_persisted_settings(self):
+            return {}
+
+        def shutdown(self) -> None:
+            called["shutdown"] += 1
+
+    monkeypatch.setattr(main_mod, "save_settings", lambda *a, **kw: None)
+
+    def _fail_launch(*args, **kwargs):
+        raise OSError("cannot launch")
+
+    monkeypatch.setattr(main_mod, "launch_detached", _fail_launch)
+
+    main_mod.ListenScopeController.restart_application(_FakeController())
+    assert called["shutdown"] == 0
+    assert called["force_quit"] == 0
+    assert called["banners"] == [("重启失败，请手动重新打开", "warn")]
+
+

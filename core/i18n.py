@@ -557,6 +557,11 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "지금 ListenScope 다시 시작",
         "ja": "今すぐ ListenScope を再起動",
     },
+    "重启失败，请手动重新打开": {
+        "en": "Restart failed. Please reopen ListenScope manually.",
+        "ko": "다시 시작하지 못했습니다. ListenScope를 수동으로 다시 열어 주세요.",
+        "ja": "再起動に失敗しました。手動で ListenScope を開き直してください。",
+    },
     "待命：支持多源下载，低速或断流时自动切换高速镜像": {
         "en": "Standby: multi-mirror download enabled with automatic slow-mirror failover",
         "ko": "대기 중: 다중 미러 및 저속/끊김 시 자동 미러 전환 지원",
