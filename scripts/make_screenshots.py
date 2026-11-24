@@ -299,6 +299,230 @@ def render_design_sheet(out_dir: Path, *, max_kb: int = 200) -> Path:
     return out_path
 
 
+def capture_settings_ai(out_path: Path, *, max_kb: int = 250) -> Path:
+    """Capture 2E-R light-theme SettingsDialog on the 'AI 与 MIDI 环境' category."""
+    from ui.settings_dialog import SettingsDialog
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    report = probe_system()
+    report.gpu_name = "NVIDIA GeForce RTX 5060 Ti"
+    report.vram_total_mb = 8192.0
+    report.vram_free_mb = 7168.0
+    report.gpu_ai_ready = True
+
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=report,
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    try:
+        app_cfg = Appearance(theme_mode="light", language="zh")
+        win.apply_appearance(app_cfg)
+        dlg = SettingsDialog(
+            hardware_report=report,
+            resource_limits=ResourceLimits(),
+            ai_config=AIConfig(),
+            ai_python_executable=r"C:\ListenScope\.venv-ai\Scripts\python.exe",
+            midi_python_executable=r"C:\ListenScope\.venv-midi\Scripts\python.exe",
+            appearance=app_cfg,
+            close_behavior="ask",
+            acid_variant=win._acid_variant or "",
+            parent=win,
+        )
+        try:
+            dlg.open_category("midi")
+            dlg.resize(980, 680)
+            dlg.show()
+            for _ in range(4):
+                app.processEvents()
+            _save_png_under_limit(dlg.grab(), out_path, max_kb=max_kb)
+        finally:
+            dlg.close()
+    finally:
+        win.close()
+        mixer.close()
+    return out_path
+
+
+def capture_demo_gif(out_path: Path, *, width: int = 860, max_kb: int = 2900) -> Path:
+    """Capture a ~10s light-theme synthetic demo GIF (width=860, <3 MB) across 2E-R tabs."""
+    from PIL import Image
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    sr = 48000
+    acfg = AudioConfig(sample_rate=sr, channels=2, ring_buffer_seconds=20)
+    rb = FixedRingBuffer(acfg)
+    worker = AnalysisWorker(rb, audio_config=acfg, analysis_config=AnalysisConfig())
+
+    mixer = StemMixerEngine(sample_rate=sr, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+
+    res_snap = ResourceSnapshot(
+        timestamp=1.0,
+        main_ram_mb=310.0,
+        ai_worker_ram_mb=0.0,
+        system_ram_total_mb=16384.0,
+        system_ram_available_mb=6240.0,
+        gpu_name="Synthetic RTX GPU",
+        vram_total_mb=8192.0,
+        vram_used_mb=1024.0,
+        vram_free_mb=7168.0,
+        gpu_utilization_pct=4.0,
+        active_ai_jobs=0,
+        loaded_models=0,
+        current_model=None,
+        current_task=None,
+        audio_queue_size=1,
+        audio_queue_maxsize=64,
+        ai_buffer_seconds=3.0,
+        status=ResourceStatus.NORMAL,
+    )
+    cap_stats = CaptureStats(
+        mode=CaptureMode.SYNTHETIC_SIMULATION,
+        pid=None,
+        process_name="Simulated",
+        is_running=True,
+        sample_rate=sr,
+        channels=2,
+        dtype="float32",
+        rms_dbfs=-18.0,
+        peak_dbfs=-6.2,
+        is_silent=False,
+    )
+
+    chords_seq = [
+        ("C#m/E", "E", 440.0, "A4", [82.41, 277.18, 329.63, 415.30], (4, 1, 8)),
+        ("A", "F#m", 440.0, "A4", [110.0, 220.0, 277.18, 329.63], (9, 1, 4)),
+        ("E", "C#m", 329.63, "E4", [82.41, 164.81, 246.94, 329.63], (4, 8, 11)),
+        ("B", "G#m", 493.88, "B4", [123.47, 246.94, 311.13, 369.99], (11, 3, 6)),
+    ]
+
+    frames_pil: list[Image.Image] = []
+    chroma_hist = np.full((45, 12), 0.10, dtype=np.float32)
+
+    def _grab_pil() -> Image.Image:
+        pm = win.grab()
+        img = pm.toImage().convertToFormat(QtGui.QImage.Format.Format_RGBA8888)
+        w0, h0 = img.width(), img.height()
+        ptr = img.constBits()
+        pil_im = Image.frombuffer("RGBA", (w0, h0), bytes(ptr), "raw", "RGBA", 0, 1).convert("RGB")
+        new_h = int(round(h0 * (width / float(w0))))
+        return pil_im.resize((width, new_h), Image.Resampling.LANCZOS)
+
+    try:
+        win.apply_appearance(Appearance(theme_mode="light", language="zh"))
+        win.resize(1280, 720)
+        win.show()
+        win.update_resource_snapshot(res_snap, [], [])
+        win.update_capture_stats(cap_stats, 1.5)
+
+        # Warm up 1.5s of audio first so buffer/waveform is already populated
+        step_n = int(round(sr * 0.25))
+        t_cursor = 0.0
+        for _ in range(6):
+            t = t_cursor + np.arange(step_n, dtype=np.float32) / float(sr)
+            t_cursor += 0.25
+            mono = (0.24 * np.sin(2.0 * np.pi * 440.0 * t) + 0.14 * np.sin(2.0 * np.pi * 82.41 * t)).astype(np.float32)
+            rb.write(np.stack([mono, mono], axis=1))
+            worker.analyze_latest_once()
+
+        # 40 frames x 250ms = 10.0 seconds total
+        # Frames 0..17: Tab 0 (Spectrum & Waveform), 18..31: Tab 1 (Chords & Key), 32..39: Tab 2 (Mixer empty + A/B)
+        for idx in range(40):
+            if idx == 0:
+                win.tabs.setCurrentIndex(0)
+            elif idx == 18:
+                win.tabs.setCurrentIndex(1)
+            elif idx == 32:
+                win.tabs.setCurrentIndex(2)
+
+            c_prim, c_sec, f0, note_n, freqs, pcs = chords_seq[(idx // 5) % len(chords_seq)]
+            t = t_cursor + np.arange(step_n, dtype=np.float32) / float(sr)
+            t_cursor += 0.25
+            beat_env = 0.55 + 0.45 * np.power(np.maximum(0.0, np.cos(2.0 * np.pi * 1.0 * t)), 6.0)
+            mono = np.zeros(step_n, dtype=np.float32)
+            for k, f in enumerate(freqs):
+                mono += (0.18 if k == 0 else 0.10) * beat_env * np.sin(2.0 * np.pi * f * t)
+            rb.write(np.stack([mono, mono], axis=1))
+            snap = worker.analyze_latest_once()
+
+            snap.pitch = PitchEstimate(
+                frequency_hz=f0,
+                note_name=note_n,
+                cents_offset=round(float(np.sin(idx * 0.4) * 1.8), 1),
+                confidence=0.95,
+                is_polyphonic=False,
+                source_band="full",
+            )
+            snap.chord = ChordEstimate(
+                primary=c_prim,
+                secondary=c_sec,
+                stability="High" if idx % 5 >= 1 else "Medium",
+                correlation=0.86,
+                margin=0.14,
+                is_silent=False,
+            )
+            snap.key = KeyEstimate(
+                primary="E major",
+                secondary="C# minor",
+                stability="High",
+                correlation=0.87,
+                margin=0.09,
+            )
+            snap.tempo = TempoEstimate(bpm=120.0, stability="High", confidence_score=0.84, alt_bpm=60.0)
+            snap.window_seconds = round(min(120.0, 1.5 + (idx + 1) * 0.25), 1)
+            snap.latency_ms = 3.8
+
+            chroma_hist = np.roll(chroma_hist, -1, axis=0)
+            chroma_hist[-1, :] = 0.08
+            for pc in pcs:
+                chroma_hist[-1, pc] = 0.90
+
+            spec_mat = np.full((90, 96), -82.0, dtype=np.float32)
+            for b_idx in (16, 40, 56):
+                spec_mat[:, max(0, b_idx - 1) : min(96, b_idx + 2)] = -18.0
+
+            win.update_analysis_snapshot(snap, spec_mat, chroma_hist)
+            win.update_capture_stats(cap_stats, snap.window_seconds)
+            for _ in range(3):
+                app.processEvents()
+            frames_pil.append(_grab_pil())
+    finally:
+        win.close()
+        mixer.close()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Quantize with a shared adaptive palette for clean, compact GIF (<3 MB)
+    quantized = [f.quantize(colors=96, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE) for f in frames_pil]
+    quantized[0].save(
+        str(out_path),
+        save_all=True,
+        append_images=quantized[1:],
+        duration=250,
+        loop=0,
+        optimize=True,
+    )
+    if out_path.stat().st_size > max_kb * 1024:
+        quantized = [f.quantize(colors=64, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE) for f in frames_pil]
+        quantized[0].save(
+            str(out_path),
+            save_all=True,
+            append_images=quantized[1:],
+            duration=250,
+            loop=0,
+            optimize=True,
+        )
+    return out_path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Capture offscreen synthetic screenshots for ListenScope.")
     parser.add_argument("--out-dir", type=Path, default=REPO_ROOT / "docs" / "review" / "screens")
@@ -306,7 +530,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--suffix", type=str, default="")
     parser.add_argument("--max-kb", type=int, default=200)
     parser.add_argument("--design-sheet", action="store_true", help="Generate design token & component state sheet")
+    parser.add_argument("--settings-ai", type=Path, default=None, help="Output path for Settings AI & MIDI PNG")
+    parser.add_argument("--demo-gif", type=Path, default=None, help="Output path for ~10s 860px light demo GIF")
     args = parser.parse_args(argv)
+    if args.settings_ai is not None:
+        out = capture_settings_ai(args.settings_ai)
+        print(f"{out} ({out.stat().st_size / 1024.0:.1f} KB)")
+        return 0
+    if args.demo_gif is not None:
+        out = capture_demo_gif(args.demo_gif)
+        print(f"{out} ({out.stat().st_size / 1024.0:.1f} KB)")
+        return 0
     if args.design_sheet:
         sheet = render_design_sheet(args.out_dir, max_kb=args.max_kb)
         print(f"{sheet} ({sheet.stat().st_size / 1024.0:.1f} KB)")
