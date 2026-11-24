@@ -614,6 +614,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._play_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Space"), self)
         self._play_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
         self._play_shortcut.activated.connect(self.toggle_playback_requested.emit)
+        self._f1_help_shortcut = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_F1), self)
+        self._f1_help_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
+        self._f1_help_shortcut.activated.connect(self._show_focused_widget_help)
         self._setup_practice_shortcuts()
 
         self._shell_frame = _MainShellFrame(self)
@@ -1270,6 +1273,20 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                     self.clearMask()
         except Exception:
             pass
+
+    def _show_focused_widget_help(self) -> None:
+        w = QtWidgets.QApplication.focusWidget()
+        cur = w
+        while cur is not None:
+            if isinstance(cur, HelpBadge):
+                cur.click()
+                return
+            tip = cur.toolTip().strip() if hasattr(cur, "toolTip") else ""
+            if tip:
+                pos = cur.mapToGlobal(QtCore.QPoint(cur.width() // 2, cur.height()))
+                QtWidgets.QToolTip.showText(pos, tip, cur)
+                return
+            cur = cur.parentWidget()
 
     def _toggle_maximize_restore(self) -> None:
         if self.isMaximized():

@@ -98,7 +98,6 @@ def test_e3_footer_is_real_24px_status_bar_not_decorative_barcode() -> None:
     assert "ZERO_GLOW: TRUE" not in acid_src, "Footer still hardcodes decorative 'ZERO_GLOW: TRUE'"
 
 
-@pytest.mark.xfail(strict=True, reason="E4")
 def test_e4_visible_help_badges_le_10_per_page_and_f1_help_supported() -> None:
     """E4: Every page must show <= 10 visible HelpBadges and F1 must trigger focused-widget help."""
     from ui.help_badge import HelpBadge

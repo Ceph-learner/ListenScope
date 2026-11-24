@@ -599,24 +599,18 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         prog_bar.addWidget(self.practice_chords_btn)
         root.addLayout(prog_bar)
 
+        self.transpose_combo.setToolTip(
+            "移调 / Capo 与转调保护：Capo/移调仅改变和弦、调性与记谱提示的指型展示，底层检测始终锚定实音与实际 MIDI 音高，避免转调后错位；遇到转调歌曲时「调性推测」卡片会亮出 [可能转调] 警告。"
+        )
+        self.auto_reset_chk.setToolTip(
+            "SMTC 自动切歌重置：仅当 Windows 媒体会话 (SMTC) 连续两次确认目标播放器切换了新曲目时，才自动清空和弦轨迹、调性窗口与 BPM，暂停/拖动进度条不会误重置。"
+        )
         tools_bar = QtWidgets.QHBoxLayout()
         tools_bar.setSpacing(10)
         tools_bar.addWidget(QtWidgets.QLabel("移调/Capo:"))
         tools_bar.addWidget(self.transpose_combo)
-        tools_bar.addWidget(
-            HelpBadge(
-                "移调 / Capo 与转调保护",
-                "Capo/移调仅改变和弦、调性与记谱提示的指型展示，底层检测始终锚定实音与实际 MIDI 音高，避免转调后错位；遇到转调歌曲时「调性推测」卡片会亮出 [可能转调] 警告。",
-            )
-        )
         tools_bar.addSpacing(4)
         tools_bar.addWidget(self.auto_reset_chk)
-        tools_bar.addWidget(
-            HelpBadge(
-                "SMTC 自动切歌重置",
-                "仅当 Windows 媒体会话 (SMTC) 连续两次确认目标播放器切换了新曲目时，才自动清空和弦轨迹、调性窗口与 BPM，暂停/拖动进度条不会误重置。",
-            )
-        )
         tools_bar.addSpacing(4)
         tools_bar.addWidget(self.reset_harmony_btn)
 
