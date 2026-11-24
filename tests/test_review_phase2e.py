@@ -146,7 +146,6 @@ def test_e6_chord_card_deduplicates_primary_label_and_uses_stability_meter() -> 
     )
 
 
-@pytest.mark.xfail(strict=True, reason="E7")
 def test_e7_charts_uniform_fft_ticks_left_alignment_and_perceptual_colormap() -> None:
     """E7: FFT Y ticks fixed to 0/-30/-60/-90 dB, light/dark spectrogram colormap L* span >= 60%, left plot margins aligned +-2px."""
     sw_src = (REPO_ROOT / "ui" / "spectrum_widget.py").read_text("utf-8")

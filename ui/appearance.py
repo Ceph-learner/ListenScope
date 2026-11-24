@@ -683,15 +683,18 @@ def apply_plot_appearance(
         pass
     background, foreground, _ = appearance.effective_colors(system_is_dark=system_is_dark)
     plot.setBackground(background)
-    axis_color = _blend(background, foreground, 0.72)
+    axis_color = _blend(background, foreground, 0.78)
     eff_font = appearance.effective_font_family()
     base_font = QtGui.QFont(eff_font) if eff_font else QtGui.QFont(QtWidgets.QApplication.font())
     base_font.setPixelSize(appearance.font_size)
+    tick_font = QtGui.QFont("Cascadia Mono")
+    tick_font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
+    tick_font.setPixelSize(10)
     title = plot.getPlotItem().titleLabel
     title.setText(title.text, color=foreground, family=base_font.family(), size=f"{appearance.font_size}px")
     for name in ("left", "right", "top", "bottom"):
         axis = plot.getAxis(name)
-        axis.setTickFont(base_font)
+        axis.setTickFont(tick_font)
         axis.setPen(_blend(background, foreground, 0.45))
         axis.setTextPen(axis_color)
 

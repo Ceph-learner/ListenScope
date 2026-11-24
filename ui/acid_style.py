@@ -242,28 +242,58 @@ def get_acid_palette(variant: str = "dark") -> AcidPalette:
     return ACID_PALETTES["light" if variant == "light" else "dark"]
 
 
+def _oklab_light_colormap_lut(n: int = 256) -> np.ndarray:
+    """Generate a 256-entry perceptual light-theme LUT in OKLab space with monotonically decreasing lightness."""
+    t = np.linspace(0.0, 1.0, n, dtype=np.float64)
+    # Monotonic L from 0.97 (near paper white) down to 0.24 (deep teal-ink)
+    L = 0.97 - 0.73 * np.power(t, 0.92)
+    a = -0.065 * np.sin(np.pi * t) - 0.015 * t
+    b = -0.070 * np.sin(np.pi * np.power(t, 0.85)) - 0.025 * t
+
+    l_ = L + 0.3963377774 * a + 0.2158037573 * b
+    m_ = L - 0.1055613458 * a - 0.0638541728 * b
+    s_ = L - 0.0894841775 * a - 1.2914855480 * b
+
+    l3 = l_ * l_ * l_
+    m3 = m_ * m_ * m_
+    s3 = s_ * s_ * s_
+
+    r_lin = +4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3
+    g_lin = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3
+    b_lin = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3
+
+    rgb_lin = np.clip(np.stack([r_lin, g_lin, b_lin], axis=-1), 0.0, 1.0)
+    rgb = np.where(
+        rgb_lin <= 0.0031308,
+        12.92 * rgb_lin,
+        1.055 * np.power(rgb_lin, 1.0 / 2.4) - 0.055,
+    )
+    rgb_u8 = np.clip(np.round(rgb * 255.0), 0, 255).astype(np.uint8)
+    alpha = np.full((n, 1), 255, dtype=np.uint8)
+    return np.concatenate([rgb_u8, alpha], axis=1)
+
+
 def acid_colormap_lut(kind: str, variant: str = "dark") -> np.ndarray:
-    """Return a cool high-contrast 256-entry RGBA LUT for Spectrogram and Chroma heatmaps."""
+    """Return a perceptual 256-entry RGBA LUT (dark: pyqtgraph inferno / matplotlib CC0; light: OKLab monotonic ramp)."""
     key = (kind, "light" if variant == "light" else "dark")
     cached = _LUT_CACHE.get(key)
     if cached is not None:
         return cached
 
-    stops = np.array([0.0, 0.25, 0.55, 0.80, 1.0], dtype=np.float32)
     if key[1] == "dark":
-        colors = (
-            ["#0E1216", "#16202A", "#2211FF", "#77DCE4", "#CEFF18"]
-            if kind == "spectrogram"
-            else ["#0E1216", "#16202A", "#2211FF", "#77DCE4", "#CEFF18"]
-        )
+        try:
+            cmap = pg.colormap.get("inferno") if hasattr(pg, "colormap") else None
+            if cmap is not None:
+                lut = cmap.getLookupTable(0.0, 1.0, 256)
+                _LUT_CACHE[key] = lut
+                return lut
+        except Exception:
+            pass
+        stops = np.array([0.0, 0.25, 0.55, 0.80, 1.0], dtype=np.float32)
+        colors = ["#000004", "#420A68", "#932667", "#DD513A", "#FCFFA4"]
+        lut = pg.ColorMap(pos=stops, color=[pg.mkColor(c) for c in colors]).getLookupTable(0.0, 1.0, 256)
     else:
-        colors = (
-            ["#F8FAFC", "#E2E8F0", "#7DD3FC", "#0284C7", "#00A878"]
-            if kind == "spectrogram"
-            else ["#F8FAFC", "#E2E8F0", "#7DD3FC", "#0284C7", "#00A878"]
-        )
-    cmap = pg.ColorMap(pos=stops, color=[pg.mkColor(c) for c in colors])
-    lut = cmap.getLookupTable(0.0, 1.0, 256)
+        lut = _oklab_light_colormap_lut(256)
     _LUT_CACHE[key] = lut
     return lut
 
@@ -3649,10 +3679,9 @@ def apply_acid_plot_theme(
     axis_col = p.hist_plot_axis if is_history else p.plot_axis
     title_col = p.dock_ink if is_history else p.text_primary
     plot.setBackground(bg)
-    base_px = max(10, int(appearance.font_size or 12) - 1)
-    tick_font = QtGui.QFont("Consolas")
+    tick_font = QtGui.QFont("Cascadia Mono")
     tick_font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
-    tick_font.setPixelSize(base_px)
+    tick_font.setPixelSize(10)
     title = plot.getPlotItem().titleLabel
     title.setText(title.text, color=title_col, family=tick_font.family(), size=f"{max(11, int(appearance.font_size or 12))}px")
     for name in ("left", "right", "top", "bottom"):
