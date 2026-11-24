@@ -92,6 +92,7 @@ from .acid_style import (
     apply_acid_plot_theme,
     get_acid_palette,
     is_acid_eligible,
+    load_lucide_icon,
     resolve_acid_variant,
 )
 from .mixer_widget import StemMixerWidget
@@ -176,25 +177,68 @@ QTabBar::tab:selected {
 """
 
 
-_CACHED_APP_ICON: Optional[QtGui.QIcon] = None
+_CACHED_APP_ICONS: dict[bool, QtGui.QIcon] = {}
 
 
-def _load_app_icon() -> QtGui.QIcon:
-    """Load the Acid Telemetry emblem as explicit multi-DPI pixmaps + ICO for reliable Windows taskbar & tray icons."""
-    global _CACHED_APP_ICON
-    if _CACHED_APP_ICON is not None and not _CACHED_APP_ICON.isNull():
-        return _CACHED_APP_ICON
+def _is_windows_taskbar_light() -> bool:
+    """Read Windows HKCU SystemUsesLightTheme; fallback to False (white tray icon) when unreadable."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        ) as key:
+            val, _ = winreg.QueryValueEx(key, "SystemUsesLightTheme")
+            return bool(int(val) == 1)
+    except Exception:
+        return False
+
+
+def _load_tray_icon() -> QtGui.QIcon:
+    """Load monochrome tray icon matching Windows taskbar theme (tray_black on light, tray_white on dark)."""
+    assets_dir = get_bundle_root() / "ui" / "assets"
+    if not assets_dir.exists():
+        assets_dir = Path(__file__).resolve().parent / "assets"
+    name = "listenscope_tray_black.svg" if _is_windows_taskbar_light() else "listenscope_tray_white.svg"
+    svg_path = assets_dir / name
+    icon = QtGui.QIcon()
+    if svg_path.exists() and QtSvg is not None:
+        renderer = QtSvg.QSvgRenderer(str(svg_path))
+        if renderer.isValid():
+            for px in (16, 20, 24, 32, 48):
+                pm = QtGui.QPixmap(px, px)
+                pm.fill(QtCore.Qt.GlobalColor.transparent)
+                painter = QtGui.QPainter(pm)
+                painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+                renderer.render(painter, QtCore.QRectF(0, 0, px, px))
+                painter.end()
+                if not pm.isNull():
+                    icon.addPixmap(pm)
+    return icon if not icon.isNull() else _load_app_icon()
+
+
+def _load_app_icon(*, light: bool = False) -> QtGui.QIcon:
+    """Load ListenScope master emblem (master_light for light theme, master_dark/ico for dark)."""
+    cached = _CACHED_APP_ICONS.get(light)
+    if cached is not None and not cached.isNull():
+        return cached
     assets_dir = get_bundle_root() / "ui" / "assets"
     if not (assets_dir / "listenscope.svg").exists() and not (assets_dir / "listenscope.ico").exists():
         assets_dir = Path(__file__).resolve().parent / "assets"
     icon = QtGui.QIcon()
-    svg_path = assets_dir / "listenscope.svg"
+    svg_name = "listenscope_master_light.svg" if light else "listenscope.svg"
+    svg_path = assets_dir / svg_name
+    if not svg_path.exists():
+        svg_path = assets_dir / "listenscope.svg"
     ico_path = assets_dir / "listenscope.ico"
     if svg_path.exists() and QtSvg is not None:
         try:
             renderer = QtSvg.QSvgRenderer(str(svg_path))
             if renderer.isValid():
-                for px in (16, 20, 24, 32, 48, 64, 128, 256):
+                for px in (16, 20, 24, 32, 40, 48, 64, 96, 128, 256):
                     pm = QtGui.QPixmap(px, px)
                     pm.fill(QtCore.Qt.GlobalColor.transparent)
                     painter = QtGui.QPainter(pm)
@@ -205,11 +249,11 @@ def _load_app_icon() -> QtGui.QIcon:
                         icon.addPixmap(pm)
         except Exception:
             pass
-    if ico_path.exists():
+    if not light and ico_path.exists():
         icon.addFile(str(ico_path))
     if svg_path.exists() and icon.isNull():
         icon.addFile(str(svg_path))
-    _CACHED_APP_ICON = icon
+    _CACHED_APP_ICONS[light] = icon
     return icon
 
 
@@ -570,6 +614,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._play_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Space"), self)
         self._play_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
         self._play_shortcut.activated.connect(self.toggle_playback_requested.emit)
+        self._f1_help_shortcut = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_F1), self)
+        self._f1_help_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
+        self._f1_help_shortcut.activated.connect(self._show_focused_widget_help)
         self._setup_practice_shortcuts()
 
         self._shell_frame = _MainShellFrame(self)
@@ -582,63 +629,96 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         main_layout.setContentsMargins(8, 6, 8, 6)
         main_layout.setSpacing(5)
 
-        # 1. TWO-TIER COMMAND HEADER: Brand Badge + Telemetry + Segmented Skin Switcher + Audio Input + Hazard/Emergency Stop + Window Controls
-        self._topbar_frame = topbar_frame = QtWidgets.QFrame()
+        # 1. SINGLE-ROW COMMAND HEADER (<=56px): Brand + Audio Input + Capture + Freeze | Resource + AI + Theme + Settings + E-STOP + Window Controls
+        self._topbar_frame = self._top_bar = topbar_frame = QtWidgets.QFrame()
         topbar_frame.setObjectName("acidTopbar")
+        topbar_frame.setMaximumHeight(54)
         topbar_frame.installEventFilter(self)
         self._topbar_v = topbar_v = QtWidgets.QVBoxLayout(topbar_frame)
-        topbar_v.setContentsMargins(10, 6, 10, 5)
-        topbar_v.setSpacing(5)
+        topbar_v.setContentsMargins(8, 4, 8, 4)
+        topbar_v.setSpacing(0)
 
         row_cmd = QtWidgets.QHBoxLayout()
         row_cmd.setContentsMargins(0, 0, 0, 0)
         row_cmd.setSpacing(5)
 
-        self._brand_badge = ChamferBadge("LS", size=QtCore.QSize(36, 34), chamfer=7)
-        brand_txt = QtWidgets.QVBoxLayout()
-        brand_txt.setContentsMargins(1, 0, 4, 0)
-        brand_txt.setSpacing(3)
+        self._brand_badge = ChamferBadge("LS", size=QtCore.QSize(28, 28), chamfer=6)
+        self._brand_badge.setToolTip("LISTENSCOPE // 实时音频分析与吉他扒谱工作台")
         self._brand_eye = ElidedLabel("LISTENSCOPE // AUDIO TELEMETRY")
         self._brand_eye.setObjectName("brandEyebrow")
-        self._brand_eye.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Preferred,
-        )
-        brand_title_row = QtWidgets.QHBoxLayout()
-        brand_title_row.setContentsMargins(0, 0, 0, 0)
-        brand_title_row.setSpacing(7)
-        self._brand_title = QtWidgets.QLabel("实时音频分析与吉他扒谱工作台")
+        self._brand_eye.setVisible(False)
+        self._brand_title = QtWidgets.QLabel("ListenScope")
         self._brand_title.setObjectName("telemetryTitle")
-        self._brand_title.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Preferred,
-            QtWidgets.QSizePolicy.Policy.Preferred,
-        )
+        self._brand_title.setVisible(False)
         self._header_pulse = TelemetryPulseStrip(bar_count=6)
+        self._header_pulse.setVisible(False)
         self._acid_hero_echo_lbl = QtWidgets.QLabel("WORKBENCH")
         self._acid_hero_echo_lbl.setObjectName("acidEchoTitle")
         self._acid_hero_echo_lbl.setVisible(False)
         self._acid_hero_sub_lbl = QtWidgets.QLabel("实时频谱 · 120s 分轨终端")
         self._acid_hero_sub_lbl.setObjectName("acidHeroSub")
         self._acid_hero_sub_lbl.setVisible(False)
-        brand_title_row.addWidget(self._brand_title)
-        brand_title_row.addWidget(self._header_pulse)
-        brand_title_row.addStretch(1)
-        brand_txt.addWidget(self._brand_eye)
-        brand_txt.addLayout(brand_title_row)
 
         row_cmd.addWidget(self._brand_badge)
-        row_cmd.addLayout(brand_txt, 1)
+
+        self._src_pill = QtWidgets.QLabel("AUDIO_IN // 音源")
+        self._src_pill.setObjectName("telemetryPill")
+        self._src_pill.setVisible(False)
+        self.source_combo = MarqueeComboBox()
+        self.source_combo.setMinimumWidth(140)
+        self.source_combo.setToolTip("AUDIO_IN // 选择要捕获的音频进程或系统环回")
+        self.source_combo.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.source_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.refresh_btn = QtWidgets.QPushButton("刷新")
+        self.refresh_btn.setToolTip("刷新音频进程列表")
+        self.refresh_btn.clicked.connect(self.refresh_sources_requested.emit)
+
+        self.capture_btn = QtWidgets.QPushButton("开始捕获")
+        self.capture_btn.setToolTip("CAPTURE_START // 开始或停止实时音频捕获 (Space)")
+        self.capture_btn.setObjectName("captureBtn")
+        self.capture_btn.setCheckable(True)
+        self.capture_btn.clicked.connect(self._on_capture_clicked)
+
+        self._capture_dot = SignalLockDot()
+        self.capture_status_lbl = QtWidgets.QLabel("未捕获")
+        self.capture_status_lbl.setObjectName("captureStatus")
+        set_widget_tone(self.capture_status_lbl, "info")
+
+        self.freeze_screen_btn = QtWidgets.QPushButton("⏸ 冻结")
+        self.freeze_screen_btn.setCheckable(True)
+        self.freeze_screen_btn.setToolTip("冻结/恢复实时频谱、和弦、调性与音准画面刷新 (快捷键 F)")
+        self.freeze_screen_btn.toggled.connect(self.set_freeze_screen)
+
+        row_cmd.addWidget(self.source_combo, 1)
+        row_cmd.addWidget(
+            HelpBadge(
+                "按进程捕获说明",
+                "优先选择正在播放音乐的进程（如 QQMusic.exe），仅捕获该应用输出，避免把混音或节拍器再次录回；"
+                "若系统 Build < 20348 或列表未找到播放器，可改用系统环回。",
+            )
+        )
+        row_cmd.addWidget(self.refresh_btn)
+        row_cmd.addWidget(self.capture_btn)
+        row_cmd.addWidget(self._capture_dot)
+        row_cmd.addWidget(self.capture_status_lbl)
+        row_cmd.addWidget(self.freeze_screen_btn)
 
         self._topbar_vdiv = QtWidgets.QFrame()
         self._topbar_vdiv.setObjectName("topbarVDivider")
         self._topbar_vdiv.setFrameShape(QtWidgets.QFrame.Shape.VLine)
-        self._topbar_vdiv.setFixedHeight(30)
+        self._topbar_vdiv.setFixedHeight(24)
         row_cmd.addWidget(self._topbar_vdiv)
 
         self.resource_bar = ResourceMonitorBar()
         self.ai_status_badge = QtWidgets.QLabel("AI: Idle")
         self.ai_status_badge.setObjectName("aiStatusBadge")
         set_widget_tone(self.ai_status_badge, "info")
+        self.ai_status_badge.setVisible(False)
 
         self._skin_switcher = QtWidgets.QWidget()
         self._skin_switcher.setObjectName("acidModeGroup")
@@ -647,8 +727,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         skin_l.setSpacing(2)
         self._skin_group = QtWidgets.QButtonGroup(self)
         self._skin_group.setExclusive(True)
-        self._pill_dark = QtWidgets.QPushButton("VOID // 黑夜")
-        self._pill_light = QtWidgets.QPushButton("LIGHT // 白天")
+        self._pill_dark = QtWidgets.QPushButton("黑夜")
+        self._pill_light = QtWidgets.QPushButton("白天")
         for btn, skin_key in ((self._pill_dark, "acid_dark"), (self._pill_light, "acid_light")):
             btn.setObjectName("acidPillBtn")
             btn.setCheckable(True)
@@ -657,34 +737,49 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             skin_l.addWidget(btn)
         self._pill_light.setChecked(True)
 
-        self.settings_btn = QtWidgets.QPushButton("CONFIG // 设置")
+        self.settings_btn = QtWidgets.QPushButton("设置")
+        self.settings_btn.setToolTip("CONFIG // 设置与系统状态")
         self.settings_btn.clicked.connect(self.open_settings_dialog)
 
         self._hazard_bar = HazardStripeBar()
         self._hazard_bar.setVisible(False)
 
-        self.emergency_stop_btn = QtWidgets.QPushButton("E-STOP // 紧急停止")
+        self.emergency_stop_btn = QtWidgets.QPushButton("紧急停止 AI")
+        self.emergency_stop_btn.setToolTip("E-STOP // 紧急停止所有 AI 任务并清理显存 (Ctrl+Shift+E)")
         self.emergency_stop_btn.setObjectName("emergencyStopBtn")
+        self.emergency_stop_btn.setProperty("ai_active", False)
+        self.emergency_stop_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.emergency_stop_btn.setMinimumWidth(88)
         self.emergency_stop_btn.clicked.connect(self.emergency_stop_requested.emit)
+        self._estop_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Shift+E"), self)
+        self._estop_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
+        self._estop_shortcut.activated.connect(self.emergency_stop_requested.emit)
+
+        self._shortcut_pill = QtWidgets.QLabel("SPACE // 快捷键")
+        self._shortcut_pill.setObjectName("telemetryPill")
+        self._shortcut_pill.setVisible(False)
+        self._skin_badge = QtWidgets.QLabel("ACID // CLINICAL_LIGHT")
+        self._skin_badge.setObjectName("telemetryPill")
+        self._skin_badge.setVisible(False)
 
         # Frameless Window Control Buttons (Minimize / Maximize-Restore / Close)
         self._win_ctrl_box = QtWidgets.QWidget()
         win_ctrl_l = QtWidgets.QHBoxLayout(self._win_ctrl_box)
-        win_ctrl_l.setContentsMargins(4, 0, 0, 0)
-        win_ctrl_l.setSpacing(4)
-        self.win_min_btn = WindowGlyphButton("min", "—")
+        win_ctrl_l.setContentsMargins(2, 0, 0, 0)
+        win_ctrl_l.setSpacing(2)
+        self.win_min_btn = WindowGlyphButton("min", "")
         self.win_min_btn.setObjectName("windowCtrlBtn")
         self.win_min_btn.setAccessibleName("最小化窗口")
         self.win_min_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.win_min_btn.clicked.connect(self.showMinimized)
 
-        self.win_max_btn = WindowGlyphButton("max", "□")
+        self.win_max_btn = WindowGlyphButton("max", "")
         self.win_max_btn.setObjectName("windowCtrlBtn")
         self.win_max_btn.setAccessibleName("最大化 / 还原窗口")
         self.win_max_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.win_max_btn.clicked.connect(self._toggle_maximize_restore)
 
-        self.win_close_btn = WindowGlyphButton("close", "×")
+        self.win_close_btn = WindowGlyphButton("close", "")
         self.win_close_btn.setObjectName("windowCloseBtn")
         self.win_close_btn.setAccessibleName("关闭 ListenScope")
         self.win_close_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
@@ -703,66 +798,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_cmd.addWidget(self._win_ctrl_box)
         topbar_v.addLayout(row_cmd)
 
-        self._topbar_divider = divider = QtWidgets.QFrame()
-        divider.setObjectName("acidDivider")
-        divider.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        topbar_v.addWidget(divider)
-
-        row_io = QtWidgets.QHBoxLayout()
-        row_io.setContentsMargins(0, 0, 0, 0)
-        row_io.setSpacing(6)
-        self._src_pill = QtWidgets.QLabel("AUDIO_IN // 音源")
-        self._src_pill.setObjectName("telemetryPill")
-        self.source_combo = MarqueeComboBox()
-        self.source_combo.setMinimumWidth(140)
-        self.source_combo.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-        self.source_combo.setSizeAdjustPolicy(
-            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self.refresh_btn = QtWidgets.QPushButton("刷新进程")
-        self.refresh_btn.clicked.connect(self.refresh_sources_requested.emit)
-
-        self.capture_btn = QtWidgets.QPushButton("CAPTURE_START // 开始捕获")
-        self.capture_btn.setObjectName("captureBtn")
-        self.capture_btn.setCheckable(True)
-        self.capture_btn.clicked.connect(self._on_capture_clicked)
-
-        self._capture_dot = SignalLockDot()
-        self.capture_status_lbl = QtWidgets.QLabel("未捕获")
-        self.capture_status_lbl.setObjectName("captureStatus")
-        set_widget_tone(self.capture_status_lbl, "info")
-
-        self._shortcut_pill = QtWidgets.QLabel("SPACE // 快捷键")
-        self._shortcut_pill.setObjectName("telemetryPill")
-        self._skin_badge = QtWidgets.QLabel("ACID // CLINICAL_LIGHT")
-        self._skin_badge.setObjectName("telemetryPill")
-
-        self.freeze_screen_btn = QtWidgets.QPushButton("⏸ 冻结画面")
-        self.freeze_screen_btn.setCheckable(True)
-        self.freeze_screen_btn.setToolTip("冻结/恢复实时频谱、和弦、调性与音准画面刷新 (快捷键 F)")
-        self.freeze_screen_btn.toggled.connect(self.set_freeze_screen)
-
-        row_io.addWidget(self._src_pill)
-        row_io.addWidget(self.source_combo, 1)
-        row_io.addWidget(
-            HelpBadge(
-                "按进程捕获说明",
-                "优先选择正在播放音乐的进程（如 QQMusic.exe），仅捕获该应用输出，避免把混音或节拍器再次录回；"
-                "若系统 Build < 20348 或列表未找到播放器，可改用系统环回。",
-            )
-        )
-        row_io.addWidget(self.refresh_btn)
-        row_io.addWidget(self.capture_btn)
-        row_io.addWidget(self._capture_dot)
-        row_io.addWidget(self.capture_status_lbl)
-        row_io.addWidget(self.freeze_screen_btn)
-        row_io.addStretch(1)
-        row_io.addWidget(self._shortcut_pill)
-        row_io.addWidget(self._skin_badge)
-        topbar_v.addLayout(row_io)
+        self._topbar_divider = QtWidgets.QFrame()
+        self._topbar_divider.setObjectName("acidDivider")
+        self._topbar_divider.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        self._topbar_divider.setVisible(False)
 
         main_layout.addWidget(topbar_frame)
 
@@ -801,11 +840,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.resource_panel = ResourceStatusPanel()
         self.live_widget = ExperimentalLiveWidget(ai_config)
 
-        self.tabs.addTab(self.spectrum_widget, "// 01 SPECTRUM · 实时频谱")
-        self.tabs.addTab(self.chroma_widget, "// 02 CHROMA & HARMONY · 和弦调性")
-        self.tabs.addTab(self.mixer_widget, "// 03 STEM MIXER & MIDI · 分轨与MIDI")
-        self.tabs.addTab(self.resource_panel, "// 04 TELEMETRY & LOGS · 资源与日志")
-        self.tabs.addTab(self.live_widget, "// 05 LIVE ENGINE · 近实时分轨")
+        self.tabs.addTab(self.spectrum_widget, "实时频谱与波形")
+        self.tabs.addTab(self.chroma_widget, "和弦与调性")
+        self.tabs.addTab(self.mixer_widget, "分轨混音与 MIDI")
+        self.tabs.addTab(self.resource_panel, "系统资源与日志")
+        self.tabs.addTab(self.live_widget, "近实时分轨 [实验]")
         self._bottom_collapse_btn = QtWidgets.QPushButton("▾ 收起 A/B")
         self._bottom_collapse_btn.setCheckable(True)
         self._bottom_collapse_btn.setToolTip("折叠或展开底部 120 秒历史缓冲与 A/B 分轨面板")
@@ -828,20 +867,30 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         bottom_dock_l.addWidget(self._workspace_rail)
 
         # 3. BOTTOM 120s HISTORY TIMELINE + A/B LOOP + AI TRIGGER BAR
-        self._history_box = bottom_box = QtWidgets.QGroupBox("RING BUFFER // 120秒历史缓冲与 A/B 片段 (~46MB) + AI 离线分轨")
+        self._history_box = bottom_box = QtWidgets.QGroupBox("120秒历史缓冲与 A/B 片段 (~46MB)")
         self._bottom_l = bottom_l = QtWidgets.QVBoxLayout(bottom_box)
-        bottom_l.setContentsMargins(8, 4, 8, 4)
-        bottom_l.setSpacing(3)
+        bottom_l.setContentsMargins(6, 2, 6, 2)
+        bottom_l.setSpacing(2)
 
-        row_a = FlowLayout(margin=0, h_spacing=6, v_spacing=3)
+        row_a = QtWidgets.QHBoxLayout()
+        row_a.setContentsMargins(0, 0, 0, 0)
+        row_a.setSpacing(5)
         self.history_coverage_lbl = QtWidgets.QLabel("已缓冲: 0.0 / 120.0 s")
         self.history_coverage_lbl.setObjectName("monoTelemetry")
-        self.recent_10_btn = QtWidgets.QPushButton("选最近 10s")
-        self.recent_30_btn = QtWidgets.QPushButton("选最近 30s")
-        self.recent_60_btn = QtWidgets.QPushButton("选最近 60s")
-        self.recent_10_btn.clicked.connect(lambda: self._pick_recent(10.0))
-        self.recent_30_btn.clicked.connect(lambda: self._pick_recent(30.0))
-        self.recent_60_btn.clicked.connect(lambda: self._pick_recent(60.0))
+
+        recent_seg = QtWidgets.QFrame()
+        recent_seg.setObjectName("acidModeGroup")
+        recent_seg_l = QtWidgets.QHBoxLayout(recent_seg)
+        recent_seg_l.setContentsMargins(1, 1, 1, 1)
+        recent_seg_l.setSpacing(1)
+        self.recent_10_btn = QtWidgets.QPushButton("10s")
+        self.recent_30_btn = QtWidgets.QPushButton("30s")
+        self.recent_60_btn = QtWidgets.QPushButton("60s")
+        for rbtn, rsec in ((self.recent_10_btn, 10.0), (self.recent_30_btn, 30.0), (self.recent_60_btn, 60.0)):
+            rbtn.setObjectName("acidPillBtn")
+            rbtn.setToolTip(f"选最近 {int(rsec)}s")
+            rbtn.clicked.connect(lambda _c=False, s=rsec: self._pick_recent(s))
+            recent_seg_l.addWidget(rbtn)
 
         self.start_ago_spin = QtWidgets.QDoubleSpinBox()
         self.start_ago_spin.setRange(0.5, 120.0)
@@ -867,8 +916,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_b_fwd_btn = QtWidgets.QPushButton("B+1s")
         self.ab_b_fwd_btn.clicked.connect(lambda: self._nudge_ab("b", +1.0))
 
-        row_a_transport = QtWidgets.QHBoxLayout()
-        row_a_transport.setSpacing(8)
         self.ab_play_btn = QtWidgets.QPushButton("A/B 播放")
         self.ab_play_btn.setObjectName("acidPrimaryBtn")
         self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
@@ -892,7 +939,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         self.ab_more_btn = QtWidgets.QPushButton("⋯ 更多")
         self.ab_more_btn.setCheckable(True)
-        self.ab_more_btn.setToolTip("展开或收起 A/B 微调、导出、缩放与书签控件")
+        self.ab_more_btn.setToolTip("展开或收起 A/B 微调、AI 分轨、导出、缩放与书签控件")
         self.ab_more_btn.clicked.connect(self._on_ab_more_toggled)
 
         row_a.addWidget(self.history_coverage_lbl)
@@ -900,17 +947,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             HelpBadge(
                 "120 秒历史缓冲与 A/B 选区用法",
                 "• 环形缓冲始终在内存中保留最近 120 秒音频（固定约 46MB，绝不无限增长）。\n"
-                "• 听到想练的乐句时，直接点「选最近 10s / 30s / 60s」或在下方波形轴上拖动绿色 A/B 边界线。\n"
-                "• 选好后既可慢速（0.5x–1.25x）不变调循环精听，也可直接把该 A/B 片段送入下方 AI 2-Stem / 4-Stem 分轨。",
+                "• 听到想练的乐句时，直接点「10s / 30s / 60s」或在下方波形轴上拖动绿色 A/B 边界线。\n"
+                "• 展开「⋯ 更多」可使用 A/B 微调、书签管理与 AI 2-Stem / 4-Stem 分轨。",
             )
         )
-        row_a.addWidget(self.recent_10_btn)
-        row_a.addWidget(self.recent_30_btn)
-        row_a.addWidget(self.recent_60_btn)
+        row_a.addWidget(recent_seg)
         row_a.addWidget(self.ab_play_btn)
         row_a.addWidget(self.ab_stop_btn)
         row_a.addWidget(self.ab_loop_chk)
         row_a.addWidget(self.ab_speed_combo)
+        row_a.addStretch(1)
         row_a.addWidget(self.ab_more_btn)
         bottom_l.addLayout(row_a)
 
@@ -922,10 +968,22 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         more_flow.addWidget(self.start_ago_spin)
         more_flow.addWidget(self.end_ago_spin)
         more_flow.addWidget(self.apply_ab_btn)
-        more_flow.addWidget(self.ab_a_back_btn)
-        more_flow.addWidget(self.ab_a_fwd_btn)
-        more_flow.addWidget(self.ab_b_back_btn)
-        more_flow.addWidget(self.ab_b_fwd_btn)
+        nudge_a = QtWidgets.QFrame()
+        nudge_a.setObjectName("acidModeGroup")
+        na_l = QtWidgets.QHBoxLayout(nudge_a)
+        na_l.setContentsMargins(1, 1, 1, 1)
+        na_l.setSpacing(1)
+        na_l.addWidget(self.ab_a_back_btn)
+        na_l.addWidget(self.ab_a_fwd_btn)
+        nudge_b = QtWidgets.QFrame()
+        nudge_b.setObjectName("acidModeGroup")
+        nb_l = QtWidgets.QHBoxLayout(nudge_b)
+        nb_l.setContentsMargins(1, 1, 1, 1)
+        nb_l.setSpacing(1)
+        nb_l.addWidget(self.ab_b_back_btn)
+        nb_l.addWidget(self.ab_b_fwd_btn)
+        more_flow.addWidget(nudge_a)
+        more_flow.addWidget(nudge_b)
         self.ab_snap_btn = QtWidgets.QPushButton("贴近零点")
         self.ab_snap_btn.clicked.connect(self.ab_snap_requested.emit)
         more_flow.addWidget(self.ab_snap_btn)
@@ -953,8 +1011,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.history_overview_plot.hideButtons()
         except Exception:
             pass
-        self.history_overview_plot.setMinimumHeight(56)
-        self.history_overview_plot.setMaximumHeight(70)
+        self.history_overview_plot.setMinimumHeight(40)
+        self.history_overview_plot.setMaximumHeight(48)
         self.history_overview_plot.setBackground("#F8FAFC")
         history_view = self.history_overview_plot.getViewBox()
         history_view.setLimits(xMin=-120.0, xMax=0.0, minXRange=0.25, maxXRange=120.0)
@@ -1068,12 +1126,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         )
         row_b.addWidget(self.sep_2stem_btn)
         row_b.addWidget(self.sep_4stem_btn)
-        bottom_l.addLayout(row_b)
+        more_v.addLayout(row_b)
 
         bottom_dock_l.addWidget(bottom_box)
         self._main_splitter.addWidget(self._bottom_dock)
-        self._main_splitter.setStretchFactor(0, 3)
-        self._main_splitter.setStretchFactor(1, 1)
+        self._main_splitter.setStretchFactor(0, 1)
+        self._main_splitter.setStretchFactor(1, 0)
+        self._bottom_dock.setMaximumHeight(118)
         main_layout.addWidget(self._main_splitter, 1)
 
         self._acid_footer = AcidBarcodeFooter()
@@ -1145,7 +1204,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 return
         except Exception:
             return
-        tray = QtWidgets.QSystemTrayIcon(_load_app_icon(), self)
+        tray = QtWidgets.QSystemTrayIcon(_load_tray_icon(), self)
         tray.setToolTip("ListenScope")
         menu = QtWidgets.QMenu(self)
         act_show = menu.addAction("显示主界面")
@@ -1235,14 +1294,26 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+    def _show_focused_widget_help(self) -> None:
+        w = QtWidgets.QApplication.focusWidget()
+        cur = w
+        while cur is not None:
+            if isinstance(cur, HelpBadge):
+                cur.click()
+                return
+            tip = cur.toolTip().strip() if hasattr(cur, "toolTip") else ""
+            if tip:
+                pos = cur.mapToGlobal(QtCore.QPoint(cur.width() // 2, cur.height()))
+                QtWidgets.QToolTip.showText(pos, tip, cur)
+                return
+            cur = cur.parentWidget()
+
     def _toggle_maximize_restore(self) -> None:
         if self.isMaximized():
             self.showNormal()
-            self.win_max_btn.setText("□")
             self.win_max_btn.set_maximized(False)
         else:
             self.showMaximized()
-            self.win_max_btn.setText("❐")
             self.win_max_btn.set_maximized(True)
         self._update_rounded_mask()
 
@@ -1346,6 +1417,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _on_ab_more_toggled(self, checked: bool) -> None:
         self._ab_more_user_override = bool(checked)
         self._ab_more_panel.setVisible(bool(checked))
+        self._bottom_dock.setMaximumHeight(16777215 if checked else 118)
         set_i18n_text(self.ab_more_btn, "▴ 收起更多" if checked else "⋯ 更多")
 
     def set_bottom_panel_collapsed(self, collapsed: bool) -> None:
@@ -1373,17 +1445,18 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         # Tighten shell and topbar padding on short/narrow screens
         self._workspace_layout.setContentsMargins(4 if compact_h else 8, 2 if compact_h else 6, 4 if compact_h else 8, 2 if compact_h else 6)
         self._workspace_layout.setSpacing(2 if compact_h else 5)
-        self._topbar_v.setContentsMargins(8 if compact_h else 10, 2 if compact_h else 6, 8 if compact_h else 10, 2 if compact_h else 5)
-        self._topbar_v.setSpacing(2 if compact_h else 5)
-        self._brand_eye.setVisible(not compact_h)
-        self._topbar_divider.setVisible(not compact_h)
-        self._shortcut_pill.setVisible(not compact_h and not compact_w)
-        self._skin_badge.setVisible(not compact_h and not compact_w)
+        self._topbar_v.setContentsMargins(8, 3 if compact_h else 4, 8, 3 if compact_h else 4)
+        self._topbar_v.setSpacing(0)
+        self._brand_eye.setVisible(False)
+        self._topbar_divider.setVisible(False)
+        self._shortcut_pill.setVisible(False)
+        self._skin_badge.setVisible(False)
 
         # Default A/B panel to compact single-row mode; user can expand via '⋯ 更多'
         if self._ab_more_user_override is None:
             show_more = False
             self._ab_more_panel.setVisible(show_more)
+            self._bottom_dock.setMaximumHeight(118)
             self.ab_more_btn.blockSignals(True)
             self.ab_more_btn.setChecked(show_more)
             set_i18n_text(self.ab_more_btn, "▴ 收起更多" if show_more else "⋯ 更多")
@@ -1478,7 +1551,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             m = self.isMaximized()
             if hasattr(self, "win_max_btn"):
                 self.win_max_btn.set_maximized(m)
-                self.win_max_btn.setText("❐" if m else "□")
             if hasattr(self, "_update_rounded_mask"):
                 self._update_rounded_mask()
             if hasattr(self, "_sync_frame_clock"):
@@ -1790,10 +1862,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._acid_hero_sub_lbl.setVisible(False)
             self._src_pill.setText(tr_telemetry("AUDIO_IN", lang, zh="音源", ko="오디오 입력", ja="音声入力"))
             self._shortcut_pill.setText(tr_telemetry("SPACE", lang, zh="快捷键", ko="단축키", ja="ショートカット"))
-            self._pill_dark.setText(tr_telemetry("VOID", lang, zh="黑夜", ko="다크", ja="ダーク"))
-            self._pill_light.setText(tr_telemetry("LIGHT", lang, zh="白天", ko="라이트", ja="ライト"))
-            self.settings_btn.setText(tr_telemetry("CONFIG", lang, zh="设置", ko="설정", ja="設定"))
-            self.emergency_stop_btn.setText(tr_telemetry("E-STOP", lang, zh="紧急停止", ko="긴급 정지", ja="緊急停止"))
+            self._pill_dark.setText(tr("黑夜", "Dark", "다크", "ダーク", lang=lang))
+            self._pill_light.setText(tr("白天", "Light", "라이트", "ライト", lang=lang))
+            self.settings_btn.setText(tr("btn_settings", lang))
+            self.emergency_stop_btn.setText(tr("btn_estop", lang))
             self._history_box.setTitle(
                 tr_telemetry(
                     "RING BUFFER // 120S HISTORY · A/B LOOP + AI DISPATCH (~46MB)",
@@ -1806,11 +1878,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._history_box.setObjectName("historyPaperDock")
             self._skin_badge.setObjectName("acidMicroTag")
             tab_titles = (
-                tr_telemetry("// 01 SPECTRUM", lang, zh="实时频谱", ko="실시간 스펙트럼", ja="スペクトル"),
-                tr_telemetry("// 02 CHROMA && HARMONY", lang, zh="和弦与调性", ko="코드 && 조성", ja="コードと調性"),
-                tr_telemetry("// 03 STEM MIXER && MIDI", lang, zh="分轨与MIDI", ko="스템 믹서 && MIDI", ja="ステムとMIDI"),
-                tr_telemetry("// 04 TELEMETRY && LOGS", lang, zh="资源与日志", ko="리소스 && 로그", ja="リソースとログ"),
-                tr_telemetry("// 05 LIVE ENGINE", lang, zh="近实时分轨", ko="준실시간 분리", ja="準リアルタイム分離"),
+                tr("tab_spectrum", lang),
+                tr("tab_chroma", lang),
+                tr("tab_mixer", lang),
+                tr("tab_resources", lang),
+                tr("tab_live", lang),
             )
         else:
             self._static_lock = False
@@ -1847,22 +1919,32 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         for idx, title in enumerate(tab_titles):
             if idx < self.tabs.count():
                 self.tabs.setTabText(idx, title)
-        self._hazard_bar.setVisible(is_active)
-        self._acid_footer.setVisible(is_active)
+        ai_active = bool(self.emergency_stop_btn.property("ai_active"))
+        self._hazard_bar.setVisible(is_active and ai_active)
+        self._acid_footer.setVisible(True)
         if is_active:
             p = get_acid_palette(variant or "light")
             self._hazard_bar.set_color(p.danger)
-            self._acid_footer.set_colors(p.micro_tag_bg, "#090D10")
-        if is_active:
-            self.capture_btn.setText(
-                tr_telemetry("CAPTURE_ACTIVE", lang, zh="停止捕获", ko="캡처 중지", ja="キャプチャ停止")
-                if self.capture_btn.isChecked()
-                else tr_telemetry("CAPTURE_START", lang, zh="开始捕获", ko="캡처 시작", ja="キャプチャ開始")
-            )
+            self._acid_footer.set_colors(p.micro_tag_bg, "#090D10", p.border)
         else:
-            self.capture_btn.setText(
-                tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang)
+            mode = self.appearance.resolve_theme_mode(system_is_dark=detect_system_is_dark())
+            bg, fg, _ac = self.appearance.effective_colors(system_is_dark=detect_system_is_dark())
+            is_l = mode == "light"
+            self._acid_footer.set_colors(
+                _blend(bg, fg, 0.045 if is_l else 0.055),
+                _blend(bg, fg, 0.78 if is_l else 0.82),
+                _blend(bg, fg, 0.22 if is_l else 0.18),
             )
+        icon_fg = p.text_primary if is_active else self.appearance.effective_colors(system_is_dark=detect_system_is_dark())[1]
+        self.refresh_btn.setIcon(load_lucide_icon("refresh-cw", icon_fg, 14))
+        self.settings_btn.setIcon(load_lucide_icon("settings", icon_fg, 14))
+        self._pill_dark.setIcon(load_lucide_icon("moon", icon_fg, 13))
+        self._pill_light.setIcon(load_lucide_icon("sun", icon_fg, 13))
+        self.freeze_screen_btn.setIcon(load_lucide_icon("pause", icon_fg, 14))
+        self.emergency_stop_btn.setIcon(load_lucide_icon("octagon-alert", "#FFFFFF" if ai_active else icon_fg, 14))
+        self.capture_btn.setText(
+            tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang)
+        )
         for widget in (self._brand_title, self._history_box, self._skin_badge, self._shell_frame):
             style = widget.style()
             if style is not None:
@@ -1884,6 +1966,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         set_focus_ring_style(appearance.focus_style)
         set_help_language(appearance.language)
         self._apply_frameless_mode(appearance.frameless)
+        eff_mode = appearance.resolve_theme_mode(system_is_dark=detect_system_is_dark())
+        app_icon = _load_app_icon(light=(eff_mode == "light"))
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
         self._shell_frame.set_wallpaper_path(appearance.effective_background_image())
         if old is None or appearance.layout != old.layout:
             self._apply_workspace_layout(appearance.layout)
@@ -2559,14 +2645,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.blockSignals(True)
         self.capture_btn.setChecked(active)
         self._capture_dot.set_active(active)
-        if is_acid:
-            self.capture_btn.setText(
-                tr_telemetry("CAPTURE_ACTIVE", lang, zh="停止捕获", ko="캡처 중지", ja="キャプチャ停止")
-                if active
-                else tr_telemetry("CAPTURE_START", lang, zh="开始捕获", ko="캡처 시작", ja="キャプチャ開始")
-            )
-        else:
-            self.capture_btn.setText(translate_text("停止捕获" if active else "开始捕获", lang))
+        self.capture_btn.setText(
+            tr("btn_stop_capture", lang) if active else tr("btn_start_capture", lang)
+        )
         self.capture_btn.blockSignals(False)
         if not active:
             self._last_capture_banner = None
@@ -2645,6 +2726,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         elif stats.mode == CaptureMode.SYSTEM_LOOPBACK and stats.warning_message:
             banner_msg = stats.warning_message
 
+        src_txt = self.source_combo.currentText().strip() or "--"
+        if hasattr(self, "_acid_footer"):
+            self._acid_footer.set_telemetry(
+                source_name=src_txt[:28],
+                sample_rate_hz=int(getattr(stats, "sample_rate", 48000) or 48000),
+                buffer_sec=ring_available_sec,
+            )
+
         if banner_msg != self._last_capture_banner:
             self._last_capture_banner = banner_msg
             if banner_msg:
@@ -2664,6 +2753,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.resource_panel.update_snapshot(snap)
         self.resource_panel.update_performance_records(perf_records)
         self.resource_panel.update_logs(logs)
+        if hasattr(self, "_acid_footer"):
+            cpu_val = getattr(snap, "cpu_percent", None)
+            if cpu_val is None:
+                try:
+                    import psutil
+
+                    cpu_val = psutil.cpu_percent(interval=None)
+                except Exception:
+                    cpu_val = None
+            self._acid_footer.set_telemetry(cpu_pct=cpu_val)
 
     def set_freeze_screen(self, frozen: bool) -> None:
         self._freeze_screen = bool(frozen)
@@ -2681,6 +2780,20 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             return
         self.spectrum_widget.update_analysis(snap, spectrogram=spectrogram)
         self.chroma_widget.update_analysis(snap, chroma_history=chroma_history)
+        if hasattr(self, "_acid_footer"):
+            p50 = getattr(snap, "latency_ms", None)
+            if p50 is not None:
+                self._acid_footer.set_telemetry(p50_ms=float(p50))
+
+    def _set_ai_active_ui(self, active: bool) -> None:
+        self.emergency_stop_btn.setProperty("ai_active", active)
+        style = self.emergency_stop_btn.style()
+        if style is not None:
+            style.unpolish(self.emergency_stop_btn)
+            style.polish(self.emergency_stop_btn)
+        self.ai_status_badge.setVisible(active)
+        is_acid = self._acid_variant in ("light", "dark")
+        self._hazard_bar.setVisible(is_acid and active)
 
     def update_ai_progress(self, prog: AIJobProgress) -> None:
         txt = f"AI: {prog.state.value} ({int(round(prog.progress * 100))}%)"
@@ -2688,6 +2801,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.ai_status_badge.setText(txt)
             self._last_ai_badge_txt = txt
         set_widget_tone(self.ai_status_badge, "info")
+        is_running = prog.state in (
+            AIJobState.PREPARING,
+            AIJobState.LOADING_MODEL,
+            AIJobState.INFERRING,
+            AIJobState.WRITING,
+        )
+        self._set_ai_active_ui(is_running)
         self.mixer_widget.update_ai_progress(prog)
 
     def handle_ai_result(self, res: AIJobResult) -> None:
@@ -2704,6 +2824,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         else:
             tone = "info"
         set_widget_tone(self.ai_status_badge, tone)
+        self._set_ai_active_ui(False)
         self.mixer_widget.handle_ai_result(res)
         if not self.isVisible() or self.isMinimized():
             try:

@@ -236,36 +236,36 @@ QLabel#brandEyebrow {{
 QPushButton#windowCtrlBtn {{
     background: transparent;
     color: {subtle_fg};
-    border: 1px solid {rim};
-    border-radius: 5px;
+    border: 1px solid transparent;
+    border-radius: 4px;
     padding: 0px;
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 24px;
-    max-height: 24px;
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 32px;
+    max-height: 32px;
     font-weight: 700;
 }}
 QPushButton#windowCtrlBtn:hover {{
     background: {hover};
     color: {foreground};
-    border-color: {accent};
+    border-color: {rim};
 }}
 QPushButton#windowCloseBtn {{
     background: transparent;
     color: {subtle_fg};
-    border: 1px solid {rim};
-    border-radius: 5px;
+    border: 1px solid transparent;
+    border-radius: 4px;
     padding: 0px;
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 24px;
-    max-height: 24px;
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 32px;
+    max-height: 32px;
     font-weight: 700;
 }}
 QPushButton#windowCloseBtn:hover {{
-    background: #D9262E;
+    background: #C42B1C;
     color: #FFFFFF;
-    border-color: #FF6B6B;
+    border-color: #C42B1C;
 }}
 QToolTip {{
     background-color: {surface};
@@ -295,14 +295,24 @@ QPushButton#analysisAction:enabled {{ background: {sel_bg}; border-color: {accen
 QPushButton#analysisAction:hover:enabled {{ background: {checked_bg}; }}
 QPushButton#analysisAction:checked:enabled {{ background: {checked_bg}; border-color: {accent}; }}
 QPushButton#emergencyStopBtn {{
+    background-color: transparent;
+    color: {subtle_fg};
+    border: 1px solid {rim};
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 4px;
+}}
+QPushButton#emergencyStopBtn:hover {{
+    background-color: {hover};
+    border-color: {sem['err_bd']};
+    color: {sem['err_text']};
+}}
+QPushButton#emergencyStopBtn[ai_active="true"] {{
     background-color: #B81D24;
     color: #FFFFFF;
     border: 1px solid #FF6B6B;
-    font-weight: 700;
-    padding: 5px 12px;
-    border-radius: 5px;
 }}
-QPushButton#emergencyStopBtn:hover {{ background-color: #D9262E; }}
+QPushButton#emergencyStopBtn[ai_active="true"]:hover {{ background-color: #D9262E; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTableWidget:focus, QToolButton#helpBadge:focus {{
     border: 1px solid {accent};
 }}
@@ -673,15 +683,18 @@ def apply_plot_appearance(
         pass
     background, foreground, _ = appearance.effective_colors(system_is_dark=system_is_dark)
     plot.setBackground(background)
-    axis_color = _blend(background, foreground, 0.72)
+    axis_color = _blend(background, foreground, 0.78)
     eff_font = appearance.effective_font_family()
     base_font = QtGui.QFont(eff_font) if eff_font else QtGui.QFont(QtWidgets.QApplication.font())
     base_font.setPixelSize(appearance.font_size)
+    tick_font = QtGui.QFont("Cascadia Mono")
+    tick_font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
+    tick_font.setPixelSize(10)
     title = plot.getPlotItem().titleLabel
     title.setText(title.text, color=foreground, family=base_font.family(), size=f"{appearance.font_size}px")
     for name in ("left", "right", "top", "bottom"):
         axis = plot.getAxis(name)
-        axis.setTickFont(base_font)
+        axis.setTickFont(tick_font)
         axis.setPen(_blend(background, foreground, 0.45))
         axis.setTextPen(axis_color)
 

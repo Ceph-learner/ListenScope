@@ -341,7 +341,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chord_echo_lbl.setObjectName("chromaEcho")
         self.chord_echo_lbl.setVisible(False)
         self._chord_dots = DotMatrixWidget(0, 5)
-        self._chord_dots.setVisible(False)
         self._dot_matrices.append(self._chord_dots)
         chord_hero_row.addWidget(self.chord_primary_lbl)
         chord_hero_row.addWidget(self.chord_echo_lbl)
@@ -358,7 +357,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         tones_deg_row.addWidget(self.chord_degree_lbl, 2)
         self.chord_secondary_lbl = QtWidgets.QLabel("第二候选: -")
         self.chord_secondary_lbl.setObjectName("chromaCaption")
-        self.chord_stability_lbl = QtWidgets.QLabel("稳定度: Silent | 相关 0.00")
+        self.chord_stability_lbl = QtWidgets.QLabel("Silent")
         self.chord_stability_lbl.setObjectName("chromaCaption")
         self.chord_stability_lbl.setWordWrap(True)
         self.chord_stability_lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
@@ -396,13 +395,12 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.key_primary_lbl = QtWidgets.QLabel("Unknown")
         self.key_primary_lbl.setObjectName("chromaSecondaryHero")
         self._key_dots = DotMatrixWidget(0, 5)
-        self._key_dots.setVisible(False)
         self._dot_matrices.append(self._key_dots)
         key_hero_row.addWidget(self.key_primary_lbl, 1)
         key_hero_row.addWidget(self._key_dots)
         self.key_secondary_lbl = QtWidgets.QLabel("第二候选: -")
         self.key_secondary_lbl.setObjectName("chromaSubtle")
-        self.key_relation_lbl = QtWidgets.QLabel("稳定度: Insufficient | 关系说明: 等待音频")
+        self.key_relation_lbl = QtWidgets.QLabel("Insufficient · 等待音频")
         self.key_relation_lbl.setObjectName("chromaCaption")
         self.key_relation_lbl.setWordWrap(True)
         self.key_relation_lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
@@ -459,7 +457,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.bpm_stab_lbl = ElidedLabel("节拍稳定度: Unknown")
         self.bpm_stab_lbl.setObjectName("chromaCaption")
         self._bpm_dots = DotMatrixWidget(0, 5)
-        self._bpm_dots.setVisible(False)
         self._dot_matrices.append(self._bpm_dots)
         bpm_hero_row.addWidget(self.bpm_lbl)
         bpm_hero_row.addWidget(self.tempo_half_btn)
@@ -599,24 +596,18 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         prog_bar.addWidget(self.practice_chords_btn)
         root.addLayout(prog_bar)
 
+        self.transpose_combo.setToolTip(
+            "移调 / Capo 与转调保护：Capo/移调仅改变和弦、调性与记谱提示的指型展示，底层检测始终锚定实音与实际 MIDI 音高，避免转调后错位；遇到转调歌曲时「调性推测」卡片会亮出 [可能转调] 警告。"
+        )
+        self.auto_reset_chk.setToolTip(
+            "SMTC 自动切歌重置：仅当 Windows 媒体会话 (SMTC) 连续两次确认目标播放器切换了新曲目时，才自动清空和弦轨迹、调性窗口与 BPM，暂停/拖动进度条不会误重置。"
+        )
         tools_bar = QtWidgets.QHBoxLayout()
         tools_bar.setSpacing(10)
         tools_bar.addWidget(QtWidgets.QLabel("移调/Capo:"))
         tools_bar.addWidget(self.transpose_combo)
-        tools_bar.addWidget(
-            HelpBadge(
-                "移调 / Capo 与转调保护",
-                "Capo/移调仅改变和弦、调性与记谱提示的指型展示，底层检测始终锚定实音与实际 MIDI 音高，避免转调后错位；遇到转调歌曲时「调性推测」卡片会亮出 [可能转调] 警告。",
-            )
-        )
         tools_bar.addSpacing(4)
         tools_bar.addWidget(self.auto_reset_chk)
-        tools_bar.addWidget(
-            HelpBadge(
-                "SMTC 自动切歌重置",
-                "仅当 Windows 媒体会话 (SMTC) 连续两次确认目标播放器切换了新曲目时，才自动清空和弦轨迹、调性窗口与 BPM，暂停/拖动进度条不会误重置。",
-            )
-        )
         tools_bar.addSpacing(4)
         tools_bar.addWidget(self.reset_harmony_btn)
 
@@ -959,28 +950,20 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     ) -> None:
         self._acid_variant = acid_variant if acid_variant in ("light", "dark") else None
         is_acid = self._acid_variant in ("light", "dark")
-        self.chord_echo_lbl.setVisible(is_acid)
-        for dm in self._dot_matrices:
-            dm.setVisible(is_acid)
+        self.chord_echo_lbl.setVisible(False)
         for ov in self._acid_overlays:
             ov.setVisible(is_acid)
         lang = getattr(appearance, "language", "zh")
-        if self._acid_variant in ("light", "dark"):
-            from core.i18n import tr_telemetry
+        from core.i18n import tr
 
-            self.practice_chords_btn.setText(
-                tr_telemetry("CHORD_PRACTICE", "练习和弦", "코드 연습", "コード練習", lang=lang)
-            )
-            self.reset_harmony_btn.setText(
-                tr_telemetry("RESET // TRACK", "换歌重置", "트랙 리셋", "曲変更リセット", lang=lang)
-            )
-        else:
-            from core.i18n import tr
-
-            self.practice_chords_btn.setText(tr("练习和弦", "Chord Practice", "코드 연습", "コード練習", lang=lang))
-            self.reset_harmony_btn.setText(
-                tr("换歌重置 (和弦/调性/BPM)", "Reset Harmony (Chord/Key/BPM)", "화성 리셋 (코드/조성/BPM)", "和声リセット (コード/調性/BPM)", lang=lang)
-            )
+        self.practice_chords_btn.setText(tr("练习和弦", "Chord Practice", "코드 연습", "コード練習", lang=lang))
+        self.reset_harmony_btn.setText(
+            tr("换歌重置", "Reset Harmony", "화성 리셋", "和声リセット", lang=lang)
+            if self._acid_variant in ("light", "dark")
+            else tr("换歌重置 (和弦/调性/BPM)", "Reset Harmony (Chord/Key/BPM)", "화성 리셋 (코드/조성/BPM)", "和声リセット (コード/調性/BPM)", lang=lang)
+        )
+        self.practice_chords_btn.setToolTip("CHORD_PRACTICE · " + self.practice_chords_btn.text())
+        self.reset_harmony_btn.setToolTip("RESET // TRACK · " + self.reset_harmony_btn.text())
 
         if self._acid_variant in ("light", "dark"):
             variant = self._acid_variant or "dark"
@@ -1075,10 +1058,12 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._set_cached_text(self.chord_tones_lbl, "构成音: -")
         self._set_cached_text(self.chord_degree_lbl, "相对级数: -")
         self._set_cached_text(self.chord_secondary_lbl, "第二候选: -")
-        self._set_cached_text(self.chord_stability_lbl, "稳定度: Silent | 相关度: 0.00")
+        self._set_cached_text(self.chord_stability_lbl, "Silent")
+        self.chord_stability_lbl.setToolTip("")
         self._set_cached_text(self.key_primary_lbl, "Unknown")
         self._set_cached_text(self.key_secondary_lbl, "第二候选: -")
-        self._set_cached_text(self.key_relation_lbl, "稳定度: Insufficient | 关系说明: 已重置，等待新音频")
+        self._set_cached_text(self.key_relation_lbl, "Insufficient · 已重置，等待新音频")
+        self.key_relation_lbl.setToolTip("")
         set_widget_tone(self.key_relation_lbl, "info")
         self._set_cached_text(self.bpm_lbl, "BPM: Unknown")
         self._set_cached_text(self.bpm_stab_lbl, "节拍稳定度: Unknown")
@@ -1107,24 +1092,22 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 self.chord_primary_lbl,
                 f"{disp_chord} (实音 {ch.primary})" if disp_chord != ch.primary else disp_chord,
             )
-        echo_txt = "" if ch.is_silent else (f"{disp_chord} // {degree}" if degree != "-" else disp_chord)
-        self._set_cached_text(self.chord_echo_lbl, echo_txt)
-        chord_pips = 0 if ch.is_silent else {"High": 4, "Medium": 3, "Low": 2}.get(ch.stability, 1)
+        self._set_cached_text(self.chord_echo_lbl, "")
+        chord_pips = 0 if ch.is_silent else {"High": 5, "Medium": 3, "Low": 2}.get(ch.stability, 1)
         self._chord_dots.set_state(chord_pips)
 
         tones = "-" if ch.is_silent else spell_chord_tones(disp_chord)
         self._set_cached_text(self.chord_tones_lbl, f"构成音: {tones}")
         self._set_cached_text(self.chord_secondary_lbl, f"第二候选: {disp_sec}")
-        self._set_cached_text(
-            self.chord_stability_lbl,
-            f"稳定度: {ch.stability} | 相关 {ch.correlation:.2f} | 差 {ch.margin:.2f}",
-        )
+        self._set_cached_text(self.chord_stability_lbl, f"{ch.stability}")
+        self.chord_stability_lbl.setToolTip(f"相关度 {ch.correlation:.2f} · 差值 {ch.margin:.2f} ({ch.stability})")
+        self._chord_dots.setToolTip(f"相关度 {ch.correlation:.2f} · 差值 {ch.margin:.2f} ({ch.stability})")
 
         self._set_cached_text(self.chord_degree_lbl, f"相对级数: {degree}")
         key_pips = (
             0
             if ky.primary in ("", "Unknown", "Insufficient")
-            else {"High": 4, "Medium": 3, "Low": 2}.get(ky.stability, 1)
+            else {"High": 5, "Medium": 3, "Low": 2}.get(ky.stability, 1)
         )
         self._key_dots.set_state(key_pips)
         if semi == 0:
@@ -1142,8 +1125,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         set_widget_tone(self.key_relation_lbl, "warn" if ky.modulation_hint else "info")
         self._set_cached_text(
             self.key_relation_lbl,
-            f"稳定度: {ky.stability}{mod_tag} | {ky.relation_note}",
+            f"{ky.stability}{mod_tag} · {ky.relation_note}",
         )
+        self.key_relation_lbl.setToolTip(f"相关度 {ky.correlation:.2f} · 差值 {ky.margin:.2f} ({ky.stability})")
+        self._key_dots.setToolTip(f"相关度 {ky.correlation:.2f} · 差值 {ky.margin:.2f} ({ky.stability})")
         self._set_cached_text(self.key_sig_note_lbl, ky.key_signature_note)
 
         pt = snap.pitch

@@ -246,7 +246,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.fft_plot = pg.PlotWidget(axisItems={"bottom": frequency_axis})
         self.fft_plot.setBackground("#F8FAFC")
         self.fft_plot.setLabel("bottom", "频率 (Hz)", **{"font-size": "9pt"})
-        self.fft_plot.setYRange(-105, 5)
+        self.fft_plot.setYRange(-95, 5)
         self.fft_plot.setLogMode(x=False, y=False)
         self.fft_plot.showGrid(x=True, y=True, alpha=0.22)
         self._fft_curve = self.fft_plot.plot(pen=pg.mkPen("#00A878", width=1.5))
@@ -258,11 +258,11 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.log_plot.setBackground("#F8FAFC")
         self.log_plot.setLabel("bottom", "频率 (Hz)", **{"font-size": "9pt"})
         self.log_plot.setLogMode(x=True, y=False)
-        self.log_plot.setYRange(-105, 5)
+        self.log_plot.setYRange(-95, 5)
         self.log_plot.showGrid(x=True, y=True, alpha=0.22)
         self._log_curve = self.log_plot.plot(
             pen=pg.mkPen("#0284C7", width=1.8),
-            fillLevel=-105,
+            fillLevel=-95,
             brush=(2, 132, 199, 34),
         )
         from core.config import AnalysisConfig
@@ -277,12 +277,6 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self._spec_bin_freqs = np.geomspace(27.5, 16000.0, n_bins)
         self._refresh_axis_ticks()
         self._spec_img = pg.ImageItem()
-        try:
-            cmap = pg.colormap.get("inferno") if hasattr(pg, "colormap") else None
-        except Exception:
-            cmap = None
-        if cmap is not None:
-            self._default_spec_lut = cmap.getLookupTable(0.0, 1.0, 256)
         self._spec_img.setLookupTable(acid_colormap_lut("spectrogram", "light"))
         self.spec_plot.addItem(self._spec_img)
         self._plots = (self.wave_plot, self.fft_plot, self.log_plot, self.spec_plot)
@@ -291,6 +285,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                 p.hideButtons()
             except Exception:
                 pass
+            p.getAxis("left").setWidth(46)
         from core.config import AnalysisConfig
 
         spec_hist_sec = int(AnalysisConfig().spectrum_history_seconds)
@@ -392,8 +387,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         qc = QtGui.QColor(log_color)
         self._log_curve.setPen(pg.mkPen(log_color, width=1.8))
         self._log_curve.setBrush((qc.red(), qc.green(), qc.blue(), 38 if mode == "light" else 45))
-        if self._default_spec_lut is not None:
-            self._spec_img.setLookupTable(self._default_spec_lut)
+        self._spec_img.setLookupTable(acid_colormap_lut("spectrogram", "light" if mode == "light" else "dark"))
 
     def _metric_card(
         self,
@@ -486,14 +480,14 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.spec_plot.getAxis("left").setTicks([kept_spec])
         self.spec_plot.setLabel("left", "" if spec_h < 90.0 else "频率 (Hz)", **{"font-size": "9pt"})
 
-        # 2. FFT & Log-band Y-axis (-105..5 dBFS) and redundant bottom titles on tight height
-        db_candidates = (-100.0, -80.0, -60.0, -40.0, -20.0, 0.0)
+        # 2. FFT & Log-band Y-axis (-95..5 dBFS) fixed ticks: 0 / -30 / -60 / -90 dB
+        db_candidates = (-90.0, -60.0, -30.0, 0.0)
         for plot in (self.fft_plot, self.log_plot):
             ph = float(max(40, plot.height() - 28))
             kept_db: list[tuple[float, str]] = []
             prev_db_px: Optional[float] = None
             for db in db_candidates:
-                px_y = ((db - (-105.0)) / 110.0) * ph
+                px_y = ((db - (-95.0)) / 100.0) * ph
                 if prev_db_px is None or (px_y - prev_db_px) >= min_px_gap:
                     kept_db.append((db, f"{int(db)}"))
                     prev_db_px = px_y

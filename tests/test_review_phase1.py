@@ -629,7 +629,7 @@ def test_ub20_maximize_button_syncs_on_system_window_state_change() -> None:
         mw.setWindowState(QtCore.Qt.WindowState.WindowMaximized)
         ev = QtCore.QEvent(QtCore.QEvent.Type.WindowStateChange)
         mw.changeEvent(ev)
-        assert mw.win_max_btn.text() == "❐"
+        assert mw.win_max_btn._maximized is True
     finally:
         mw.close()
         mw.deleteLater()

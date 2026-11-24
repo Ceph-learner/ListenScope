@@ -538,7 +538,7 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w.appearance.theme_mode == "light"
         assert w._acid_variant == "light"
         assert w._skin_switcher.isHidden() is False
-        assert w._hazard_bar.isHidden() is False
+        assert w._hazard_bar.isHidden() is True
         assert w._acid_footer.isHidden() is False
         assert w._pill_light.isChecked() is True
         assert w._pill_dark.isChecked() is False
@@ -552,9 +552,9 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w._skin_badge.text() == "ACID // VOID_V2"
         assert w._history_box.objectName() == "historyPaperDock"
         assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#0E1216"
-        assert "// 01 SPECTRUM" in w.tabs.tabText(0)
-        assert "// 02 CHROMA & HARMONY" in w.tabs.tabText(1).replace("&&", "&")
-        assert w.chroma_widget.chord_echo_lbl.isHidden() is False
+        assert "//" not in w.tabs.tabText(0)
+        assert "//" not in w.tabs.tabText(1)
+        assert w.chroma_widget.chord_echo_lbl.isHidden() is True
         assert all(dm.isHidden() is False for dm in w.chroma_widget.findChildren(DotMatrixWidget))
         assert all(ov.isHidden() is False for ov in w.chroma_widget.findChildren(AcidGraphicOverlay))
         saved_dark = load_settings(controller._settings_path).appearance
@@ -593,14 +593,13 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         )
         w.update_analysis_snapshot(snap_am, None, None)
         assert w.chroma_widget.chord_primary_lbl.text() == "Am"
-        assert "Am" in w.chroma_widget.chord_echo_lbl.text()
 
         w._acid_footer.lock_btn.click()
         assert w._static_lock is True
-        assert w._acid_footer.lock_btn.text() == "[STATIC_DECOR: ON]"
+        assert w._acid_footer.lock_btn.isChecked() is True
         w._acid_footer.lock_btn.click()
         assert w._static_lock is False
-        assert w._acid_footer.lock_btn.text() == "[STATIC_DECOR: OFF]"
+        assert w._acid_footer.lock_btn.isChecked() is False
 
         w.freeze_screen_btn.click()
         assert w._freeze_screen is True
@@ -625,12 +624,12 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w._acid_variant is None
         assert w._skin_switcher.isVisible() is False
         assert w._hazard_bar.isVisible() is False
-        assert w._acid_footer.isVisible() is False
+        assert w._acid_footer.isHidden() is False
         assert w.chroma_widget.chord_echo_lbl.isVisible() is False
-        assert all(dm.isVisible() is False for dm in w.chroma_widget.findChildren(DotMatrixWidget))
+        assert all(dm.isHidden() is False for dm in w.chroma_widget.findChildren(DotMatrixWidget))
         assert all(ov.isVisible() is False for ov in w.chroma_widget.findChildren(AcidGraphicOverlay))
         assert w._history_box.objectName() == ""
-        assert w.tabs.tabText(0) == "// 01 实时频谱与波形"
+        assert w.tabs.tabText(0) == "实时频谱与波形"
         assert w._skin_badge.text() == "THEME // ARCTIC_SLATE"
         assert w.history_overview_plot.backgroundBrush().color().name().upper() == "#EEF4FC"
         assert w.findChildren(QtWidgets.QGraphicsEffect) == []
@@ -821,8 +820,8 @@ def test_home_feedback_i18n_bass_boost_export_singleline_chords_pytorch_scan_and
         w.apply_appearance(replace(w.appearance, language="en"))
         app.processEvents()
         assert w.geometry() == geom_before
-        assert w.capture_btn.text() == "CAPTURE_START"
-        assert w.tabs.tabText(0) == "// 01 SPECTRUM"
+        assert w.capture_btn.text() == "Start Capture"
+        assert w.tabs.tabText(0) == "Spectrum & Waveform"
         w.apply_appearance(replace(w.appearance, language="ko"))
         app.processEvents()
         assert w.geometry() == geom_before
@@ -834,7 +833,7 @@ def test_home_feedback_i18n_bass_boost_export_singleline_chords_pytorch_scan_and
         w.apply_appearance(replace(w.appearance, language="zh"))
         app.processEvents()
         assert w.geometry() == geom_before
-        assert w.capture_btn.text() == "CAPTURE_START // 开始捕获"
+        assert w.capture_btn.text() == "开始捕获"
     finally:
         controller.shutdown()
         controller.window.close()

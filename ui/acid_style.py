@@ -242,28 +242,58 @@ def get_acid_palette(variant: str = "dark") -> AcidPalette:
     return ACID_PALETTES["light" if variant == "light" else "dark"]
 
 
+def _oklab_light_colormap_lut(n: int = 256) -> np.ndarray:
+    """Generate a 256-entry perceptual light-theme LUT in OKLab space with monotonically decreasing lightness."""
+    t = np.linspace(0.0, 1.0, n, dtype=np.float64)
+    # Monotonic L from 0.97 (near paper white) down to 0.24 (deep teal-ink)
+    L = 0.97 - 0.73 * np.power(t, 0.92)
+    a = -0.065 * np.sin(np.pi * t) - 0.015 * t
+    b = -0.070 * np.sin(np.pi * np.power(t, 0.85)) - 0.025 * t
+
+    l_ = L + 0.3963377774 * a + 0.2158037573 * b
+    m_ = L - 0.1055613458 * a - 0.0638541728 * b
+    s_ = L - 0.0894841775 * a - 1.2914855480 * b
+
+    l3 = l_ * l_ * l_
+    m3 = m_ * m_ * m_
+    s3 = s_ * s_ * s_
+
+    r_lin = +4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3
+    g_lin = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3
+    b_lin = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3
+
+    rgb_lin = np.clip(np.stack([r_lin, g_lin, b_lin], axis=-1), 0.0, 1.0)
+    rgb = np.where(
+        rgb_lin <= 0.0031308,
+        12.92 * rgb_lin,
+        1.055 * np.power(rgb_lin, 1.0 / 2.4) - 0.055,
+    )
+    rgb_u8 = np.clip(np.round(rgb * 255.0), 0, 255).astype(np.uint8)
+    alpha = np.full((n, 1), 255, dtype=np.uint8)
+    return np.concatenate([rgb_u8, alpha], axis=1)
+
+
 def acid_colormap_lut(kind: str, variant: str = "dark") -> np.ndarray:
-    """Return a cool high-contrast 256-entry RGBA LUT for Spectrogram and Chroma heatmaps."""
+    """Return a perceptual 256-entry RGBA LUT (dark: pyqtgraph inferno / matplotlib CC0; light: OKLab monotonic ramp)."""
     key = (kind, "light" if variant == "light" else "dark")
     cached = _LUT_CACHE.get(key)
     if cached is not None:
         return cached
 
-    stops = np.array([0.0, 0.25, 0.55, 0.80, 1.0], dtype=np.float32)
     if key[1] == "dark":
-        colors = (
-            ["#0E1216", "#16202A", "#2211FF", "#77DCE4", "#CEFF18"]
-            if kind == "spectrogram"
-            else ["#0E1216", "#16202A", "#2211FF", "#77DCE4", "#CEFF18"]
-        )
+        try:
+            cmap = pg.colormap.get("inferno") if hasattr(pg, "colormap") else None
+            if cmap is not None:
+                lut = cmap.getLookupTable(0.0, 1.0, 256)
+                _LUT_CACHE[key] = lut
+                return lut
+        except Exception:
+            pass
+        stops = np.array([0.0, 0.25, 0.55, 0.80, 1.0], dtype=np.float32)
+        colors = ["#000004", "#420A68", "#932667", "#DD513A", "#FCFFA4"]
+        lut = pg.ColorMap(pos=stops, color=[pg.mkColor(c) for c in colors]).getLookupTable(0.0, 1.0, 256)
     else:
-        colors = (
-            ["#F8FAFC", "#E2E8F0", "#7DD3FC", "#0284C7", "#00A878"]
-            if kind == "spectrogram"
-            else ["#F8FAFC", "#E2E8F0", "#7DD3FC", "#0284C7", "#00A878"]
-        )
-    cmap = pg.ColorMap(pos=stops, color=[pg.mkColor(c) for c in colors])
-    lut = cmap.getLookupTable(0.0, 1.0, 256)
+        lut = _oklab_light_colormap_lut(256)
     _LUT_CACHE[key] = lut
     return lut
 
@@ -1720,12 +1750,38 @@ class WorkspaceRailHandle(QtWidgets.QWidget):
         p.end()
 
 
-class WindowGlyphButton(QtWidgets.QPushButton):
-    """Frameless window control painting crisp 1px vector glyphs (minimize / maximize / restore / close).
+def load_lucide_icon(name: str, color: str, size: int = 15) -> QtGui.QIcon:
+    """Load a Lucide SVG from ui/assets/icons/ and replace currentColor at runtime."""
+    try:
+        from PySide6 import QtSvg
+    except Exception:
+        return QtGui.QIcon()
 
-    The visible text is kept (for accessibility / i18n) but replaced on screen by pixel-snapped glyphs,
-    avoiding font-dependent '—' '□' '×' rendering differences across Windows fonts and DPI scales.
-    """
+    icon_path = get_bundle_root() / "ui" / "assets" / "icons" / f"{name}.svg"
+    if not icon_path.exists():
+        icon_path = Path(__file__).resolve().parent / "assets" / "icons" / f"{name}.svg"
+    if not icon_path.exists():
+        return QtGui.QIcon()
+    svg_data = icon_path.read_text("utf-8").replace("currentColor", color)
+    renderer = QtSvg.QSvgRenderer(QtCore.QByteArray(svg_data.encode("utf-8")))
+    if not renderer.isValid():
+        return QtGui.QIcon()
+    icon = QtGui.QIcon()
+    for scale in (1, 2):
+        px = size * scale
+        pm = QtGui.QPixmap(px, px)
+        pm.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pm)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        renderer.render(painter, QtCore.QRectF(0, 0, px, px))
+        painter.end()
+        pm.setDevicePixelRatio(float(scale))
+        icon.addPixmap(pm)
+    return icon
+
+
+class WindowGlyphButton(QtWidgets.QPushButton):
+    """Frameless window control painting unified Lucide SVG icons (minimize / maximize / restore / close)."""
 
     def __init__(self, kind: str, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(text, parent)
@@ -1753,27 +1809,18 @@ class WindowGlyphButton(QtWidgets.QPushButton):
         sp = QtWidgets.QStylePainter(self)
         sp.drawControl(QtWidgets.QStyle.ControlElement.CE_PushButton, opt)
         col = self._hover if (self.underMouse() or self.isDown()) else self._idle
-        dpr = self.devicePixelRatioF() or 1.0
-        pen = QtGui.QPen(col, 1.0 if dpr < 1.5 else 1.25)
-        pen.setCapStyle(QtCore.Qt.PenCapStyle.SquareCap)
-        sp.setPen(pen)
-        sp.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-        cx = self.width() / 2.0
-        cy = self.height() / 2.0
-        s = 4.5
         if self._kind == "min":
-            sp.drawLine(QtCore.QPointF(cx - s, cy + 0.5), QtCore.QPointF(cx + s, cy + 0.5))
+            icon_name = "minus"
         elif self._kind == "max":
-            if self._maximized:
-                sp.drawRect(QtCore.QRectF(cx - s, cy - s + 2.0, 2 * s - 2.0, 2 * s - 2.0))
-                sp.drawLine(QtCore.QPointF(cx - s + 2.0, cy - s), QtCore.QPointF(cx + s, cy - s))
-                sp.drawLine(QtCore.QPointF(cx + s, cy - s), QtCore.QPointF(cx + s, cy + s - 2.0))
-            else:
-                sp.drawRect(QtCore.QRectF(cx - s, cy - s, 2 * s, 2 * s))
+            icon_name = "copy" if self._maximized else "square"
         else:
-            sp.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-            sp.drawLine(QtCore.QPointF(cx - s, cy - s), QtCore.QPointF(cx + s, cy + s))
-            sp.drawLine(QtCore.QPointF(cx + s, cy - s), QtCore.QPointF(cx - s, cy + s))
+            icon_name = "x"
+        icon = load_lucide_icon(icon_name, col.name(), size=14)
+        if not icon.isNull():
+            pm = icon.pixmap(14, 14)
+            x = int((self.width() - 14) / 2)
+            y = int((self.height() - 14) / 2)
+            sp.drawPixmap(x, y, pm)
         sp.end()
 
 
@@ -2183,42 +2230,76 @@ class HazardStripeBar(QtWidgets.QWidget):
 
 
 class AcidBarcodeFooter(QtWidgets.QWidget):
-    """High-contrast acid telemetry footer strip with stencil, [STATIC_LOCK] toggle + help, and barcode."""
+    """24px real telemetry status bar (version, capture source/rate, p50 ms, buffer, CPU%, reduce-motion toggle)."""
 
     static_lock_toggled = QtCore.Signal(bool)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        from ui.help_badge import HelpBadge
-
-        self._bg = QtGui.QColor("#CEFF18")
-        self._fg = QtGui.QColor("#090D10")
+        self._bg = QtGui.QColor("#1C2026")
+        self._fg = QtGui.QColor("#B4BECB")
+        self._border = QtGui.QColor("#2C323C")
         self._locked = False
-        self.setFixedHeight(26)
+        self._show_barcode = False
+        self._source_name = "--"
+        self._sample_rate_hz = 48000
+        self._p50_ms: float | None = None
+        self._buffer_sec: float = 0.0
+        self._cpu_pct: float | None = None
+        self.setFixedHeight(24)
 
         row = QtWidgets.QHBoxLayout(self)
-        row.setContentsMargins(12, 2, 114, 2)
-        row.setSpacing(6)
-        row.addStretch(1)
+        row.setContentsMargins(10, 2, 10, 2)
+        row.setSpacing(8)
+        self.status_lbl = QtWidgets.QLabel("")
+        self.status_lbl.setObjectName("monoTelemetry")
+        row.addWidget(self.status_lbl, 1)
 
-        self.lock_btn = QtWidgets.QPushButton("[STATIC_DECOR: OFF]")
+        self.lock_btn = QtWidgets.QPushButton("减少动效")
         self.lock_btn.setObjectName("acidStaticLockBtn")
         self.lock_btn.setCheckable(True)
         self.lock_btn.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.lock_btn.setFixedHeight(19)
+        self.lock_btn.setFixedHeight(18)
+        self.lock_btn.setToolTip("冻结界面遥测微动画（不影响实时频谱与和弦分析）")
         self.lock_btn.toggled.connect(self._on_lock_btn_toggled)
-        self.lock_help = HelpBadge(
-            "静态装饰锁定 (STATIC_DECOR) 与遥测微动画",
-            "• 右侧卡片上的跳动圆点、信号能量柱及电池分段条属于「遥测微动画」，开启音乐动态响应后会随音量与高潮实时变化。\n"
-            "• 点击 [STATIC_DECOR] 可立即冻结底部装饰微动画（不影响主屏幕实时频谱/和弦刷新；如需冻结主屏幕请点顶栏「暂停/冻结画面」）。",
-        )
         row.addWidget(self.lock_btn)
-        row.addWidget(self.lock_help)
+        self._refresh_text()
+
+    def _refresh_text(self) -> None:
+        from core.version import get_app_version_display
+
+        ver = get_app_version_display()
+        p50_txt = f"{self._p50_ms:.1f}ms" if self._p50_ms is not None else "--"
+        cpu_txt = f"{self._cpu_pct:.0f}%" if self._cpu_pct is not None else "--"
+        khz = self._sample_rate_hz / 1000.0
+        rate_txt = f"{khz:g}kHz"
+        self.status_lbl.setText(
+            f"v{ver}  |  {self._source_name} · {rate_txt}  |  p50: {p50_txt}  |  Buf: {self._buffer_sec:.1f}s  |  CPU: {cpu_txt}"
+        )
+
+    def set_telemetry(
+        self,
+        *,
+        source_name: str | None = None,
+        sample_rate_hz: int | None = None,
+        p50_ms: float | None = None,
+        buffer_sec: float | None = None,
+        cpu_pct: float | None = None,
+    ) -> None:
+        if source_name is not None:
+            self._source_name = source_name or "--"
+        if sample_rate_hz is not None and sample_rate_hz > 0:
+            self._sample_rate_hz = int(sample_rate_hz)
+        if p50_ms is not None:
+            self._p50_ms = float(p50_ms)
+        if buffer_sec is not None:
+            self._buffer_sec = float(buffer_sec)
+        if cpu_pct is not None:
+            self._cpu_pct = float(cpu_pct)
+        self._refresh_text()
 
     def _on_lock_btn_toggled(self, checked: bool) -> None:
         self._locked = bool(checked)
-        self.lock_btn.setText("[STATIC_DECOR: ON]" if self._locked else "[STATIC_DECOR: OFF]")
-        self.update()
         self.static_lock_toggled.emit(self._locked)
 
     def is_locked(self) -> bool:
@@ -2229,13 +2310,13 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         self._locked = val
         self.lock_btn.blockSignals(True)
         self.lock_btn.setChecked(val)
-        self.lock_btn.setText("[STATIC_DECOR: ON]" if val else "[STATIC_DECOR: OFF]")
         self.lock_btn.blockSignals(False)
-        self.update()
 
-    def set_colors(self, bg: str, fg: str = "#090D10") -> None:
+    def set_colors(self, bg: str, fg: str = "#090D10", border: str | None = None) -> None:
         self._bg = QtGui.QColor(bg)
         self._fg = QtGui.QColor(fg)
+        self._border = QtGui.QColor(border) if border else self._fg
+        self.status_lbl.setStyleSheet(f"color: {self._fg.name()}; background: transparent;")
         self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
@@ -2244,41 +2325,8 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         p = QtGui.QPainter(self)
         w, h = self.width(), self.height()
         p.fillRect(0, 0, w, h, self._bg)
-        p.setPen(QtGui.QPen(self._fg, 1))
+        p.setPen(QtGui.QPen(self._border, 1))
         p.drawLine(0, 0, w, 0)
-
-        f_tall = QtGui.QFont("Segoe UI")
-        f_tall.setBold(True)
-        f_tall.setPixelSize(12)
-        p.setFont(f_tall)
-        p.setPen(self._fg)
-        p.drawText(QtCore.QRect(12, 0, 148, h), QtCore.Qt.AlignmentFlag.AlignVCenter, "SIGNAL_GRID // V2")
-
-        # Keep center telemetry text strictly left of interactive [STATIC_LOCK] button
-        text_left = 154
-        text_right = max(text_left, self.lock_btn.x() - 10)
-        avail_w = text_right - text_left
-        if avail_w >= 48:
-            f_mono = QtGui.QFont("Consolas")
-            f_mono.setStyleHint(QtGui.QFont.StyleHint.Monospace)
-            f_mono.setBold(True)
-            f_mono.setPixelSize(10)
-            f_mono.setLetterSpacing(QtGui.QFont.SpacingType.AbsoluteSpacing, 0.4)
-            p.setFont(f_mono)
-            from core.version import get_app_version_display
-
-            raw = f"LISTENSCOPE_V{get_app_version_display()} :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
-            elided = QtGui.QFontMetrics(f_mono).elidedText(raw, QtCore.Qt.TextElideMode.ElideRight, avail_w)
-            p.drawText(QtCore.QRect(text_left, 0, avail_w, h), QtCore.Qt.AlignmentFlag.AlignVCenter, elided)
-
-        # Crisp vertical barcode on right
-        bars = [2, 1, 3, 1, 4, 1, 2, 3, 1, 2, 4, 1, 2, 3, 1, 2, 4, 1, 3]
-        bx = w - 104
-        for idx, bw in enumerate(bars):
-            if bx + bw >= w - 8:
-                break
-            p.fillRect(bx, 4, bw, h - 8, self._fg)
-            bx += bw + (2 if idx % 2 == 0 else 3)
         p.end()
 
 
@@ -2475,19 +2523,30 @@ QPushButton#captureBtn:checked:hover {{
     color: {p.text_inverse};
 }}
 QPushButton#emergencyStopBtn {{
+    background-color: transparent;
+    color: {p.text_secondary};
+    border: 1px solid {p.border};
+    border-radius: 0px;
+    min-height: 20px;
+    padding: 3px 9px;
+    font-family: {cjk_family};
+    font-size: {btn_px}px;
+    font-weight: 700;
+    outline: none;
+}}
+QPushButton#emergencyStopBtn:hover {{
+    background-color: {p.bg_hover};
+    border-color: {p.danger};
+    color: {p.danger};
+}}
+QPushButton#emergencyStopBtn[ai_active="true"] {{
     background-color: {p.danger};
     color: #FFFFFF;
     border: 1px solid {p.danger};
     border-bottom: 2px solid #9A0E22;
-    border-radius: 0px;
-    min-height: 20px;
-    padding: 4px 10px;
-    font-family: {cjk_family};
-    font-size: {btn_px}px;
     font-weight: 800;
-    outline: none;
 }}
-QPushButton#emergencyStopBtn:hover {{
+QPushButton#emergencyStopBtn[ai_active="true"]:hover {{
     background-color: #D91432;
     border-color: #FFFFFF;
     color: #FFFFFF;
@@ -3059,15 +3118,15 @@ QFrame#dialogShellFrame[frameless="true"] {{
     border-radius: 10px;
 }}
 QPushButton#windowCtrlBtn {{
-    background-color: {p.bg_code};
+    background-color: transparent;
     color: {p.text_secondary};
-    border: 1px solid {p.border_strong};
+    border: 1px solid transparent;
     border-radius: 0px;
     padding: 0px;
-    min-width: 26px;
-    max-width: 26px;
-    min-height: 22px;
-    max-height: 22px;
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 32px;
+    max-height: 32px;
     font-family: {mono_family};
     font-size: {max(10, base_px - 1)}px;
     font-weight: 800;
@@ -3078,23 +3137,23 @@ QPushButton#windowCtrlBtn:hover {{
     border-color: {p.accent};
 }}
 QPushButton#windowCloseBtn {{
-    background-color: {p.bg_code};
+    background-color: transparent;
     color: {p.text_secondary};
-    border: 1px solid {p.border_strong};
+    border: 1px solid transparent;
     border-radius: 0px;
     padding: 0px;
-    min-width: 26px;
-    max-width: 26px;
-    min-height: 22px;
-    max-height: 22px;
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 32px;
+    max-height: 32px;
     font-family: {mono_family};
     font-size: {max(10, base_px - 1)}px;
     font-weight: 800;
 }}
 QPushButton#windowCloseBtn:hover {{
-    background-color: {p.danger};
+    background-color: #C42B1C;
     color: #FFFFFF;
-    border-color: {p.danger};
+    border-color: #C42B1C;
 }}
 QMainWindow, QDialog, QWidget {{
     color: {p.text_primary};
@@ -3620,10 +3679,9 @@ def apply_acid_plot_theme(
     axis_col = p.hist_plot_axis if is_history else p.plot_axis
     title_col = p.dock_ink if is_history else p.text_primary
     plot.setBackground(bg)
-    base_px = max(10, int(appearance.font_size or 12) - 1)
-    tick_font = QtGui.QFont("Consolas")
+    tick_font = QtGui.QFont("Cascadia Mono")
     tick_font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
-    tick_font.setPixelSize(base_px)
+    tick_font.setPixelSize(10)
     title = plot.getPlotItem().titleLabel
     title.setText(title.text, color=title_col, family=tick_font.family(), size=f"{max(11, int(appearance.font_size or 12))}px")
     for name in ("left", "right", "top", "bottom"):

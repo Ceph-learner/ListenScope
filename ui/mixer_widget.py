@@ -261,6 +261,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.progress_bar = self.job_progress
         self.cancel_btn = QtWidgets.QPushButton("取消任务")
         self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setVisible(False)
         self.cancel_btn.clicked.connect(self._on_cancel_btn_clicked)
         job_l.addWidget(self.job_status_lbl, 2)
         job_l.addWidget(self.job_progress, 1)
@@ -290,6 +291,14 @@ class StemMixerWidget(QtWidgets.QWidget):
         oom_l.addWidget(self.oom_dismiss_btn)
         self.oom_banner.setVisible(False)
         root.addWidget(self.oom_banner)
+
+        # Stem-dependent controls container (hidden until stems are loaded)
+        self._stem_controls_box = QtWidgets.QWidget()
+        stem_ctrl_v = QtWidgets.QVBoxLayout(self._stem_controls_box)
+        stem_ctrl_v.setContentsMargins(0, 0, 0, 0)
+        stem_ctrl_v.setSpacing(6)
+        self._stem_controls_box.setVisible(False)
+        root.addWidget(self._stem_controls_box)
 
         # Transport, Presets & Deep Analysis bar
         ctrl_bar = QtWidgets.QHBoxLayout()
@@ -330,7 +339,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.clear_results_btn.setEnabled(False)
         self.clear_results_btn.clicked.connect(self.clear_results_requested.emit)
         ctrl_bar.addWidget(self.clear_results_btn)
-        root.addLayout(ctrl_bar)
+        stem_ctrl_v.addLayout(ctrl_bar)
 
         monitor_bar = QtWidgets.QHBoxLayout()
         monitor_bar.setSpacing(8)
@@ -393,7 +402,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         )
         self._sync_preset_availability(())
         monitor_bar.addStretch(1)
-        root.addLayout(monitor_bar)
+        stem_ctrl_v.addLayout(monitor_bar)
 
         # Practice toolbar: pitch-preserving speed, sub-region chord loop & live chord HUD
         practice_bar = QtWidgets.QHBoxLayout()
@@ -445,7 +454,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         practice_bar.addSpacing(4)
         practice_bar.addWidget(self.subloop_badge_lbl)
         practice_bar.addWidget(self.live_chord_hud_lbl, 1)
-        root.addLayout(practice_bar)
+        stem_ctrl_v.addLayout(practice_bar)
 
         # Timeline Scrubber bar
         scrub_bar = QtWidgets.QHBoxLayout()
@@ -460,7 +469,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.time_lbl.setMinimumWidth(115)
         scrub_bar.addWidget(self.seek_slider, 1)
         scrub_bar.addWidget(self.time_lbl)
-        root.addLayout(scrub_bar)
+        stem_ctrl_v.addLayout(scrub_bar)
 
         # Splitter between Stem tracks and Deep Analysis + Piano Roll + MIDI Table tabs
         self._workspace_splitter = splitter = AcidSplitter(QtCore.Qt.Orientation.Vertical)
@@ -481,11 +490,11 @@ class StemMixerWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         empty_l = QtWidgets.QVBoxLayout(self._empty_tracks_card)
-        empty_l.setContentsMargins(10, 6, 10, 8)
-        empty_l.setSpacing(4)
+        empty_l.setContentsMargins(10, 8, 10, 8)
+        empty_l.setSpacing(6)
         empty_hdr = TelemetryHeader(
             "STEM BAY // STANDBY",
-            "分轨音轨槽位 · 待载入",
+            "① 选中片段 → ② AI 2-Stem 分轨",
             badge_text="2-STEM / 4-STEM",
         )
         self._empty_tracks_hint_lbl = QtWidgets.QLabel(
@@ -494,8 +503,15 @@ class StemMixerWidget(QtWidgets.QWidget):
         )
         self._empty_tracks_hint_lbl.setObjectName("mutedCaption")
         self._empty_tracks_hint_lbl.setWordWrap(True)
+        empty_btn_row = QtWidgets.QHBoxLayout()
+        self._empty_open_midi_btn = QtWidgets.QPushButton("打开单轨 WAV 转 MIDI…")
+        self._empty_open_midi_btn.setObjectName("acidPrimaryBtn")
+        self._empty_open_midi_btn.clicked.connect(self._on_open_single_stem_clicked)
+        empty_btn_row.addWidget(self._empty_open_midi_btn)
+        empty_btn_row.addStretch(1)
         empty_l.addWidget(empty_hdr)
         empty_l.addWidget(self._empty_tracks_hint_lbl)
+        empty_l.addLayout(empty_btn_row)
         self._empty_tracks_ov = AcidGraphicOverlay(self._empty_tracks_card, stencil="4X")
         self._tracks_layout.addWidget(self._empty_tracks_card)
         self._tracks_layout.addStretch(1)
@@ -575,7 +591,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         deep_l.addWidget(self.chord_timeline_table, 1)
         deep_scroll.setWidget(deep_inner)
         deep_outer.addWidget(deep_scroll)
-        self.analysis_tabs.addTab(deep_tab, "// 01 和弦与节奏")
+        self.analysis_tabs.addTab(deep_tab, "和弦与节奏")
 
         # Sub-tab 2: Piano Roll (PyQtGraph horizontal bar visualizer + synchronized playhead cursor + click-to-seek)
         pr_tab = QtWidgets.QWidget()
@@ -590,7 +606,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.pr_transcribe_btn = QtWidgets.QPushButton("立即转 MIDI")
         self.pr_transcribe_btn.setObjectName("acidPrimaryBtn")
         self.pr_transcribe_btn.clicked.connect(lambda: self._on_quick_transcribe_clicked(self.pr_stem_combo))
-        self.pr_stem_hint_lbl = QtWidgets.QLabel("先完成 AI 分轨，或前往「// 03 MIDI 音符」点击「打开单轨 WAV」直接转录")
+        self.pr_stem_hint_lbl = QtWidgets.QLabel("先完成 AI 分轨，或前往「MIDI 音符」点击「打开单轨 WAV」直接转录")
         self.pr_stem_hint_lbl.setWordWrap(True)
         self.pr_stem_hint_lbl.setObjectName("chromaCaption")
         pr_actions.addWidget(self.pr_stem_combo)
@@ -628,7 +644,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.piano_roll_plot.setYRange(0.0, 1.0, padding=0.0)
         self.piano_roll_plot.scene().sigMouseClicked.connect(self._on_piano_roll_clicked)
         pr_l.addWidget(self.piano_roll_plot, 1)
-        self.analysis_tabs.addTab(pr_tab, "// 02 MIDI 卷帘")
+        self.analysis_tabs.addTab(pr_tab, "MIDI 卷帘")
 
         # Sub-tab 3: MIDI Table + Save As
         midi_tab = QtWidgets.QWidget()
@@ -695,7 +711,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         midi_l.addWidget(self.midi_table, 1)
         midi_scroll.setWidget(midi_inner)
         midi_outer.addWidget(midi_scroll)
-        self.analysis_tabs.addTab(midi_tab, "// 03 MIDI 音符")
+        self.analysis_tabs.addTab(midi_tab, "MIDI 音符")
 
         rhythm_tab = QtWidgets.QWidget()
         rhythm_outer = QtWidgets.QVBoxLayout(rhythm_tab)
@@ -747,7 +763,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         rhythm_layout.addWidget(self.rhythm_table, 1)
         rhythm_scroll.setWidget(rhythm_inner)
         rhythm_outer.addWidget(rhythm_scroll)
-        self.analysis_tabs.addTab(rhythm_tab, "// 04 16 步鼓点")
+        self.analysis_tabs.addTab(rhythm_tab, "16 步鼓点")
         self._sync_midi_stem_selectors({})
 
         splitter.addWidget(self.analysis_tabs)
@@ -1322,6 +1338,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._ai_last_state = prog.state
 
         self.cancel_btn.setEnabled(running)
+        self.cancel_btn.setVisible(running)
         self.clear_results_btn.setEnabled(bool(self._rows) and not running)
         self.job_progress.set_active(running)
         self.job_progress.setValue(int(round(prog.progress * 100)))
@@ -1364,6 +1381,7 @@ class StemMixerWidget(QtWidgets.QWidget):
 
     def handle_ai_result(self, res: AIJobResult) -> None:
         self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setVisible(False)
         self.clear_results_btn.setEnabled(bool(self._rows))
         self.job_progress.set_active(False)
         if res.state == AIJobState.COMPLETED:
@@ -1438,6 +1456,8 @@ class StemMixerWidget(QtWidgets.QWidget):
 
         tracks = self.mixer_engine.load_stems(stem_paths)
         self._empty_tracks_card.setVisible(not bool(tracks))
+        if hasattr(self, "_stem_controls_box"):
+            self._stem_controls_box.setVisible(bool(tracks))
         self._sync_preset_availability(tracks)
         self.deep_analyze_btn.setEnabled(bool(tracks))
         self.clear_results_btn.setEnabled(bool(tracks))
@@ -1564,7 +1584,7 @@ class StemMixerWidget(QtWidgets.QWidget):
             self.deep_rhythm_badge_lbl.setText(
                 f"BPM: {bpm_txt} | 2-Stem 无独立鼓轨，切换 4-Stem 可提取 16 步鼓点"
             )
-        self.analysis_tabs.setTabText(3, "// 04 16 步鼓点 ●" if has_hits else "// 04 16 步鼓点")
+        self.analysis_tabs.setTabText(3, "16 步鼓点 ●" if has_hits else "16 步鼓点")
         if report.melody is not None:
             low_m = self._tr_note(report.melody.lowest_note) or "-"
             high_m = self._tr_note(report.melody.highest_note) or "-"

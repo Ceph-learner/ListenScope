@@ -152,10 +152,11 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ja": "実験的な準リアルタイム2ステム分離（ボーカル＋伴奏）です。モニター前にプロセス別キャプチャを選択してください（システムループバックでは出力が再録音されます）。\n速度ベンチマークでリアルタイム追従可否を確認でき、資源警告時は自動停止してスペクトル解析のみ継続します。",
     },
     # --- Mixer & Subtabs ---
-    "// 01 和弦与节奏": {"en": "// 01 Chords && Rhythm", "ko": "// 01 코드 && 리듬", "ja": "// 01 コードとリズム"},
-    "// 02 MIDI 卷帘": {"en": "// 02 Piano Roll", "ko": "// 02 MIDI 피아노 롤", "ja": "// 02 MIDI ピアノロール"},
-    "// 03 MIDI 音符": {"en": "// 03 MIDI Notes", "ko": "// 03 MIDI 노트", "ja": "// 03 MIDI ノート"},
-    "// 04 16 步鼓点": {"en": "// 04 16-Step Drums", "ko": "// 04 16스텝 드럼", "ja": "// 04 16ステップドラム"},
+    "和弦与节奏": {"en": "Chords & Rhythm", "ko": "코드 · 리듬", "ja": "コード・リズム"},
+    "MIDI 卷帘": {"en": "Piano Roll", "ko": "MIDI 피아노 롤", "ja": "MIDI ピアノロール"},
+    "MIDI 音符": {"en": "MIDI Notes", "ko": "MIDI 노트", "ja": "MIDI ノート"},
+    "16 步鼓点": {"en": "16-Step Drums", "ko": "16스텝 드럼", "ja": "16ステップドラム"},
+    "16 步鼓点 ●": {"en": "16-Step Drums ●", "ko": "16스텝 드럼 ●", "ja": "16ステップドラム ●"},
     "分轨音轨槽位 · 待载入": {
         "en": "Stem Track Bay · Standby",
         "ko": "스템 트랙 슬롯 · 대기 중",
@@ -208,10 +209,10 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "지금 MIDI 변환",
         "ja": "今すぐ MIDI 変換",
     },
-    "先完成 AI 分轨，或前往「// 03 MIDI 音符」点击「打开单轨 WAV」直接转录": {
-        "en": "Run AI separation first, or go to '// 03 MIDI Notes' and click 'Open Stem WAV' to transcribe directly.",
-        "ko": "먼저 AI 분리를 실행하거나 '// 03 MIDI 음표' 탭에서 '단일 스템 WAV 열기'로 직접 변환하세요.",
-        "ja": "先に AI 分離を実行するか、「// 03 MIDI 音符」で「単一ステム WAV を開く」から直接変換してください。",
+    "先完成 AI 分轨，或前往「MIDI 音符」点击「打开单轨 WAV」直接转录": {
+        "en": "Run AI separation first, or go to 'MIDI Notes' and click 'Open Stem WAV' to transcribe directly.",
+        "ko": "먼저 AI 분리를 실행하거나 'MIDI 노트' 탭에서 '단일 스템 WAV 열기'로 직접 변환하세요.",
+        "ja": "先に AI 分離を実行するか、「MIDI ノート」で「単一ステム WAV を開く」から直接変換してください。",
     },
     "BPM: -- | 鼓点: 分轨分析后显示节奏与鼓点统计": {
         "en": "BPM: -- | Drums: Tempo & drum hit stats appear after stem analysis",
