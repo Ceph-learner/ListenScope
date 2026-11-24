@@ -2,93 +2,69 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/design/icon/listenscope_master_dark.svg" />
-  <img src="docs/design/icon/listenscope_master_light.svg" alt="ListenScope" width="112" />
+  <img src="docs/design/icon/listenscope_master_light.svg" alt="ListenScope" width="104" />
 </picture>
 
 # ListenScope
 
-**听歌的时候，顺手把它扒下来。**
-
-一个免费、离线、在你自己电脑上运行的 Windows 练耳与扒谱小工作台
+**免费 · 离线 · 本地运行**的 Windows 听歌分析、A/B 循环与扒谱练习工作台
 
 简体中文 · [English](README.en.md) · [한국어](README.ko.md) · [日本語](README.ja.md)
 
-<a href="https://github.com/Ceph-learner/ListenScope/releases"><img src="https://img.shields.io/github/v/release/Ceph-learner/ListenScope?style=flat-square&color=00A878&label=下载" alt="Release" /></a>
-<img src="https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D4?style=flat-square" alt="Windows" />
-<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT" /></a>
-<a href="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml"><img src="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests" /></a>
+<a href="https://github.com/Ceph-learner/ListenScope/releases"><img src="https://img.shields.io/github/v/release/Ceph-learner/ListenScope?style=flat-square&color=00A878&label=Release" alt="Release" /></a>
+<img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64)-0078D4?style=flat-square" alt="Windows" />
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License" /></a>
 
 </div>
 
 <br />
 
+无需下载加密音乐缓存，也不必配置虚拟声卡。在播放器或浏览器中正常听歌时，ListenScope 通过 Windows 标准音频接口捕获正在播放的声音，实时提供频谱与音准分析、和弦与调性识别、120 秒回溯 A/B 慢放、本地 AI 分轨以及 Cubase 兼容的 MIDI 导出。
+
 <p align="center">
   <img src="docs/images/demo.gif" alt="ListenScope 实时分析演示（合成信号）" width="860" />
 </p>
 
-扒歌的时候，你是不是也经常这样：一句 solo 来回拖进度条十几遍、调性听了半天拿不准、贝斯埋在混音里怎么也听不清？
-
-ListenScope 想把这些麻烦事揽过来。你照常在播放器或浏览器里放歌，它在旁边安静地「听」，把**音高、和弦、调性、速度**实时画给你看；刚才那句没听清？**往回翻 120 秒，框选、放慢、循环**，直到你弹对为止。需要的话，还能用本地 AI 把人声、鼓、贝斯**拆开单独听**，再导出 MIDI 丢进 DAW 里接着改。
-
-不用装虚拟声卡，不用下载什么缓存文件，所有处理都在你自己的电脑上完成。
-
 ---
 
-## ✨ 它能帮你做什么
+## 快速上手
 
-<table>
-<tr>
-<td width="50%" valign="top">
+无需命令行，按以下步骤即可开始使用：
 
-### 🎧 边听边看
-从指定播放器进程（或整台电脑）实时捕获声音，显示波形、频谱、基频与 ±50 音分的音准尺。
+1. **下载**：前往 [Releases](https://github.com/Ceph-learner/ListenScope/releases) 下载安装版 `ListenScope-Setup-Windows-x64.exe`，或免安装的便携版 `ListenScope-Core-Windows-x64-Portable.zip`。
+2. **启动**：运行 `ListenScope.exe`。实时频谱、和弦 / 调性 / BPM 识别、120 秒 A/B 慢放与节拍器**开箱即用，无需独立显卡**。
+3. **配置 AI 分轨与 MIDI（可选）**：打开 **设置 → AI 与 MIDI 环境**。
+   - 本机已有 PyTorch / Conda 环境时，点击 **「扫描本机 PyTorch 环境」** 自动识别；
+   - 尚未安装时，点击 **「一键自动配置 AI + MIDI」** 自动部署独立运行环境，完成后按提示重启即可生效。
+4. **开始捕获**：在顶栏音源下拉框中选择正在播放音乐的程序，点击 **开始捕获**。
 
-</td>
-<td width="50%" valign="top">
-
-### 🎼 和弦与调性
-Chroma 热图、和弦与构成音、罗马级数、和弦轨迹，加上 Capo 移调联动和 24 调和弦练习窗。
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-### 🔁 回放 · 慢放 · 循环
-始终保留最近 120 秒。拖一下就是 A/B 循环，0.5×–1.25× 变速不变调，还有书签、节拍器和练习录音导出。
-
-</td>
-<td valign="top">
-
-### 🪄 AI 分轨（可选）
-本地运行 2 轨（人声 / 伴奏）或 4 轨（人声 / 鼓 / 贝斯 / 其他）分离，贝斯可单独放大 0–24 dB 来听。
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-### 🎹 导出 MIDI
-分轨后的单轨，或者你自己的 WAV，都能转成 MIDI；格式按 Cubase 兼容的 SMF Type-0 整理好。
-
-</td>
-<td valign="top">
-
-### 🌗 看着舒服
-亮色 / 暗色一键切换，多套配色可选；界面支持简体中文、English、한국어、日本語。
-
-</td>
-</tr>
-</table>
-
-> 实时分析、A/B 练习和节拍器只用 CPU，**没有独立显卡也能用**。AI 分轨和 MIDI 转写是可选功能。
-
----
-
-## 🖼️ 界面一览
+> 配置文件（`settings.json`）、工作区缓存与导出的 WAV / MIDI 默认保存在**软件同级目录**，不会向 `C:\` 盘写入多余文件。
 
 <p align="center">
-  <img src="docs/images/listenscope_light_spectrum_1366x768.png" alt="实时频谱与波形（浅色）" width="860" />
+  <img src="docs/images/settings_ai.png" alt="设置页一键配置 AI 与 MIDI" width="720" />
+</p>
+
+详细的操作说明与典型扒谱流程见 [用户指南](docs/USER_GUIDE.md)。
+
+---
+
+## 核心功能
+
+| 模块 | 功能说明 |
+| :--- | :--- |
+| **实时捕获与频谱** | 按进程捕获指定播放器的声音，或使用系统环回捕获整机输出；提供波形、FFT / 对数频谱、基频 `F0` 与 `-50 ~ +50 cents` 音准刻度条 |
+| **和弦、调性与 Capo** | 12-bin Chroma 热图、大 / 小三和弦与构成音识别、罗马级数、和弦轨迹、纯 CPU **Capo 移调联动**，以及 24 调和弦练习窗（支持合成试听与 `.mid` 导出） |
+| **120 秒回溯与 A/B 练习** | 始终保留最近 120 秒音频（`48 kHz / Stereo`）；拖拽框选 A/B 区间，`0.5x–1.25x` 变速不变调回放，配合练习书签、Tap 定速节拍器与练习 WAV 导出 |
+| **本地 AI 分轨与混音** | 按需运行 2 轨（人声 / 伴奏）或 4 轨（人声 / 鼓组 / 贝斯 / 其他）分离，默认 6 秒分块并可随时急停释放显存；支持 **`0–24 dB` 贝斯独听增益**与贝斯最低音检测 |
+| **MIDI 导出** | 分轨后的单轨或本地 WAV 均可转写为 MIDI，统一导出为 **Cubase 兼容 SMF Type-0（`480 TPB`）** |
+| **主题与多语言** | 亮 / 暗模式一键切换，内置多套配色；界面支持 **简体中文 / English / 한국어 / 日本語** 实时切换 |
+
+---
+
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/listenscope_light_spectrum_1366x768.png" alt="实时频谱与波形（浅色主题）" width="860" />
 </p>
 
 <table>
@@ -99,119 +75,92 @@ Chroma 热图、和弦与构成音、罗马级数、和弦轨迹，加上 Capo �
 </tr>
 </table>
 
-<p align="center"><sub>截图与演示均使用合成信号生成，不含任何真实歌曲。</sub></p>
+<p align="center"><sub>以上截图与演示均使用合成信号生成。</sub></p>
 
 ---
 
-## 🚀 三步开始
+## 运行环境与已知限制
 
-1. **下载** —— 到 [Releases](https://github.com/Ceph-learner/ListenScope/releases) 选一个：
-   - 安装版 `ListenScope-Setup-Windows-x64.exe`
-   - 便携版 `ListenScope-Core-Windows-x64-Portable.zip`（解压即用，设置和导出文件都放在软件旁边，不往 C 盘乱塞东西）
-2. **打开** —— 运行 `ListenScope.exe`，在顶部音源里选中正在放歌的播放器，点「开始捕获」。
-3. **想用 AI 分轨？** —— 打开 设置 → **AI 与 MIDI 环境**：已经装过 PyTorch 的点「扫描」，没装过的点「一键配置」，等它跑完重启一下就好。
+| 项目 | 说明 |
+| :--- | :--- |
+| 操作系统 | Windows 10 / 11（64 位） |
+| 按进程捕获 | 需要 Windows 11；Windows 10 可使用系统环回捕获整机声音 |
+| 显卡 | 可选，仅 AI 分轨使用（推荐 NVIDIA 显卡） |
+| 主要验证环境 | Windows 11 · NVIDIA RTX 5060 Ti 8 GB · 16 GB 内存 |
 
-<p align="center">
-  <img src="docs/images/settings_ai.png" alt="设置页一键配置 AI 与 MIDI" width="720" />
-</p>
+- 默认的 6 秒分块与三级内存保护阈值均按上述验证环境保守设定。其他显卡、核显或系统配置尚未全面测试，如遇到兼容或性能问题，欢迎在 [Issues](https://github.com/Ceph-learner/ListenScope/issues) 反馈硬件信息与诊断包。
+- 无边框主窗口暂不支持 Windows 11 贴靠布局（悬停最大化按钮时弹出的菜单），已列入后续计划。
+- 发行包暂未进行代码签名，首次运行时 Windows 可能弹出 SmartScreen 提示，点击「更多信息 → 仍要运行」即可。可对照 Release 中的 `SHA256SUMS.txt` 校验文件完整性。
 
-更详细的图文说明和几个典型扒谱场景，写在 [用户指南](docs/USER_GUIDE.md) 里。
+---
 
-<details>
-<summary><b>第一次运行弹出蓝色的 SmartScreen 提示？</b></summary>
+## 常见问题
 
-<br />
+- **没有 NVIDIA 显卡能用吗？** 可以。除 AI 分轨外，其余功能只需 CPU。
+- **捕获不到声音？** 请确认选择的是正在发声的程序，或切换为系统环回再试。
+- **关闭窗口后程序仍在运行？** 可能已最小化到系统托盘，右键托盘图标选择「退出」即可。
+- **如何更新？** 目前请从 Releases 下载新版覆盖；便携版请保留 `settings.json` 与 `exports\` 文件夹。
 
-这是因为发行包还没有购买代码签名证书，并不代表有问题。点「更多信息 → 仍要运行」即可。
+更多问题见 [FAQ](docs/FAQ.md) 与 [术语表](docs/GLOSSARY.md)。
 
-如果不放心，可以对照 Release 里的 `SHA256SUMS.txt` 校验一下：
+---
 
-```powershell
-Get-FileHash .\ListenScope-Setup-Windows-x64.exe -Algorithm SHA256
+## 从源码运行
+
+为保证主界面轻量（无显卡也能运行全部实时分析与 A/B 练习），项目采用三个相互隔离的 Python 环境：
+
+```text
+ListenScope/
+├── core/         # 配置与便携路径、多语言、外观、环境扫描与资源保护
+├── audio/        # WASAPI 捕获、120 s 环形缓冲、WSOLA 变速、节拍器与混音
+├── analysis/     # 频谱 / Chroma / 和弦 / 调性 / BPM、贝斯音高与 MIDI 导出
+├── ai/           # 分轨模型注册表、分块调度与独立 AI 子进程管理
+├── separation/   # 2 轨 MDX-ONNX 与 4 轨 HTDemucs 后端
+├── streaming/    # 实验性近实时 2 轨监听（默认关闭）
+├── ui/           # PySide6 + PyQtGraph 桌面界面
+├── packaging/    # PyInstaller 打包与依赖约束
+├── scripts/      # Windows 一键初始化、硬件探测与安装包脚本
+└── docs/         # 架构、技术决策、开发与打包文档
 ```
 
-</details>
-
----
-
-## 💻 运行环境
-
-| | 说明 |
-| :--- | :--- |
-| 系统 | Windows 10 / 11（64 位） |
-| 按进程捕获 | 需要 **Windows 11**；Windows 10 可以使用「系统环回」捕获整机声音 |
-| 显卡 | 可选，只在 AI 分轨时使用（NVIDIA 显卡体验最好） |
-| 实测环境 | Windows 11 · RTX 5060 Ti 8 GB · 16 GB 内存 |
-
-说实话，目前主要只在上面这一台电脑上认真测过。如果你的配置跑起来有问题，非常欢迎[开个 Issue](https://github.com/Ceph-learner/ListenScope/issues/new/choose) 告诉我，最好附上诊断包和你的硬件信息。
-
-**已知的小遗憾**：无边框窗口暂时不支持 Windows 11 的贴靠布局（鼠标悬停最大化按钮弹出的那个菜单），已经记在计划里了。
-
----
-
-## ❓ 常见问题
-
-- **没有 NVIDIA 显卡能用吗？** 能。除了 AI 分轨，其他功能都只用 CPU。
-- **捕获不到声音？** 先确认选中的是正在出声的那个程序；不行就切到「系统环回」试试。
-- **点了关闭，程序还在？** 可能是最小化到托盘了，右键托盘图标选「退出」就好。
-- **怎么更新？** 目前请到 Releases 下载新版覆盖。便携版记得保留 `settings.json` 和 `exports\` 文件夹。
-
-更多问题见 [FAQ](docs/FAQ.md)，名词看不懂可以查 [术语表](docs/GLOSSARY.md)。
-
----
-
-## 🌱 关于这个项目
-
-我不是专业开发者，ListenScope 是我在多个 AI 助手的帮助下，一点一点做出来、再在自己电脑上反复实测打磨的。所以它一定还有不少粗糙的地方，也难免有我没想到的问题。
-
-如果它能帮你少拖几次进度条、多听清一个和弦，我就很开心了。也欢迎任何形式的反馈：一个 Issue、一句建议，或者一个 ⭐，对我来说都是很大的鼓励。
-
-<details>
-<summary><b>想从源码运行或参与开发？</b></summary>
-
-<br />
-
-项目分成三个互相隔离的 Python 环境，主界面（Core）保持轻量，不依赖 PyTorch / CUDA：
-
 ```powershell
-# Windows：一键初始化 Core / AI / MIDI 三个环境
+# Windows：初始化 Core / AI / MIDI 三个环境并启动
 pwsh -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
 .\.venv-core\Scripts\python.exe main.py
 ```
 
 ```bash
-# Linux / 无声卡环境：用模拟信号运行与测试
+# Linux / 无声卡环境：使用模拟信号运行与测试
 pip install -r requirements-core.txt pytest
 python main.py --simulate
 QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short
 ```
 
-开始之前建议先看看：[贡献指南](CONTRIBUTING.md) · [开发指南](docs/DEVELOPMENT.md) · [架构说明](docs/ARCHITECTURE.md) · [技术决策](docs/DECISIONS.md) · [测试说明](docs/TESTING.md) · [路线图](ROADMAP.md) · [行为准则](CODE_OF_CONDUCT.md)
+相关文档：[架构设计](docs/ARCHITECTURE.md) · [技术决策](docs/DECISIONS.md) · [开发指南](docs/DEVELOPMENT.md) · [测试说明](docs/TESTING.md) · [打包文档](docs/PACKAGING.md) · [路线图](ROADMAP.md) · [贡献指南](CONTRIBUTING.md) · [行为准则](CODE_OF_CONDUCT.md)
 
-仓库里的 `AGENTS.md`、`CLAUDE.md`、`GEMINI.md` 和 `docs/review/` 是和 AI 协作时留下的约束与交接记录，保留下来方便追溯。
+---
 
-</details>
+## 许可证与声明
+
+- 本项目代码基于 [MIT License](LICENSE) 开源。第三方组件及其许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 [licenses/](licenses/)，算法参考文献见 [PROVENANCE.md](docs/PROVENANCE.md)。
+- 仓库与发行包**不包含**任何 AI 模型权重；UVR / MDX-Net、HTDemucs、Basic Pitch 等模型遵循各自的许可与使用条款，请在下载前自行确认。
+- 所有功能均在本地运行，无遥测、无数据上传，详见 [PRIVACY.md](PRIVACY.md)。
 
 <details>
-<summary><b>许可证、隐私与免责声明</b></summary>
+<summary>免责与商标声明</summary>
 
 <br />
 
-- **许可证**：代码以 [MIT License](LICENSE) 开源。第三方组件及其许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 [licenses/](licenses/)，算法的学术出处见 [PROVENANCE.md](docs/PROVENANCE.md)。
-- **模型权重**：仓库和发行包都**不包含** AI 模型权重。UVR / MDX-Net、HTDemucs、Basic Pitch 等模型遵循各自的许可证与使用条款，下载前请自行确认。
-- **隐私**：所有功能在本地运行，没有遥测，也不上传任何数据，详见 [PRIVACY.md](PRIVACY.md)。
-- **关于捕获**：ListenScope 只通过 Windows 标准音频接口「听」你电脑正在播放的声音，不下载、不解密、也不绕过任何 DRM。请遵守当地法律，并尊重你所处理音频的版权。
-- **无关联声明**：本项目与任何音乐平台、DAW 或硬件厂商均无关联。文中提到的 QQ 音乐、Cubase、NVIDIA、Windows 等均为各自权利人的商标。
+- ListenScope 仅通过系统标准音频接口捕获本机正在播放的声音，不下载、不解密、不绕过任何 DRM 保护。请遵守所在地法律法规，并对所处理音频的版权自行负责。
+- 本项目与任何音乐平台、DAW 或硬件厂商均无隶属或合作关系；文中提及的 QQ 音乐、Cubase、NVIDIA、Windows 等均为其各自权利人的商标。
 - 本软件按「原样」提供，不附带任何明示或暗示的担保。
 
 </details>
 
 ---
 
-## 🙏 致谢
+## 致谢
 
-ListenScope 站在很多开源项目和研究者的肩膀上——音频信号处理、音源分离、MIDI 转写，还有 Qt 桌面生态。没有他们的工作，就不会有这个小工具。完整名单与出处见 [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md)。
+感谢音频信号处理、音源分离、MIDI 转写及 Qt 桌面生态中的开源项目与研究者，ListenScope 建立在他们的工作之上。完整名单与出处见 [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md)。
 
-<p align="center">
-  <sub>如果 ListenScope 对你有一点点帮助，点个 ⭐ 让更多人看到它吧。</sub>
-</p>
+如果这个工具对你有所帮助，欢迎点一个 ⭐，也欢迎通过 Issue 提出建议与反馈。
