@@ -69,7 +69,6 @@ def test_e1_topbar_single_row_le_56px_and_idle_estop_neutral() -> None:
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="E2")
 def test_e2_no_double_slash_in_interactive_buttons_or_tabs_and_5_tabs_fit_1093() -> None:
     """E2: No button or tab text may contain '//' in zh/en/ja/ko; all 5 tabs fit without scrolling at width 1093."""
     from core.appearance import Appearance

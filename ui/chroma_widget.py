@@ -965,22 +965,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         for ov in self._acid_overlays:
             ov.setVisible(is_acid)
         lang = getattr(appearance, "language", "zh")
-        if self._acid_variant in ("light", "dark"):
-            from core.i18n import tr_telemetry
+        from core.i18n import tr
 
-            self.practice_chords_btn.setText(
-                tr_telemetry("CHORD_PRACTICE", "练习和弦", "코드 연습", "コード練習", lang=lang)
-            )
-            self.reset_harmony_btn.setText(
-                tr_telemetry("RESET // TRACK", "换歌重置", "트랙 리셋", "曲変更リセット", lang=lang)
-            )
-        else:
-            from core.i18n import tr
-
-            self.practice_chords_btn.setText(tr("练习和弦", "Chord Practice", "코드 연습", "コード練習", lang=lang))
-            self.reset_harmony_btn.setText(
-                tr("换歌重置 (和弦/调性/BPM)", "Reset Harmony (Chord/Key/BPM)", "화성 리셋 (코드/조성/BPM)", "和声リセット (コード/調性/BPM)", lang=lang)
-            )
+        self.practice_chords_btn.setText(tr("练习和弦", "Chord Practice", "코드 연습", "コード練習", lang=lang))
+        self.reset_harmony_btn.setText(
+            tr("换歌重置", "Reset Harmony", "화성 리셋", "和声リセット", lang=lang)
+            if self._acid_variant in ("light", "dark")
+            else tr("换歌重置 (和弦/调性/BPM)", "Reset Harmony (Chord/Key/BPM)", "화성 리셋 (코드/조성/BPM)", "和声リセット (コード/調性/BPM)", lang=lang)
+        )
+        self.practice_chords_btn.setToolTip("CHORD_PRACTICE · " + self.practice_chords_btn.text())
+        self.reset_harmony_btn.setToolTip("RESET // TRACK · " + self.reset_harmony_btn.text())
 
         if self._acid_variant in ("light", "dark"):
             variant = self._acid_variant or "dark"

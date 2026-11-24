@@ -208,10 +208,10 @@ EXTRA_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "지금 MIDI 변환",
         "ja": "今すぐ MIDI 変換",
     },
-    "先完成 AI 分轨，或前往「// 03 MIDI 音符」点击「打开单轨 WAV」直接转录": {
-        "en": "Run AI separation first, or go to '// 03 MIDI Notes' and click 'Open Stem WAV' to transcribe directly.",
-        "ko": "먼저 AI 분리를 실행하거나 '// 03 MIDI 음표' 탭에서 '단일 스템 WAV 열기'로 직접 변환하세요.",
-        "ja": "先に AI 分離を実行するか、「// 03 MIDI 音符」で「単一ステム WAV を開く」から直接変換してください。",
+    "先完成 AI 分轨，或前往「MIDI 音符」点击「打开单轨 WAV」直接转录": {
+        "en": "Run AI separation first, or go to 'MIDI Notes' and click 'Open Stem WAV' to transcribe directly.",
+        "ko": "먼저 AI 분리를 실행하거나 'MIDI 노트' 탭에서 '단일 스템 WAV 열기'로 직접 변환하세요.",
+        "ja": "先に AI 分離を実行するか、「MIDI ノート」で「単一ステム WAV を開く」から直接変換してください。",
     },
     "BPM: -- | 鼓点: 分轨分析后显示节奏与鼓点统计": {
         "en": "BPM: -- | Drums: Tempo & drum hit stats appear after stem analysis",

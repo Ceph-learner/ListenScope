@@ -575,7 +575,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         deep_l.addWidget(self.chord_timeline_table, 1)
         deep_scroll.setWidget(deep_inner)
         deep_outer.addWidget(deep_scroll)
-        self.analysis_tabs.addTab(deep_tab, "// 01 和弦与节奏")
+        self.analysis_tabs.addTab(deep_tab, "和弦与节奏")
 
         # Sub-tab 2: Piano Roll (PyQtGraph horizontal bar visualizer + synchronized playhead cursor + click-to-seek)
         pr_tab = QtWidgets.QWidget()
@@ -590,7 +590,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.pr_transcribe_btn = QtWidgets.QPushButton("立即转 MIDI")
         self.pr_transcribe_btn.setObjectName("acidPrimaryBtn")
         self.pr_transcribe_btn.clicked.connect(lambda: self._on_quick_transcribe_clicked(self.pr_stem_combo))
-        self.pr_stem_hint_lbl = QtWidgets.QLabel("先完成 AI 分轨，或前往「// 03 MIDI 音符」点击「打开单轨 WAV」直接转录")
+        self.pr_stem_hint_lbl = QtWidgets.QLabel("先完成 AI 分轨，或前往「MIDI 音符」点击「打开单轨 WAV」直接转录")
         self.pr_stem_hint_lbl.setWordWrap(True)
         self.pr_stem_hint_lbl.setObjectName("chromaCaption")
         pr_actions.addWidget(self.pr_stem_combo)
@@ -628,7 +628,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.piano_roll_plot.setYRange(0.0, 1.0, padding=0.0)
         self.piano_roll_plot.scene().sigMouseClicked.connect(self._on_piano_roll_clicked)
         pr_l.addWidget(self.piano_roll_plot, 1)
-        self.analysis_tabs.addTab(pr_tab, "// 02 MIDI 卷帘")
+        self.analysis_tabs.addTab(pr_tab, "MIDI 卷帘")
 
         # Sub-tab 3: MIDI Table + Save As
         midi_tab = QtWidgets.QWidget()
@@ -695,7 +695,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         midi_l.addWidget(self.midi_table, 1)
         midi_scroll.setWidget(midi_inner)
         midi_outer.addWidget(midi_scroll)
-        self.analysis_tabs.addTab(midi_tab, "// 03 MIDI 音符")
+        self.analysis_tabs.addTab(midi_tab, "MIDI 音符")
 
         rhythm_tab = QtWidgets.QWidget()
         rhythm_outer = QtWidgets.QVBoxLayout(rhythm_tab)
@@ -747,7 +747,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         rhythm_layout.addWidget(self.rhythm_table, 1)
         rhythm_scroll.setWidget(rhythm_inner)
         rhythm_outer.addWidget(rhythm_scroll)
-        self.analysis_tabs.addTab(rhythm_tab, "// 04 16 步鼓点")
+        self.analysis_tabs.addTab(rhythm_tab, "16 步鼓点")
         self._sync_midi_stem_selectors({})
 
         splitter.addWidget(self.analysis_tabs)
@@ -1564,7 +1564,7 @@ class StemMixerWidget(QtWidgets.QWidget):
             self.deep_rhythm_badge_lbl.setText(
                 f"BPM: {bpm_txt} | 2-Stem 无独立鼓轨，切换 4-Stem 可提取 16 步鼓点"
             )
-        self.analysis_tabs.setTabText(3, "// 04 16 步鼓点 ●" if has_hits else "// 04 16 步鼓点")
+        self.analysis_tabs.setTabText(3, "16 步鼓点 ●" if has_hits else "16 步鼓点")
         if report.melody is not None:
             low_m = self._tr_note(report.melody.lowest_note) or "-"
             high_m = self._tr_note(report.melody.highest_note) or "-"

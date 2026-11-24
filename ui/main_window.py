@@ -647,8 +647,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         skin_l.setSpacing(2)
         self._skin_group = QtWidgets.QButtonGroup(self)
         self._skin_group.setExclusive(True)
-        self._pill_dark = QtWidgets.QPushButton("VOID // 黑夜")
-        self._pill_light = QtWidgets.QPushButton("LIGHT // 白天")
+        self._pill_dark = QtWidgets.QPushButton("黑夜")
+        self._pill_light = QtWidgets.QPushButton("白天")
         for btn, skin_key in ((self._pill_dark, "acid_dark"), (self._pill_light, "acid_light")):
             btn.setObjectName("acidPillBtn")
             btn.setCheckable(True)
@@ -657,13 +657,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             skin_l.addWidget(btn)
         self._pill_light.setChecked(True)
 
-        self.settings_btn = QtWidgets.QPushButton("CONFIG // 设置")
+        self.settings_btn = QtWidgets.QPushButton("设置")
+        self.settings_btn.setToolTip("CONFIG // 设置与系统状态")
         self.settings_btn.clicked.connect(self.open_settings_dialog)
 
         self._hazard_bar = HazardStripeBar()
         self._hazard_bar.setVisible(False)
 
-        self.emergency_stop_btn = QtWidgets.QPushButton("E-STOP // 紧急停止")
+        self.emergency_stop_btn = QtWidgets.QPushButton("紧急停止 AI")
+        self.emergency_stop_btn.setToolTip("E-STOP // 紧急停止所有 AI 任务并清理显存")
         self.emergency_stop_btn.setObjectName("emergencyStopBtn")
         self.emergency_stop_btn.clicked.connect(self.emergency_stop_requested.emit)
 
@@ -725,7 +727,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.refresh_btn = QtWidgets.QPushButton("刷新进程")
         self.refresh_btn.clicked.connect(self.refresh_sources_requested.emit)
 
-        self.capture_btn = QtWidgets.QPushButton("CAPTURE_START // 开始捕获")
+        self.capture_btn = QtWidgets.QPushButton("开始捕获")
+        self.capture_btn.setToolTip("CAPTURE_START // 开始或停止实时音频捕获 (Space)")
         self.capture_btn.setObjectName("captureBtn")
         self.capture_btn.setCheckable(True)
         self.capture_btn.clicked.connect(self._on_capture_clicked)
@@ -801,11 +804,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.resource_panel = ResourceStatusPanel()
         self.live_widget = ExperimentalLiveWidget(ai_config)
 
-        self.tabs.addTab(self.spectrum_widget, "// 01 SPECTRUM · 实时频谱")
-        self.tabs.addTab(self.chroma_widget, "// 02 CHROMA & HARMONY · 和弦调性")
-        self.tabs.addTab(self.mixer_widget, "// 03 STEM MIXER & MIDI · 分轨与MIDI")
-        self.tabs.addTab(self.resource_panel, "// 04 TELEMETRY & LOGS · 资源与日志")
-        self.tabs.addTab(self.live_widget, "// 05 LIVE ENGINE · 近实时分轨")
+        self.tabs.addTab(self.spectrum_widget, "实时频谱与波形")
+        self.tabs.addTab(self.chroma_widget, "和弦与调性")
+        self.tabs.addTab(self.mixer_widget, "分轨混音与 MIDI")
+        self.tabs.addTab(self.resource_panel, "系统资源与日志")
+        self.tabs.addTab(self.live_widget, "近实时分轨 [实验]")
         self._bottom_collapse_btn = QtWidgets.QPushButton("▾ 收起 A/B")
         self._bottom_collapse_btn.setCheckable(True)
         self._bottom_collapse_btn.setToolTip("折叠或展开底部 120 秒历史缓冲与 A/B 分轨面板")
@@ -1790,10 +1793,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._acid_hero_sub_lbl.setVisible(False)
             self._src_pill.setText(tr_telemetry("AUDIO_IN", lang, zh="音源", ko="오디오 입력", ja="音声入力"))
             self._shortcut_pill.setText(tr_telemetry("SPACE", lang, zh="快捷键", ko="단축키", ja="ショートカット"))
-            self._pill_dark.setText(tr_telemetry("VOID", lang, zh="黑夜", ko="다크", ja="ダーク"))
-            self._pill_light.setText(tr_telemetry("LIGHT", lang, zh="白天", ko="라이트", ja="ライト"))
-            self.settings_btn.setText(tr_telemetry("CONFIG", lang, zh="设置", ko="설정", ja="設定"))
-            self.emergency_stop_btn.setText(tr_telemetry("E-STOP", lang, zh="紧急停止", ko="긴급 정지", ja="緊急停止"))
+            self._pill_dark.setText(tr("黑夜", "Dark", "다크", "ダーク", lang=lang))
+            self._pill_light.setText(tr("白天", "Light", "라이트", "ライト", lang=lang))
+            self.settings_btn.setText(tr("btn_settings", lang))
+            self.emergency_stop_btn.setText(tr("btn_estop", lang))
             self._history_box.setTitle(
                 tr_telemetry(
                     "RING BUFFER // 120S HISTORY · A/B LOOP + AI DISPATCH (~46MB)",
@@ -1806,11 +1809,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._history_box.setObjectName("historyPaperDock")
             self._skin_badge.setObjectName("acidMicroTag")
             tab_titles = (
-                tr_telemetry("// 01 SPECTRUM", lang, zh="实时频谱", ko="실시간 스펙트럼", ja="スペクトル"),
-                tr_telemetry("// 02 CHROMA && HARMONY", lang, zh="和弦与调性", ko="코드 && 조성", ja="コードと調性"),
-                tr_telemetry("// 03 STEM MIXER && MIDI", lang, zh="分轨与MIDI", ko="스템 믹서 && MIDI", ja="ステムとMIDI"),
-                tr_telemetry("// 04 TELEMETRY && LOGS", lang, zh="资源与日志", ko="리소스 && 로그", ja="リソースとログ"),
-                tr_telemetry("// 05 LIVE ENGINE", lang, zh="近实时分轨", ko="준실시간 분리", ja="準リアルタイム分離"),
+                tr("tab_spectrum", lang),
+                tr("tab_chroma", lang),
+                tr("tab_mixer", lang),
+                tr("tab_resources", lang),
+                tr("tab_live", lang),
             )
         else:
             self._static_lock = False
@@ -1853,16 +1856,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             p = get_acid_palette(variant or "light")
             self._hazard_bar.set_color(p.danger)
             self._acid_footer.set_colors(p.micro_tag_bg, "#090D10")
-        if is_active:
-            self.capture_btn.setText(
-                tr_telemetry("CAPTURE_ACTIVE", lang, zh="停止捕获", ko="캡처 중지", ja="キャプチャ停止")
-                if self.capture_btn.isChecked()
-                else tr_telemetry("CAPTURE_START", lang, zh="开始捕获", ko="캡처 시작", ja="キャプチャ開始")
-            )
-        else:
-            self.capture_btn.setText(
-                tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang)
-            )
+        self.capture_btn.setText(
+            tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang)
+        )
         for widget in (self._brand_title, self._history_box, self._skin_badge, self._shell_frame):
             style = widget.style()
             if style is not None:
@@ -2559,14 +2555,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.blockSignals(True)
         self.capture_btn.setChecked(active)
         self._capture_dot.set_active(active)
-        if is_acid:
-            self.capture_btn.setText(
-                tr_telemetry("CAPTURE_ACTIVE", lang, zh="停止捕获", ko="캡처 중지", ja="キャプチャ停止")
-                if active
-                else tr_telemetry("CAPTURE_START", lang, zh="开始捕获", ko="캡처 시작", ja="キャプチャ開始")
-            )
-        else:
-            self.capture_btn.setText(translate_text("停止捕获" if active else "开始捕获", lang))
+        self.capture_btn.setText(
+            tr("btn_stop_capture", lang) if active else tr("btn_start_capture", lang)
+        )
         self.capture_btn.blockSignals(False)
         if not active:
             self._last_capture_banner = None
