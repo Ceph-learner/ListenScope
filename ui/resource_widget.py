@@ -125,12 +125,9 @@ class ResourceMonitorBar(QtWidgets.QFrame):
         crit_vram = self._critical_vram_free_mb if critical_vram_free_mb is None else float(critical_vram_free_mb)
         ai_idle = snap.ai_worker_ram_mb < 1.0
         vram_critical = snap.vram_free_mb is not None and snap.vram_free_mb < crit_vram
-        if self._compact_mode:
-            self._set_text_if_changed("status", self.status_badge, "●")
-            set_widget_tone(self.status_badge, _status_to_tone(snap.status))
-            self.status_badge.setToolTip(f"{snap.status.value} — {detail_tip}")
-        elif (
-            ai_idle
+        if (
+            not self._compact_mode
+            and ai_idle
             and snap.status in (ResourceStatus.WARNING, ResourceStatus.CRITICAL)
             and snap.system_ram_available_mb >= crit_ram
             and not vram_critical

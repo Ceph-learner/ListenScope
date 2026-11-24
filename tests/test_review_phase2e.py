@@ -565,7 +565,7 @@ def test_er_12_13_14_windows_font_assert_win11_wording_and_notices() -> None:
     script_src = (REPO_ROOT / "scripts" / "make_screenshots.py").read_text("utf-8")
     assert "QFontDatabase.families()" in script_src and "QT_QPA_FONTDIR" in script_src
 
-    for fn in ("README.md", "README.en.md", "README.ja.md", "README.ko.md"):
+    for fn in ("docs/FAQ.md", "docs/FAQ.en.md", "ui/main_window.py", "ui/settings_dialog.py"):
         txt = (REPO_ROOT / fn).read_text("utf-8")
         assert "Windows 11" in txt and "20348" in txt
         assert "Windows 10 Build" not in txt

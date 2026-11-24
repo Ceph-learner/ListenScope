@@ -1486,22 +1486,23 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         if not self._bottom_panel_collapsed:
             practice = getattr(self.appearance, "layout", "split") == "practice"
-            narrow_compact = compact_h and w < 1150 and not practice
+            narrow_compact = self.isVisible() and compact_h and w < 1150 and not practice
             self.recent_60_btn.setVisible(not narrow_compact)
             self._ai_model_lbl.setVisible(not narrow_compact)
             self.ai_2stem_combo.setMaximumWidth(170 if narrow_compact else 240)
-            self.ai_gpu_chk.setMaximumWidth(175 if narrow_compact else 260)
+            self.ai_gpu_chk.setMaximumWidth(175 if narrow_compact else 360)
             orig_gpu = self.ai_gpu_chk.property("_ls_orig_text")
             if isinstance(orig_gpu, str) and orig_gpu:
                 translated_gpu = translate_text(orig_gpu, get_current_language())
                 self.ai_gpu_chk.setToolTip(translated_gpu)
-                max_chk_w = self.ai_gpu_chk.maximumWidth()
-                avail_gpu = max(1, max_chk_w - 28)
-                self.ai_gpu_chk.setText(
-                    self.ai_gpu_chk.fontMetrics().elidedText(
-                        translated_gpu, QtCore.Qt.TextElideMode.ElideRight, avail_gpu
+                if narrow_compact:
+                    self.ai_gpu_chk.setText(
+                        self.ai_gpu_chk.fontMetrics().elidedText(
+                            translated_gpu, QtCore.Qt.TextElideMode.ElideRight, 147
+                        )
                     )
-                )
+                else:
+                    self.ai_gpu_chk.setText(translated_gpu)
             self._bottom_dock.setMinimumHeight(0)
             if compact_h and not practice:
                 self.history_overview_plot.setMinimumHeight(34)

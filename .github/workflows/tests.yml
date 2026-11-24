@@ -59,9 +59,10 @@ jobs:
         run: python -m pip install -r requirements-windows.txt pytest
       - name: Run Windows offscreen pytest
         run: python -m pytest -v --tb=short -o faulthandler_timeout=60
-      - name: Capture Windows offscreen UI screenshots
+      - name: Capture Windows UI screenshots
         if: always()
         env:
+          QT_QPA_PLATFORM: windows
           QT_QPA_FONTDIR: C:\Windows\Fonts
         run: python scripts/make_screenshots.py --out-dir artifacts/p2e_win_screens --prefix p2er_after_ --suffix _win
       - name: Upload Windows offscreen screenshots artifact

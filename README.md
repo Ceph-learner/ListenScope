@@ -8,7 +8,7 @@
 </p>
 
 <p align="left">
-  <img src="https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Win10%20(System%20Loopback)-0078D4?style=flat-square" alt="Windows" />
+  <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64)-0078D4?style=flat-square" alt="Windows" />
   <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License" />
   <a href="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml"><img src="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml/badge.svg" alt="Tests" /></a>
 </p>
@@ -31,7 +31,7 @@
 
 ## 2. 主要功能（已实测）
 
-- **实时捕获与频谱**：通过 Windows 标准 WASAPI 进程环回（Windows 11 Build ≥ 20348）或系统环回（Windows 10/11）捕获实时播放输出，提供波形、FFT / 对数频谱、基频 `F0` 与 `-50 ~ +50 cents` 音准刻度条。
+- **实时捕获与频谱**：通过 Windows 标准 WASAPI 进程环回（Build ≥ 20348）或系统环回捕获实时播放输出，提供波形、FFT / 对数频谱、基频 `F0` 与 `-50 ~ +50 cents` 音准刻度条。
 - **和弦、调性与移调**：12-bin Chroma 热图、大/小三和弦与构成音识别、罗马级数、12 步和弦轨迹、纯 CPU Capo 移调联动及 24 调和弦练习弹窗（支持本地合成试听与 `.mid` 导出）。
 - **120 秒回溯与 A/B 练习**：固定 120s 环形缓冲（`48 kHz / Stereo / float32`）、拖拽 A/B 选区、`0.5x–1.25x` 不变调变速回放（WSOLA）、12 个练习书签、Tap 定速节拍器及练习 WAV 导出。
 - **本地 AI 分轨与混音（可选）**：独立子进程按需运行 2-Stem（MDX-Net）或 4-Stem（HTDemucs）分离，默认 6 秒安全分块与随时急停释放显存；支持 `0–24 dB` 贝斯独听增益与 FFT-YIN 贝斯最低音检测。
@@ -42,7 +42,7 @@
 
 ## 3. 系统要求
 
-- **操作系统**：Windows 11 / Windows 10（64 位）。**进程环回捕获需要 Windows 11（Build ≥ 20348）；Windows 10 可以使用系统环回**。
+- **操作系统**：Windows 10 / 11（64 位，进程环回捕获需 Windows 11 / Windows 10 Build ≥ 20348）。
 - **基准验证环境**：目前实机验证主要集中于 **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM**；其余显卡与系统配置尚未全面实测。
 - **显卡需求**：**AI 分轨为可选功能**；实时频谱、和弦/调性/BPM 识别、A/B 慢放与节拍器仅需 CPU 即可运行。
 

@@ -8,7 +8,7 @@
 </p>
 
 <p align="left">
-  <img src="https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Win10%20(System%20Loopback)-0078D4?style=flat-square" alt="Windows" />
+  <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64)-0078D4?style=flat-square" alt="Windows" />
   <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License" />
   <a href="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml"><img src="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml/badge.svg" alt="Tests" /></a>
 </p>
@@ -31,7 +31,7 @@
 
 ## 2. 주요 기능 (검증됨)
 
-- **실시간 캡처 및 스펙트럼**: 표준 Windows WASAPI 프로세스 루프백(Windows 11 Build ≥ 20348) 또는 시스템 루프백(Windows 10/11)으로 재생 중인 소리를 캡처하여 파형, FFT/로그 스펙트럼, `F0` 피치 및 `-50 ~ +50 cents` 튜닝 바를 제공합니다.
+- **실시간 캡처 및 스펙트럼**: 표준 Windows WASAPI 프로세스 루프백(Build ≥ 20348) 또는 시스템 루프백으로 재생 중인 소리를 캡처하여 파형, FFT/로그 스펙트럼, `F0` 피치 및 `-50 ~ +50 cents` 튜닝 바를 제공합니다.
 - **코드 · 조성 · 이조**: 12-bin Chroma 히트맵, 장/단 3화음 인식, 로마 숫자 도수, 12단계 코드 트레일, CPU 카포 이조, 24조 코드 연습 창(미리듣기 및 `.mid` 내보내기)을 지원합니다.
 - **120초 기록 및 A/B 루프**: 고정 120초 링 버퍼(`48 kHz / Stereo / float32`), 드래그 A/B 구간 선택, `0.5x–1.25x` 음정 유지 WSOLA 속도 조절, 12개 북마크, Tap 메트로놈 및 연습 WAV 내보내기를 제공합니다.
 - **로컬 AI 스템 분리 및 믹서(선택 사항)**: 독립 서브프로세스에서 2-Stem(MDX-Net) 또는 4-Stem(HTDemucs) 분리를 실행하며, 6초 안전 청크 및 즉시 정지(E-STOP) 메모리 해제, `0–24 dB` 베이스 솔로 부스트, FFT-YIN 베이스 피치 분석을 지원합니다.
@@ -42,7 +42,7 @@
 
 ## 3. 시스템 요구 사항
 
-- **운영체제**: Windows 11 / Windows 10 (64비트). **프로세스 루프백은 Windows 11(Build ≥ 20348)이 필요하며, Windows 10에서는 시스템 루프백을 사용할 수 있습니다.**
+- **운영체제**: Windows 10 / 11 (64비트; 프로세스 루프백은 Windows 11 또는 Windows 10 Build ≥ 20348 필요).
 - **검증 기준 하드웨어**: 실기 검증은 주로 **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM** 환경에서 수행되었습니다. 기타 GPU 및 구성은 아직 충분히 검증되지 않았습니다.
 - **GPU 요구 사항**: **AI 스템 분리는 선택 기능**입니다. 실시간 스펙트럼, 코드/조성/BPM 분석, A/B 루프, 메트로놈은 CPU만으로 동작합니다.
 

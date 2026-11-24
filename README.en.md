@@ -8,7 +8,7 @@
 </p>
 
 <p align="left">
-  <img src="https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Win10%20(System%20Loopback)-0078D4?style=flat-square" alt="Windows" />
+  <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64)-0078D4?style=flat-square" alt="Windows" />
   <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License" />
   <a href="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml"><img src="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml/badge.svg" alt="Tests" /></a>
 </p>
@@ -31,7 +31,7 @@ A **free, offline, local-first** Windows desktop workstation for real-time audio
 
 ## 2. Key Features (Tested)
 
-- **Live Capture & Spectrum**: Captures live playback per process via standard Windows WASAPI per-process loopback (Windows 11 Build ≥ 20348) or system loopback (Windows 10/11); provides waveform, FFT / log-band spectrum, `F0` pitch tracking, and `-50 ~ +50 cents` tuning bar.
+- **Live Capture & Spectrum**: Captures live playback per process via standard Windows WASAPI loopback (Build ≥ 20348) or system loopback; provides waveform, FFT / log-band spectrum, `F0` pitch tracking, and `-50 ~ +50 cents` tuning bar.
 - **Chords, Key & Transposition**: 12-bin Chroma heatmap, major/minor triad recognition, Roman numerals, 12-step chord trail, CPU Capo transposition, and a 24-key chord practice dialog (with synth preview and `.mid` export).
 - **120s History & A/B Loop**: Fixed 120s ring buffer (`48 kHz / Stereo / float32`), drag-select A/B loop, `0.5x–1.25x` pitch-preserving WSOLA time-stretching, 12 bookmarks, Tap metronome, and practice WAV export.
 - **Local AI Stems & Mixer (Optional)**: Runs 2-Stem (MDX-Net) or 4-Stem (HTDemucs) separation in an isolated subprocess with conservative 6s chunking and instant E-STOP memory release; includes `0–24 dB` Bass Solo Boost and FFT-YIN bass pitch detection.
@@ -42,7 +42,7 @@ A **free, offline, local-first** Windows desktop workstation for real-time audio
 
 ## 3. System Requirements
 
-- **OS**: Windows 11 / Windows 10 (64-bit). **Per-process loopback requires Windows 11 (Build ≥ 20348); Windows 10 users can use System Loopback.**
+- **OS**: Windows 10 / 11 (64-bit; per-process loopback requires Windows 11 or Windows 10 Build ≥ 20348).
 - **Verified Baseline Hardware**: Real-machine testing has focused on **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM**. Other GPUs and system configurations have not yet been broadly tested.
 - **GPU**: **AI stem separation is optional**; live spectrum, chord/key/BPM analysis, A/B looping, and metronome run on CPU only.
 
