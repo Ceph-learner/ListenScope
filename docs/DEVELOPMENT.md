@@ -32,7 +32,7 @@ $env:PYTHONUTF8 = "1"; $env:QT_QPA_PLATFORM = "offscreen"
 
 Windows 上执行 `pwsh -File scripts\setup_windows.ps1`（可选 `-CudaWheelDir`、`-SkipCore`、`-AiVenvPath`），再执行 `pwsh -File scripts\build_windows.ps1`，产物为 `dist\ListenScopeCore\ListenScope.exe`。若需内置可迁移 Python 运行时/FFmpeg 并由 Inno Setup 6 (`ISCC.exe`) 生成安装器 `dist\installer\ListenScope-Setup-Windows-x64.exe`，可附加 `-BundleRuntimes -BundleFfmpeg -BuildInstaller`（`Assert-PortableRuntime` 默认禁止打包含本机绝对路径 `pyvenv.cfg` 的 venv）。参数说明见 [PACKAGING](PACKAGING.md)。云端 Linux 无法构建或运行 Windows exe，也未在本机实测过 `ISCC.exe`。
 
-## Git 协作流程（多 AI 共用）
+## Git 协作流程
 
 1. 开始前执行 `git status --short --branch`、`git fetch`，并查看最近提交。工作区有他人未提交的修改时，先保留，不要 `reset`、`checkout --` 或 `stash drop`。
 2. `main` 是稳定主线。文档小修和已验证的小修复可以直接提交。大功能、高风险修改（安装脚本、资源保护、Worker、打包）应在 `feature/…`、`fix/…`、`docs/…` 分支开发，经 PR 合并。
@@ -40,5 +40,3 @@ Windows 上执行 `pwsh -File scripts\setup_windows.ps1`（可选 `-CudaWheelDir
 4. `backup/*` 分支和 `*-backup` 标签是历史快照，不要删除或移动。
 5. 只为真实的 Bug 或需求开 Issue，不建空 Issue、空 PR 或空分支。
 6. 发布：版本号与 [pyproject.toml](../pyproject.toml) 保持一致（`scripts/installer.iss` 默认值同步维护，CI 构建时由工作流读取 `pyproject.toml` 注入 `/DMyAppVersion=...`）。推送 `v*` 标签（须获用户明确授权）会触发 [.github/workflows/release-windows.yml](../.github/workflows/release-windows.yml) 在 `windows-latest` 构建轻量 **Core** 便携 ZIP 与 Inno Setup 6 安装包；真实 Windows 11 + RTX 5060 Ti 实机声卡、GPU 分轨与 Cubase 导入验收仍记录于 [WINDOWS_TEST_REPORT](WINDOWS_TEST_REPORT.md)。
-7. 结束前按 [AGENTS.md](../AGENTS.md) 更新 [CURRENT_STATE](CURRENT_STATE.md) 和 [HANDOFF](HANDOFF.md)，然后推送，并核对远端 ref。
-8. 每轮开发交付按需更新 Google Drive 的源码快照，并核对远端文件大小与修改时间。外观交付另外核验合成数据截图，压缩包排除本地配置、音频、模型和开发环境。
