@@ -625,6 +625,18 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "E-STOP // 모든 AI 작업 긴급 정지 및 VRAM 정리 (Ctrl+Shift+E)",
         "ja": "E-STOP // 全 AI ジョブ緊急停止＆VRAM 解放 (Ctrl+Shift+E)",
     },
+    "① 选中片段 → ② AI 2-Stem 分轨": {
+        "en": "① Select Clip → ② AI 2-Stem Split",
+        "ko": "① 구간 선택 → ② AI 2-Stem 분리",
+        "ja": "① 区間選択 → ② AI 2-Stem 分離",
+    },
+    "打开单轨 WAV 转 MIDI…": {
+        "en": "Open Stem WAV to MIDI…",
+        "ko": "단일 스템 WAV → MIDI…",
+        "ja": "単一ステム WAV → MIDI…",
+    },
+    "练习和弦": {"en": "Chord Practice", "ko": "코드 연습", "ja": "コード練習"},
+    "换歌重置": {"en": "Reset Harmony", "ko": "화성 리셋", "ja": "和声リセット"},
     "刷新音频进程列表": {
         "en": "Refresh audio process list",
         "ko": "오디오 프로세스 목록 새로고침",

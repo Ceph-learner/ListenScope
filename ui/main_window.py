@@ -2802,10 +2802,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._last_ai_badge_txt = txt
         set_widget_tone(self.ai_status_badge, "info")
         is_running = prog.state in (
-            AIJobState.QUEUED,
+            AIJobState.PREPARING,
             AIJobState.LOADING_MODEL,
-            AIJobState.SEPARATING,
-            AIJobState.POSTPROCESSING,
+            AIJobState.INFERRING,
+            AIJobState.WRITING,
         )
         self._set_ai_active_ui(is_running)
         self.mixer_widget.update_ai_progress(prog)

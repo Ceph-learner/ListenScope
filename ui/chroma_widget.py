@@ -341,7 +341,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chord_echo_lbl.setObjectName("chromaEcho")
         self.chord_echo_lbl.setVisible(False)
         self._chord_dots = DotMatrixWidget(0, 5)
-        self._chord_dots.setVisible(False)
         self._dot_matrices.append(self._chord_dots)
         chord_hero_row.addWidget(self.chord_primary_lbl)
         chord_hero_row.addWidget(self.chord_echo_lbl)
@@ -396,7 +395,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.key_primary_lbl = QtWidgets.QLabel("Unknown")
         self.key_primary_lbl.setObjectName("chromaSecondaryHero")
         self._key_dots = DotMatrixWidget(0, 5)
-        self._key_dots.setVisible(True)
         self._dot_matrices.append(self._key_dots)
         key_hero_row.addWidget(self.key_primary_lbl, 1)
         key_hero_row.addWidget(self._key_dots)
@@ -459,7 +457,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.bpm_stab_lbl = ElidedLabel("节拍稳定度: Unknown")
         self.bpm_stab_lbl.setObjectName("chromaCaption")
         self._bpm_dots = DotMatrixWidget(0, 5)
-        self._bpm_dots.setVisible(False)
         self._dot_matrices.append(self._bpm_dots)
         bpm_hero_row.addWidget(self.bpm_lbl)
         bpm_hero_row.addWidget(self.tempo_half_btn)
@@ -954,8 +951,6 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._acid_variant = acid_variant if acid_variant in ("light", "dark") else None
         is_acid = self._acid_variant in ("light", "dark")
         self.chord_echo_lbl.setVisible(False)
-        for dm in self._dot_matrices:
-            dm.setVisible(True)
         for ov in self._acid_overlays:
             ov.setVisible(is_acid)
         lang = getattr(appearance, "language", "zh")
@@ -1102,13 +1097,13 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._chord_dots.set_state(chord_pips)
 
         tones = "-" if ch.is_silent else spell_chord_tones(disp_chord)
-        self._set_cached_text(self.chord_tones_lbl, f"级数 {degree} · 构成音 {tones}")
+        self._set_cached_text(self.chord_tones_lbl, f"构成音: {tones}")
         self._set_cached_text(self.chord_secondary_lbl, f"第二候选: {disp_sec}")
         self._set_cached_text(self.chord_stability_lbl, f"{ch.stability}")
         self.chord_stability_lbl.setToolTip(f"相关度 {ch.correlation:.2f} · 差值 {ch.margin:.2f} ({ch.stability})")
         self._chord_dots.setToolTip(f"相关度 {ch.correlation:.2f} · 差值 {ch.margin:.2f} ({ch.stability})")
 
-        self._set_cached_text(self.chord_degree_lbl, "")
+        self._set_cached_text(self.chord_degree_lbl, f"相对级数: {degree}")
         key_pips = (
             0
             if ky.primary in ("", "Unknown", "Insufficient")

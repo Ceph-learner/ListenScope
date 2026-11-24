@@ -624,9 +624,9 @@ def test_acid_telemetry_v2_preset_integration_topbar_sync_persistence_and_packag
         assert w._acid_variant is None
         assert w._skin_switcher.isVisible() is False
         assert w._hazard_bar.isVisible() is False
-        assert w._acid_footer.isVisible() is True
+        assert w._acid_footer.isHidden() is False
         assert w.chroma_widget.chord_echo_lbl.isVisible() is False
-        assert all(dm.isVisible() is True for dm in w.chroma_widget.findChildren(DotMatrixWidget))
+        assert all(dm.isHidden() is False for dm in w.chroma_widget.findChildren(DotMatrixWidget))
         assert all(ov.isVisible() is False for ov in w.chroma_widget.findChildren(AcidGraphicOverlay))
         assert w._history_box.objectName() == ""
         assert w.tabs.tabText(0) == "实时频谱与波形"
