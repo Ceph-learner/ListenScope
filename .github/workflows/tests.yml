@@ -59,4 +59,13 @@ jobs:
         run: python -m pip install -r requirements-windows.txt pytest
       - name: Run Windows offscreen pytest
         run: python -m pytest -v --tb=short -o faulthandler_timeout=60
-
+      - name: Capture Windows offscreen UI screenshots
+        if: always()
+        run: python scripts/make_screenshots.py --out-dir artifacts/p2e_win_screens --prefix p2e_before_ --suffix _win
+      - name: Upload Windows offscreen screenshots artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2e-windows-screenshots
+          path: artifacts/p2e_win_screens/*.png
+          if-no-files-found: error
