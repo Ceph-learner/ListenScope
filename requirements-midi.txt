@@ -11,7 +11,7 @@
 
 basic-pitch>=0.4.0,<0.5
 tensorflow>=2.13.0,<2.15.1
-setuptools>=68.0,<81
+setuptools>=68.0,<85
 numpy>=1.24.0,<2.0
 scipy>=1.10.0
 psutil>=5.9.0
