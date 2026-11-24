@@ -177,25 +177,68 @@ QTabBar::tab:selected {
 """
 
 
-_CACHED_APP_ICON: Optional[QtGui.QIcon] = None
+_CACHED_APP_ICONS: dict[bool, QtGui.QIcon] = {}
 
 
-def _load_app_icon() -> QtGui.QIcon:
-    """Load the Acid Telemetry emblem as explicit multi-DPI pixmaps + ICO for reliable Windows taskbar & tray icons."""
-    global _CACHED_APP_ICON
-    if _CACHED_APP_ICON is not None and not _CACHED_APP_ICON.isNull():
-        return _CACHED_APP_ICON
+def _is_windows_taskbar_light() -> bool:
+    """Read Windows HKCU SystemUsesLightTheme; fallback to False (white tray icon) when unreadable."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        ) as key:
+            val, _ = winreg.QueryValueEx(key, "SystemUsesLightTheme")
+            return bool(int(val) == 1)
+    except Exception:
+        return False
+
+
+def _load_tray_icon() -> QtGui.QIcon:
+    """Load monochrome tray icon matching Windows taskbar theme (tray_black on light, tray_white on dark)."""
+    assets_dir = get_bundle_root() / "ui" / "assets"
+    if not assets_dir.exists():
+        assets_dir = Path(__file__).resolve().parent / "assets"
+    name = "listenscope_tray_black.svg" if _is_windows_taskbar_light() else "listenscope_tray_white.svg"
+    svg_path = assets_dir / name
+    icon = QtGui.QIcon()
+    if svg_path.exists() and QtSvg is not None:
+        renderer = QtSvg.QSvgRenderer(str(svg_path))
+        if renderer.isValid():
+            for px in (16, 20, 24, 32, 48):
+                pm = QtGui.QPixmap(px, px)
+                pm.fill(QtCore.Qt.GlobalColor.transparent)
+                painter = QtGui.QPainter(pm)
+                painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+                renderer.render(painter, QtCore.QRectF(0, 0, px, px))
+                painter.end()
+                if not pm.isNull():
+                    icon.addPixmap(pm)
+    return icon if not icon.isNull() else _load_app_icon()
+
+
+def _load_app_icon(*, light: bool = False) -> QtGui.QIcon:
+    """Load ListenScope master emblem (master_light for light theme, master_dark/ico for dark)."""
+    cached = _CACHED_APP_ICONS.get(light)
+    if cached is not None and not cached.isNull():
+        return cached
     assets_dir = get_bundle_root() / "ui" / "assets"
     if not (assets_dir / "listenscope.svg").exists() and not (assets_dir / "listenscope.ico").exists():
         assets_dir = Path(__file__).resolve().parent / "assets"
     icon = QtGui.QIcon()
-    svg_path = assets_dir / "listenscope.svg"
+    svg_name = "listenscope_master_light.svg" if light else "listenscope.svg"
+    svg_path = assets_dir / svg_name
+    if not svg_path.exists():
+        svg_path = assets_dir / "listenscope.svg"
     ico_path = assets_dir / "listenscope.ico"
     if svg_path.exists() and QtSvg is not None:
         try:
             renderer = QtSvg.QSvgRenderer(str(svg_path))
             if renderer.isValid():
-                for px in (16, 20, 24, 32, 48, 64, 128, 256):
+                for px in (16, 20, 24, 32, 40, 48, 64, 96, 128, 256):
                     pm = QtGui.QPixmap(px, px)
                     pm.fill(QtCore.Qt.GlobalColor.transparent)
                     painter = QtGui.QPainter(pm)
@@ -206,11 +249,11 @@ def _load_app_icon() -> QtGui.QIcon:
                         icon.addPixmap(pm)
         except Exception:
             pass
-    if ico_path.exists():
+    if not light and ico_path.exists():
         icon.addFile(str(ico_path))
     if svg_path.exists() and icon.isNull():
         icon.addFile(str(svg_path))
-    _CACHED_APP_ICON = icon
+    _CACHED_APP_ICONS[light] = icon
     return icon
 
 
@@ -1138,7 +1181,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 return
         except Exception:
             return
-        tray = QtWidgets.QSystemTrayIcon(_load_app_icon(), self)
+        tray = QtWidgets.QSystemTrayIcon(_load_tray_icon(), self)
         tray.setToolTip("ListenScope")
         menu = QtWidgets.QMenu(self)
         act_show = menu.addAction("显示主界面")
@@ -1884,6 +1927,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         set_focus_ring_style(appearance.focus_style)
         set_help_language(appearance.language)
         self._apply_frameless_mode(appearance.frameless)
+        eff_mode = appearance.resolve_theme_mode(system_is_dark=detect_system_is_dark())
+        app_icon = _load_app_icon(light=(eff_mode == "light"))
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
         self._shell_frame.set_wallpaper_path(appearance.effective_background_image())
         if old is None or appearance.layout != old.layout:
             self._apply_workspace_layout(appearance.layout)

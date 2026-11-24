@@ -188,6 +188,45 @@ def test_e8_unified_lucide_icons_registered_and_no_unicode_window_buttons() -> N
     assert not any(ch in mw_src for ch in ("❐", "□")), "ui/main_window.py still uses Unicode glyphs (□/❐) for window buttons"
 
 
+def test_e9_app_icon_ico_tray_and_icon_doc() -> None:
+    """E9: Multi-size .ico (>=7 sizes, 16px from 3-bar small_dark), tray theme switching, ICON.md, social_preview."""
+    import struct
+    from PySide6 import QtGui
+
+    ico_path = REPO_ROOT / "ui" / "assets" / "listenscope.ico"
+    assert ico_path.exists(), "ui/assets/listenscope.ico missing"
+    raw = ico_path.read_bytes()
+    _reserved, _ico_type, count = struct.unpack_from("<HHH", raw, 0)
+    sizes = set()
+    for i in range(count):
+        w, h = struct.unpack_from("<BB", raw, 6 + i * 16)
+        sizes.add((256 if w == 0 else w, 256 if h == 0 else h))
+    assert len(sizes) >= 7, f"Expected >= 7 ICO sizes, got {sorted(sizes)}"
+    assert (16, 16) in sizes
+
+    # Verify 16px frame comes from small_dark (3 vertical bars at middle row y=8, not 5)
+    _get_app()
+    icon16 = QtGui.QIcon(str(ico_path))
+    im16 = icon16.pixmap(16, 16).toImage().convertToFormat(QtGui.QImage.Format.Format_RGBA8888)
+    bright_runs = 0
+    in_run = False
+    for x in range(3, 13):
+        c = im16.pixelColor(x, 8)
+        is_bar = c.alpha() > 128 and (c.green() > 140 or c.blue() > 140) and (c.red() + c.green() + c.blue() > 200)
+        if is_bar and not in_run:
+            bright_runs += 1
+            in_run = True
+        elif not is_bar:
+            in_run = False
+    assert bright_runs == 3, f"16px ICO frame should have 3 bars from small_dark, detected {bright_runs}"
+
+    mw_src = (REPO_ROOT / "ui" / "main_window.py").read_text("utf-8")
+    assert "SystemUsesLightTheme" in mw_src and "listenscope_tray_black.svg" in mw_src and "listenscope_tray_white.svg" in mw_src
+    assert (REPO_ROOT / "docs" / "design" / "ICON.md").exists()
+    assert (REPO_ROOT / "docs" / "design" / "social_preview.png").exists()
+    assert (REPO_ROOT / "docs" / "design" / "legacy" / "listenscope_v1.svg").exists()
+
+
 @pytest.mark.xfail(strict=True, reason="E10")
 def test_e10_design_doc_and_design_sheet_cli_exist() -> None:
     """E10: docs/DESIGN.md must document spacing/radius/type/color tokens, and scripts/make_screenshots.py must support --design-sheet."""
