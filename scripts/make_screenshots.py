@@ -356,6 +356,17 @@ def capture_p2f_screenshots(
         p3 = out_dir / f"{prefix}light_en_chord_1366x768{suffix}.png"
         _save_png_under_limit(win.grab(), p3, max_kb=max_kb)
         saved.append(p3)
+
+        # 4. 1.25x scaled 1366x768 physical (1093x614 logical) English Light Spectrum tab
+        win.apply_appearance(Appearance(theme_mode="light", language="en"))
+        win.tabs.setCurrentIndex(0)
+        en_1366_w = int(round(1366 / dpr)) if dpr > 1.05 else 1093
+        en_1366_h = int(round(768 / dpr)) if dpr > 1.05 else 614
+        win.resize(en_1366_w, en_1366_h)
+        _feed()
+        p4 = out_dir / f"{prefix}125_en_spectrum_1366x768{suffix}.png"
+        _save_png_under_limit(win.grab(), p4, max_kb=max_kb)
+        saved.append(p4)
     finally:
         win.close()
         mixer.close()

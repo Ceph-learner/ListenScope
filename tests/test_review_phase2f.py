@@ -134,6 +134,30 @@ def test_f1_narrow_topbar_no_clipping_and_60s_visible() -> None:
 
             # 60s button in A/B dock must remain visible in narrow window
             assert win.recent_60_btn.isVisible(), f"[{lang}] recent_60_btn disappeared in narrow 874x453 window"
+
+        # Width sweep 874..1366 (step 64) + 1093 + 1366 across zh/en/ja/ko
+        widths = sorted(set(list(range(874, 1367, 64)) + [1093, 1366]))
+        for lang in ("zh", "en", "ja", "ko"):
+            win.apply_appearance(Appearance(theme_mode="light", language=lang))
+            for w in widths:
+                win.resize(w, 600 if w >= 1093 else 453)
+                win.show()
+                app.processEvents()
+                assert win.source_combo.width() >= win.source_combo.minimumWidth(), (
+                    f"[{lang}] w={w}: source_combo squeezed ({win.source_combo.width()} < {win.source_combo.minimumWidth()})"
+                )
+                assert win.emergency_stop_btn.text().strip(), f"[{lang}] w={w}: E-STOP empty"
+                for name, btn in (
+                    ("capture_btn", win.capture_btn),
+                    ("freeze_screen_btn", win.freeze_screen_btn),
+                    ("settings_btn", win.settings_btn),
+                    ("refresh_btn", win.refresh_btn),
+                    ("emergency_stop_btn", win.emergency_stop_btn),
+                ):
+                    if btn.isVisible() and btn.text().strip():
+                        assert btn.width() >= btn.sizeHint().width(), (
+                            f"[{lang}] w={w}: {name} clipped ({btn.width()} < {btn.sizeHint().width()})"
+                        )
     finally:
         win.close()
         mixer.close()
@@ -154,6 +178,7 @@ def test_f1_narrow_topbar_no_clipping_and_60s_visible() -> None:
         "w.resize(int(1093 / 1.25), int(566 / 1.25)); w.show(); app.processEvents(); "
         "assert w.emergency_stop_btn.text().strip(); "
         "assert w.recent_60_btn.isVisible(); "
+        "assert w.source_combo.width() >= w.source_combo.minimumWidth(); "
         "w.close(); m.close()"
     )
     proc = subprocess.run([sys.executable, "-c", code], cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=30)
@@ -318,11 +343,12 @@ def test_f6_no_chinese_leak_in_en_ja_ko() -> None:
     for r in reasons:
         assert translate_text(r, "en") != r, f"ResourceManager reason not translated to en: {r!r}"
 
-    # Traverse visible widgets in en & ko across all tabs
+    # Traverse visible widgets in en, ko & ja across all tabs
     app, win, mixer = _make_window()
     try:
         cjk_re = re.compile(r"[\u4e00-\u9fff]")
-        for lang in ("en", "ko"):
+        sc_only_re = re.compile(r"[这为们个时设频谱轨帧调缓]")
+        for lang in ("en", "ko", "ja"):
             win.apply_appearance(Appearance(theme_mode="light", language=lang))
             win.resize(1366, 768)
             win.show()
@@ -333,8 +359,12 @@ def test_f6_no_chinese_leak_in_en_ja_ko() -> None:
                     if not w.isVisible():
                         continue
                     for prop_name, val in (("text", w.text()), ("tooltip", w.toolTip())):
-                        if val and "中文" not in val and cjk_re.search(val):
+                        if not val or "中文" in val:
+                            continue
+                        if lang in ("en", "ko") and cjk_re.search(val):
                             pytest.fail(f"[{lang}] Tab {idx} {type(w).__name__} {prop_name} leaked Hanzi: {val!r}")
+                        if lang == "ja" and sc_only_re.search(val):
+                            pytest.fail(f"[ja] Tab {idx} {type(w).__name__} {prop_name} leaked Simplified Chinese: {val!r}")
     finally:
         win.close()
         mixer.close()
@@ -388,8 +418,10 @@ def test_f8_chroma_heatmap_readable_height_and_ticks() -> None:
 
 
 def test_f9_quit_completes_within_2s_with_blocking_thread_and_subprocess(tmp_path: Path) -> None:
+    from core.paths import register_active_subprocess, unregister_active_subprocess
     from main import ListenScopeController
 
+    _get_app()
     ctrl = ListenScopeController(
         use_mock_ai_for_demo=True,
         settings_path=str(tmp_path / "settings.json"),
@@ -402,11 +434,27 @@ def test_f9_quit_completes_within_2s_with_blocking_thread_and_subprocess(tmp_pat
         def get_stats(self):
             return None
 
+    # Launch a real subprocess that ignores SIGTERM to verify terminate -> kill within 2s
+    sub = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+        ],
+    )
+    register_active_subprocess(sub)
     ctrl._capture_backend = _BlockingCapture()  # type: ignore[assignment]
-    t0 = time.monotonic()
-    ctrl.shutdown()
-    elapsed = time.monotonic() - t0
-    assert elapsed <= 2.0, f"shutdown() took {elapsed:.2f}s (> 2.0s)"
+    try:
+        t0 = time.monotonic()
+        ctrl.shutdown()
+        elapsed = time.monotonic() - t0
+        assert elapsed <= 2.0, f"shutdown() took {elapsed:.2f}s (> 2.0s)"
+        assert sub.poll() is not None, "SIGTERM-ignoring subprocess still alive after shutdown()"
+    finally:
+        unregister_active_subprocess(sub)
+        if sub.poll() is None:
+            sub.kill()
+            sub.wait(timeout=1.0)
 
 
 def test_f10_bpm_detected_within_15s_on_synthetic_mix() -> None:
@@ -466,9 +514,50 @@ def test_f10_bpm_detected_within_15s_on_synthetic_mix() -> None:
     )
 
 
+def test_f10_negative_controls_chord_pad_noise_vibrato() -> None:
+    from analysis.worker import AnalysisWorker
+    from audio.ring_buffer import FixedRingBuffer
+    from core.config import AnalysisConfig, AudioConfig
+
+    sr = 48000
+    dur = 10.0
+    n = int(sr * dur)
+    t = np.arange(n, dtype=np.float32) / float(sr)
+    rng = np.random.default_rng(123)
+
+    neg_cases = {
+        "chord_pad": (
+            0.12 * np.sin(2.0 * np.pi * 261.63 * t)
+            + 0.12 * np.sin(2.0 * np.pi * 329.63 * t)
+            + 0.12 * np.sin(2.0 * np.pi * 392.00 * t)
+        ).astype(np.float32),
+        "white_noise": (0.08 * rng.standard_normal(n)).astype(np.float32),
+        "vibrato_tone": (0.20 * np.sin(2.0 * np.pi * 440.0 * t + 1.5 * np.sin(2.0 * np.pi * 5.2 * t))).astype(np.float32),
+    }
+
+    hop = int(sr * 0.066)
+    for name, mono in neg_cases.items():
+        acfg = AudioConfig(sample_rate=sr, channels=2, ring_buffer_seconds=12)
+        rb = FixedRingBuffer(acfg)
+        worker = AnalysisWorker(rb, audio_config=acfg, analysis_config=AnalysisConfig())
+        st = np.stack([mono, mono], axis=1)
+        snap = None
+        for pos in range(0, st.shape[0], hop):
+            chunk = st[pos : pos + hop]
+            if chunk.shape[0] == 0:
+                break
+            rb.write(chunk)
+            snap = worker.analyze_latest_once()
+        assert snap is not None
+        assert snap.tempo.bpm is None or snap.tempo.stability != "High", (
+            f"Negative control {name} false-locked High BPM: {snap.tempo}"
+        )
+
+
 def test_f11_memory_guardrail_messages_actionable_and_distinguish_manual_vs_auto() -> None:
     from core.config import ResourceLimits
     from core.i18n import translate_text
+    from core.models import AIJobResult, AIJobState
     from core.resource_manager import ResourceManager, SimulationOverrides
 
     rm = ResourceManager(ResourceLimits())
@@ -481,10 +570,34 @@ def test_f11_memory_guardrail_messages_actionable_and_distinguish_manual_vs_auto
             f"[{lang}] Refusal message lacks actionable advice: {msg!r}"
         )
 
-    main_src = (REPO_ROOT / "main.py").read_text("utf-8")
-    assert "手动" in main_src and ("自动" in main_src or "护栏" in main_src), (
-        "main.py E-STOP banner does not distinguish manual vs auto guardrail E-STOP"
-    )
+    app, win, mixer = _make_window()
+    try:
+        win.show()
+        app.processEvents()
+        win.dismiss_banner()
+        win.handle_ai_result(
+            AIJobResult(
+                task_id="t_user",
+                state=AIJobState.EMERGENCY_STOPPED,
+                error="user stop",
+                stop_reason="user",
+            )
+        )
+        assert not win.notice_banner.isVisible()
+
+        win.handle_ai_result(
+            AIJobResult(
+                task_id="t_guard",
+                state=AIJobState.EMERGENCY_STOPPED,
+                error="可用 RAM 跌破紧急阈值 (1500 MB < 2048 MB)",
+                stop_reason="ram_guard",
+            )
+        )
+        assert win.notice_banner.isVisible()
+        assert "护栏" in win.notice_banner.text() or "guardrail" in win.notice_banner.text().lower()
+    finally:
+        win.close()
+        mixer.close()
 
 
 def test_f12_tray_icon_uses_3_bar_svg_and_follows_system_theme() -> None:

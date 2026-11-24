@@ -86,7 +86,7 @@ class TempoEstimator:
                 self._frames_since_est = 0
             return est
         peakiness = float(np.percentile(env, 95)) / (float(np.median(env)) + 1e-9)
-        if peakiness < 1.2:
+        if peakiness < 1.8:
             est = TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0, alt_bpm=None)
             with self._lock:
                 self._cached_estimate = est

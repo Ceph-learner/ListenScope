@@ -15,6 +15,72 @@ from typing import Any, Optional
 _external_launch_lock = Lock()
 _active_subprocs_lock = Lock()
 _ACTIVE_SUBPROCS: set[subprocess.Popen[Any]] = set()
+_win_job_handle: Optional[int] = None
+
+
+def _ensure_windows_kill_job() -> Optional[int]:
+    """Create a Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so child processes never outlive parent."""
+    global _win_job_handle
+    if sys.platform != "win32":
+        return None
+    if _win_job_handle is not None:
+        return _win_job_handle
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _IO_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_uint64),
+                ("WriteOperationCount", ctypes.c_uint64),
+                ("OtherOperationCount", ctypes.c_uint64),
+                ("ReadTransferCount", ctypes.c_uint64),
+                ("WriteTransferCount", ctypes.c_uint64),
+                ("OtherTransferCount", ctypes.c_uint64),
+            ]
+
+        class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoInfo", _IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        ok = kernel32.SetInformationJobObject(
+            job,
+            9,  # JobObjectExtendedLimitInformation
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        )
+        if not ok:
+            kernel32.CloseHandle(job)
+            return None
+        _win_job_handle = int(job)
+        return _win_job_handle
+    except Exception:
+        return None
 
 
 def register_active_subprocess(proc: subprocess.Popen[Any]) -> subprocess.Popen[Any]:
@@ -23,12 +89,35 @@ def register_active_subprocess(proc: subprocess.Popen[Any]) -> subprocess.Popen[
         for p in exited:
             _ACTIVE_SUBPROCS.discard(p)
         _ACTIVE_SUBPROCS.add(proc)
+    if sys.platform == "win32":
+        job = _ensure_windows_kill_job()
+        handle = getattr(proc, "_handle", None)
+        if job and handle:
+            try:
+                import ctypes
+
+                ctypes.windll.kernel32.AssignProcessToJobObject(job, int(handle))
+            except Exception:
+                pass
     return proc
 
 
 def unregister_active_subprocess(proc: subprocess.Popen[Any]) -> None:
     with _active_subprocs_lock:
         _ACTIVE_SUBPROCS.discard(proc)
+
+
+def kill_all_active_subprocesses() -> None:
+    """Immediately kill all tracked external subprocesses (watchdog last-resort cleanup)."""
+    with _active_subprocs_lock:
+        procs = list(_ACTIVE_SUBPROCS)
+        _ACTIVE_SUBPROCS.clear()
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except Exception:
+            pass
 
 
 def terminate_all_active_subprocesses(timeout: float = 1.0) -> None:
@@ -45,11 +134,12 @@ def terminate_all_active_subprocesses(timeout: float = 1.0) -> None:
     for proc in procs:
         try:
             if proc.poll() is None:
-                proc.wait(timeout=max(0.1, float(timeout)))
+                proc.wait(timeout=max(0.05, float(timeout)))
         except Exception:
             try:
                 if proc.poll() is None:
                     proc.kill()
+                    proc.wait(timeout=0.1)
             except Exception:
                 pass
 

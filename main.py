@@ -30,6 +30,7 @@ if str(_SRC_DIR) not in sys.path:
 from core.paths import (
     default_work_dir,
     get_bundle_root,
+    kill_all_active_subprocesses,
     prepend_ffmpeg_path_env,
     run_external_python,
     subprocess_no_window_kwargs,
@@ -2253,10 +2254,12 @@ class ListenScopeController:
             return
         self._shutdown_done = True
         t_shutdown_start = time.monotonic()
+        deadline = t_shutdown_start + 1.6
         s_logger = logging.getLogger("listenscope.shutdown")
 
-        def _run_bounded(stage: str, fn, timeout_s: float = 0.35) -> None:
+        def _run_bounded(stage: str, fn, max_timeout_s: float = 0.35, *, min_timeout_s: float = 0.05) -> None:
             t0 = time.monotonic()
+            budget = max(min_timeout_s, min(float(max_timeout_s), deadline - t0))
             done = threading.Event()
             err_box: list[BaseException] = []
 
@@ -2270,7 +2273,7 @@ class ListenScopeController:
 
             th = threading.Thread(target=_target, name=f"ListenScope-Shutdown-{stage}", daemon=True)
             th.start()
-            finished = done.wait(timeout=max(0.05, float(timeout_s)))
+            finished = done.wait(timeout=budget)
             dt_ms = (time.monotonic() - t0) * 1000.0
             if not finished:
                 s_logger.warning("shutdown stage=%s timed out after %.1f ms", stage, dt_ms)
@@ -2300,15 +2303,20 @@ class ListenScopeController:
                 pass
         if hasattr(self, "_timer"):
             self._timer.stop()
-        _run_bounded("previews", lambda: (self._stop_drum_preview(), self._stop_chord_preview()), timeout_s=0.15)
-        _run_bounded("capture", self.stop_capture, timeout_s=0.35)
-        _run_bounded("playback", lambda: (self.metronome.stop_standalone(), self.ab_player.stop(), self.mixer_engine.clear()), timeout_s=0.25)
-        _run_bounded("analysis_worker", self.analysis_worker.stop, timeout_s=0.25)
+        _run_bounded("previews", lambda: (self._stop_drum_preview(), self._stop_chord_preview()), max_timeout_s=0.15)
+        _run_bounded("capture", self.stop_capture, max_timeout_s=0.35)
+        _run_bounded("playback", lambda: (self.metronome.stop_standalone(), self.ab_player.stop(), self.mixer_engine.clear()), max_timeout_s=0.20)
+        _run_bounded("analysis_worker", self.analysis_worker.stop, max_timeout_s=0.20)
         if self.live_separator.is_active or self.live_separator.is_starting:
-            _run_bounded("live_separator", self.live_separator.stop, timeout_s=0.25)
-        _run_bounded("ai_job_manager", self.ai_job_manager.shutdown, timeout_s=0.25)
-        _run_bounded("subprocesses", lambda: terminate_all_active_subprocesses(timeout=0.25), timeout_s=0.40)
-        _run_bounded("resource_manager", self.resource_manager.close, timeout_s=0.20)
+            _run_bounded("live_separator", self.live_separator.stop, max_timeout_s=0.20)
+        _run_bounded("ai_job_manager", self.ai_job_manager.shutdown, max_timeout_s=0.20)
+        _run_bounded(
+            "subprocesses",
+            lambda: terminate_all_active_subprocesses(timeout=0.18),
+            max_timeout_s=0.35,
+            min_timeout_s=0.25,
+        )
+        _run_bounded("resource_manager", self.resource_manager.close, max_timeout_s=0.15)
         s_logger.info("shutdown total elapsed_ms=%.1f", (time.monotonic() - t_shutdown_start) * 1000.0)
         logging.getLogger().removeHandler(self.log_handler)
         teardown_application_file_logging()
@@ -2359,6 +2367,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     def _exit_watchdog() -> None:
         if not shutdown_done.wait(timeout=2.0):
+            kill_all_active_subprocesses()
             os._exit(0)
 
     threading.Thread(

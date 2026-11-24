@@ -501,8 +501,9 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                 lbl = f"{int(f // 1000)}k" if f >= 1000.0 else f"{f:g}"
                 kept_spec.append((y_val, lbl))
                 last_px = px_y
+        lang = get_current_language()
         self.spec_plot.getAxis("left").setTicks([kept_spec])
-        self.spec_plot.setLabel("left", "" if spec_h < 90.0 else "频率 (Hz)", **{"font-size": "9pt"})
+        self.spec_plot.setLabel("left", "" if spec_h < 90.0 else translate_text("频率 (Hz)", lang), **{"font-size": "9pt"})
 
         # 2. FFT & Log-band Y-axis (-95..5 dBFS) fixed ticks: 0 / -30 / -60 / -90 dB
         db_candidates = (-90.0, -60.0, -30.0, 0.0)
@@ -522,7 +523,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             (self.log_plot, "频率 (Hz)"),
             (self.spec_plot, "时间 (s)"),
         ):
-            plot.setLabel("bottom", "" if plot.height() < 150 else orig_bottom, **{"font-size": "9pt"})
+            plot.setLabel("bottom", "" if plot.height() < 150 else translate_text(orig_bottom, lang), **{"font-size": "9pt"})
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)

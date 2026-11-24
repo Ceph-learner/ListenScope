@@ -693,12 +693,18 @@ class AIJobManager:
                 err_msg = reason
                 if "RAM" not in err_msg:
                     err_msg = f"{reason}（当前可用 RAM={snap.system_ram_available_mb:.0f} MB）"
+                vram_guard = (
+                    snap.vram_free_mb is not None
+                    and snap.vram_free_mb < self.resource_manager.limits.critical_vram_free_mb
+                    and snap.system_ram_available_mb >= self.resource_manager.limits.critical_ram_mb
+                )
                 res = AIJobResult(
                     task_id=req.task_id,
                     state=AIJobState.EMERGENCY_STOPPED,
                     model_id=req.model_id,
                     device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
                     error=err_msg,
+                    stop_reason="vram_guard" if vram_guard else "ram_guard",
                 )
                 self._dispatch_result(req, res)
                 return snap
@@ -770,6 +776,7 @@ class AIJobManager:
                         model_id=req.model_id,
                         device_used="MockCPU" if req.use_mock_backend else ("GPU-CUDA" if req.use_gpu else "CPU"),
                         error=reason,
+                        stop_reason="user",
                     )
                     self._dispatch_result(req, res)
                 else:

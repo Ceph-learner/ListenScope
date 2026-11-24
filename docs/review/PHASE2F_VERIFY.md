@@ -34,3 +34,36 @@
 1. **125% 缩放窄窗口（1093×566 物理）**：确认顶栏无半截字、E-STOP 保留短标签、混音空状态主按钮无需滚动即可点击。
 2. **托盘图标与退出耗时**：确认托盘溢出区显示 3 竖条单色图标并随系统明暗切换；点击 `Quit ListenScope` 后 2 s 内主进程与子进程全部退出，日志可见各阶段 `shutdown stage=... elapsed_ms=...`。
 3. **真实音频持续播放 BPM**：确认 15 s 内稳定出 BPM（不再等到 100+ s）。
+
+---
+
+## Round 2（PR #61 复审回归 + 补充复审 A–E）
+
+| 项 | 修改内容与文件 | 测试名 | Linux/offscreen 验证结果 |
+|---|---|---|---|
+| **Neon #1** | [`ui/main_window.py`](../../ui/main_window.py) `handle_ai_result`：改用 `res.error`（而非不存在的 `res.error_message`）。 | `tests/test_review_phase2d.py::test_w10_handle_ai_result_handles_every_ai_job_state_and_notifies_mixer` | **PASSED** |
+| **Neon #2** | [`ui/main_window.py`](../../ui/main_window.py) `show_banner_message`：直接将 `raw_text` 传入 `_set_label_cached`，避免覆盖 `_ls_orig_text` 破坏 `zh → en → zh` 往返。 | `tests/test_review_phase1.py::test_ub06_banner_label_roundtrip_zh_en_zh_preserves_original_text` | **PASSED** |
+| **A (F9 子进程与 Job Object)** | 1. [`core/paths.py`](../../core/paths.py)：Windows 下创建 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object，在 `register_active_subprocess` 中绑定子进程；新增 `kill_all_active_subprocesses()`。<br>2. [`main.py`](../../main.py)：`_exit_watchdog` 触发 `os._exit(0)` 前先调用 `kill_all_active_subprocesses()`；`shutdown()` 改为统一 `1.6s` 截止时间并保证 `subprocesses` 阶段执行（`min_timeout_s=0.25`）。 | `tests/test_review_phase2f.py::test_f9_quit_completes_within_2s_with_blocking_thread_and_subprocess`（含真实忽略 `SIGTERM` 的子进程） | **PASSED**（`543.7 ms` 内结束并杀掉子进程） |
+| **B (F1 动态顶栏阈值)** | [`ui/main_window.py`](../../ui/main_window.py)：移除硬编码 `1020px`，按当前语言顶栏按钮 `sizeHint` 总和动态计算 `wide_req`；`source_combo` 最小宽度按约 12 字符（`>=116px`）锁定；同步修复 [`core/i18n.py`](../../core/i18n.py) `Waveform && FFT` / `Bands && Spectrogram` 及 [`ui/spectrum_widget.py`](../../ui/spectrum_widget.py) `_refresh_axis_ticks` 轴标题翻译。 | `tests/test_review_phase2f.py::test_f1_narrow_topbar_no_clipping_and_60s_visible`（874–1366 每 64px 步进 × 四语） | **PASSED** |
+| **C (F11 结构化急停来源)** | [`core/models.py`](../../core/models.py) `AIJobResult` 新增 `stop_reason: Optional[Literal["user", "ram_guard", "vram_guard"]] = None`；[`ai/job_manager.py`](../../ai/job_manager.py) 写入对应来源；`handle_ai_result` 据此区分横幅，不再做中文字符串匹配。 | `tests/test_review_phase2f.py::test_f11_memory_guardrail_messages_actionable_and_distinguish_manual_vs_auto` | **PASSED** |
+| **D (F6 `ja` 遍历)** | [`tests/test_review_phase2f.py`](../../tests/test_review_phase2f.py) `test_f6_no_chinese_leak_in_en_ja_ko` 补齐 `ja` 全 5 页可见控件与 tooltip 扫描。 | `tests/test_review_phase2f.py::test_f6_no_chinese_leak_in_en_ja_ko` | **PASSED** |
+| **E (F10 负样本与量纲)** | [`analysis/tempo.py`](../../analysis/tempo.py) 将 `peakiness` 阈值调整为 `1.8`（拦截 5.2 Hz 颤音长音 `peakiness=1.66`）。<br>**`std(env) < 1e-3` 量纲说明**：`env` 为 96 个对数频带线性幅度谱通量 `mag_like = 10^(dBFS/20)` 的正向差分之和；静态和弦垫音 `pure_chord_pad` 在 `-10 dBFS` 下因杂散拍频仅产生 `std(env) ≈ 2.1e-4`（`< 1e-3`），而正常音乐在 96 频带下 `std(env)` 通常 `>= 5e-3 ~ 1e-1`（相当于总通量波动 `> -60 dBFS`）。 | `tests/test_review_phase2f.py::test_f10_negative_controls_chord_pad_noise_vibrato`（纯和弦垫音、白噪声、颤音长音 3 组负样本） | **PASSED** |
+
+### Round 2 新增截图（`QT_SCALE_FACTOR=1.25`）
+- `docs/review/screens/p2f_after_125_en_spectrum_1366x768.png`（1.25× 缩放 1366×768 物理 / 1093×614 逻辑英文实时频谱页）
+- `docs/review/screens/p2f_after_narrow_125_spectrum_1093x566.png`
+- `docs/review/screens/p2f_after_narrow_125_mixer_1093x566.png`
+- `docs/review/screens/p2f_after_light_en_chord_1366x768.png`
+
+### Round 2 退出耗时实测日志（含阻塞捕获 + 真实忽略 `SIGTERM` 子进程）
+```text
+INFO     listenscope.shutdown:main.py:2283 shutdown stage=previews elapsed_ms=0.7
+WARNING  listenscope.shutdown:main.py:2279 shutdown stage=capture timed out after 353.2 ms
+INFO     listenscope.shutdown:main.py:2283 shutdown stage=playback elapsed_ms=2.4
+INFO     listenscope.shutdown:main.py:2283 shutdown stage=analysis_worker elapsed_ms=0.4
+INFO     listenscope.shutdown:main.py:2283 shutdown stage=ai_job_manager elapsed_ms=0.2
+INFO     listenscope.shutdown:main.py:2283 shutdown stage=subprocesses elapsed_ms=182.0
+INFO     listenscope.shutdown:main.py:2283 shutdown stage=resource_manager elapsed_ms=0.2
+INFO     listenscope.shutdown:main.py:2320 shutdown total elapsed_ms=543.7
+```
+

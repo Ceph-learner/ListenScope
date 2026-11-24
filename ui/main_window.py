@@ -670,8 +670,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._src_pill = QtWidgets.QLabel("AUDIO_IN // 音源")
         self._src_pill.setObjectName("telemetryPill")
         self._src_pill.setVisible(False)
+        self._is_narrow_top: bool = False
         self.source_combo = MarqueeComboBox()
-        self.source_combo.setMinimumWidth(72)
+        src_fm = self.source_combo.fontMetrics()
+        self.source_combo.setMinimumWidth(max(116, src_fm.horizontalAdvance("0123456789AB") + 32))
         self.source_combo.setPlaceholderText("选择音源…")
         self.source_combo.setToolTip("AUDIO_IN // 选择要捕获的音频进程或系统环回")
         self.source_combo.setSizePolicy(
@@ -1475,9 +1477,34 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._shortcut_pill.setVisible(False)
         self._skin_badge.setVisible(False)
         lang = get_current_language()
-        narrow_top = w < 1020
         if hasattr(self, "resource_bar"):
             self.resource_bar.set_compact_mode(w < 1200, lang=lang)
+        # Compute required width for wide topbar in the current language from actual widget sizeHints
+        wide_req = 48  # margins + spacing + brand/help/dot/divider slack
+        if hasattr(self, "source_combo"):
+            src_min = max(116, self.source_combo.fontMetrics().horizontalAdvance("0123456789AB") + 32)
+            self.source_combo.setMinimumWidth(src_min)
+            wide_req += src_min
+        if hasattr(self, "resource_bar"):
+            wide_req += max(60, self.resource_bar.sizeHint().width())
+        if hasattr(self, "_win_ctrl_box"):
+            wide_req += max(120, self._win_ctrl_box.sizeHint().width())
+        if hasattr(self, "capture_status_lbl"):
+            wide_req += max(80, self.capture_status_lbl.sizeHint().width())
+        for btn, wide_txt in (
+            (getattr(self, "refresh_btn", None), translate_text("刷新", lang)),
+            (getattr(self, "settings_btn", None), tr("btn_settings", lang)),
+            (getattr(self, "freeze_screen_btn", None), translate_text("恢复画面" if getattr(self, "_freeze_screen", False) else "冻结画面", lang)),
+            (getattr(self, "capture_btn", None), tr("btn_stop_capture", lang) if (hasattr(self, "capture_btn") and self.capture_btn.isChecked()) else tr("btn_start_capture", lang)),
+            (getattr(self, "emergency_stop_btn", None), tr("btn_estop", lang)),
+            (getattr(self, "_pill_dark", None), translate_text("黑夜", lang)),
+            (getattr(self, "_pill_light", None), translate_text("白天", lang)),
+        ):
+            if btn is not None:
+                fm = btn.fontMetrics()
+                wide_req += fm.horizontalAdvance(wide_txt) + 34
+        narrow_top = w < wide_req
+        self._is_narrow_top = narrow_top
         if hasattr(self, "_pill_dark") and hasattr(self, "_pill_light") and hasattr(self, "_theme_icon_btn"):
             self._pill_dark.setVisible(not narrow_top)
             self._pill_light.setVisible(not narrow_top)
@@ -2009,7 +2036,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.freeze_screen_btn.setIcon(load_lucide_icon("pause", icon_fg, 14))
         self.capture_btn.setIcon(load_lucide_icon("square" if self.capture_btn.isChecked() else "play", icon_fg, 14))
         self.emergency_stop_btn.setIcon(load_lucide_icon("octagon-alert", "#FFFFFF" if ai_active else icon_fg, 14))
-        if self.width() >= 1020:
+        if not getattr(self, "_is_narrow_top", False):
             self.capture_btn.setText(
                 tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang)
             )
@@ -2719,7 +2746,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.setChecked(active)
         self._capture_dot.set_active(active)
         self.capture_btn.setText(
-            "" if self.width() < 1020 else (tr("btn_stop_capture", lang) if active else tr("btn_start_capture", lang))
+            "" if getattr(self, "_is_narrow_top", False) else (tr("btn_stop_capture", lang) if active else tr("btn_start_capture", lang))
         )
         self.capture_btn.setMinimumWidth(self.capture_btn.sizeHint().width())
         self.capture_btn.blockSignals(False)
@@ -2749,12 +2776,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             _set_label_cached(self.notice_banner, "")
         else:
             raw_text = str(text)
-            disp_text = translate_text(raw_text, get_current_language())
             resolved_tone = tone if tone is not None else _infer_banner_tone(raw_text)
             set_widget_tone(self._notice_bar, resolved_tone)
             set_widget_tone(self.notice_banner, resolved_tone)
-            self.notice_banner.setProperty("_ls_orig_text", raw_text)
-            _set_label_cached(self.notice_banner, disp_text)
+            _set_label_cached(self.notice_banner, raw_text)
             if not self.notice_banner.isVisible():
                 self.notice_banner.setVisible(True)
             if not self._notice_bar.isVisible():
@@ -2938,9 +2963,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         set_widget_tone(self.ai_status_badge, tone)
         self._set_ai_active_ui(False)
         self.mixer_widget.handle_ai_result(res)
-        if res.state == AIJobState.EMERGENCY_STOPPED and "用户" not in (res.error_message or ""):
+        if res.state == AIJobState.EMERGENCY_STOPPED and getattr(res, "stop_reason", None) in ("ram_guard", "vram_guard"):
+            err_msg = res.error or ""
             self.show_banner_message(
-                f"🛑 内存护栏自动紧急停止 AI（{res.error_message or ''}）：子进程与临时输出已清理，关闭浏览器等占用内存的程序后重试。",
+                f"🛑 内存护栏自动紧急停止 AI（{err_msg}）：子进程与临时输出已清理，关闭浏览器等占用内存的程序后重试。",
                 tone="warn",
             )
         if not self.isVisible() or self.isMinimized():
