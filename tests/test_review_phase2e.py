@@ -235,7 +235,6 @@ def test_e10_design_doc_and_design_sheet_cli_exist() -> None:
     assert "--design-sheet" in script_src, "scripts/make_screenshots.py missing --design-sheet option"
 
 
-@pytest.mark.xfail(strict=True, reason="E11")
 def test_e11_default_ab_panel_single_row_le_120px_at_1366x768() -> None:
     """E11: At 1366x768 default state, A/B bottom dock must stay compact (<= 120px height)."""
     app, win, mixer = _make_window()

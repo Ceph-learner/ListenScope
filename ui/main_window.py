@@ -867,20 +867,30 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         bottom_dock_l.addWidget(self._workspace_rail)
 
         # 3. BOTTOM 120s HISTORY TIMELINE + A/B LOOP + AI TRIGGER BAR
-        self._history_box = bottom_box = QtWidgets.QGroupBox("RING BUFFER // 120秒历史缓冲与 A/B 片段 (~46MB) + AI 离线分轨")
+        self._history_box = bottom_box = QtWidgets.QGroupBox("120秒历史缓冲与 A/B 片段 (~46MB)")
         self._bottom_l = bottom_l = QtWidgets.QVBoxLayout(bottom_box)
-        bottom_l.setContentsMargins(8, 4, 8, 4)
-        bottom_l.setSpacing(3)
+        bottom_l.setContentsMargins(6, 2, 6, 2)
+        bottom_l.setSpacing(2)
 
-        row_a = FlowLayout(margin=0, h_spacing=6, v_spacing=3)
+        row_a = QtWidgets.QHBoxLayout()
+        row_a.setContentsMargins(0, 0, 0, 0)
+        row_a.setSpacing(5)
         self.history_coverage_lbl = QtWidgets.QLabel("已缓冲: 0.0 / 120.0 s")
         self.history_coverage_lbl.setObjectName("monoTelemetry")
-        self.recent_10_btn = QtWidgets.QPushButton("选最近 10s")
-        self.recent_30_btn = QtWidgets.QPushButton("选最近 30s")
-        self.recent_60_btn = QtWidgets.QPushButton("选最近 60s")
-        self.recent_10_btn.clicked.connect(lambda: self._pick_recent(10.0))
-        self.recent_30_btn.clicked.connect(lambda: self._pick_recent(30.0))
-        self.recent_60_btn.clicked.connect(lambda: self._pick_recent(60.0))
+
+        recent_seg = QtWidgets.QFrame()
+        recent_seg.setObjectName("acidModeGroup")
+        recent_seg_l = QtWidgets.QHBoxLayout(recent_seg)
+        recent_seg_l.setContentsMargins(1, 1, 1, 1)
+        recent_seg_l.setSpacing(1)
+        self.recent_10_btn = QtWidgets.QPushButton("10s")
+        self.recent_30_btn = QtWidgets.QPushButton("30s")
+        self.recent_60_btn = QtWidgets.QPushButton("60s")
+        for rbtn, rsec in ((self.recent_10_btn, 10.0), (self.recent_30_btn, 30.0), (self.recent_60_btn, 60.0)):
+            rbtn.setObjectName("acidPillBtn")
+            rbtn.setToolTip(f"选最近 {int(rsec)}s")
+            rbtn.clicked.connect(lambda _c=False, s=rsec: self._pick_recent(s))
+            recent_seg_l.addWidget(rbtn)
 
         self.start_ago_spin = QtWidgets.QDoubleSpinBox()
         self.start_ago_spin.setRange(0.5, 120.0)
@@ -906,8 +916,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ab_b_fwd_btn = QtWidgets.QPushButton("B+1s")
         self.ab_b_fwd_btn.clicked.connect(lambda: self._nudge_ab("b", +1.0))
 
-        row_a_transport = QtWidgets.QHBoxLayout()
-        row_a_transport.setSpacing(8)
         self.ab_play_btn = QtWidgets.QPushButton("A/B 播放")
         self.ab_play_btn.setObjectName("acidPrimaryBtn")
         self.ab_stop_btn = QtWidgets.QPushButton("停止回放")
@@ -931,7 +939,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         self.ab_more_btn = QtWidgets.QPushButton("⋯ 更多")
         self.ab_more_btn.setCheckable(True)
-        self.ab_more_btn.setToolTip("展开或收起 A/B 微调、导出、缩放与书签控件")
+        self.ab_more_btn.setToolTip("展开或收起 A/B 微调、AI 分轨、导出、缩放与书签控件")
         self.ab_more_btn.clicked.connect(self._on_ab_more_toggled)
 
         row_a.addWidget(self.history_coverage_lbl)
@@ -939,17 +947,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             HelpBadge(
                 "120 秒历史缓冲与 A/B 选区用法",
                 "• 环形缓冲始终在内存中保留最近 120 秒音频（固定约 46MB，绝不无限增长）。\n"
-                "• 听到想练的乐句时，直接点「选最近 10s / 30s / 60s」或在下方波形轴上拖动绿色 A/B 边界线。\n"
-                "• 选好后既可慢速（0.5x–1.25x）不变调循环精听，也可直接把该 A/B 片段送入下方 AI 2-Stem / 4-Stem 分轨。",
+                "• 听到想练的乐句时，直接点「10s / 30s / 60s」或在下方波形轴上拖动绿色 A/B 边界线。\n"
+                "• 展开「⋯ 更多」可使用 A/B 微调、书签管理与 AI 2-Stem / 4-Stem 分轨。",
             )
         )
-        row_a.addWidget(self.recent_10_btn)
-        row_a.addWidget(self.recent_30_btn)
-        row_a.addWidget(self.recent_60_btn)
+        row_a.addWidget(recent_seg)
         row_a.addWidget(self.ab_play_btn)
         row_a.addWidget(self.ab_stop_btn)
         row_a.addWidget(self.ab_loop_chk)
         row_a.addWidget(self.ab_speed_combo)
+        row_a.addStretch(1)
         row_a.addWidget(self.ab_more_btn)
         bottom_l.addLayout(row_a)
 
@@ -961,10 +968,22 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         more_flow.addWidget(self.start_ago_spin)
         more_flow.addWidget(self.end_ago_spin)
         more_flow.addWidget(self.apply_ab_btn)
-        more_flow.addWidget(self.ab_a_back_btn)
-        more_flow.addWidget(self.ab_a_fwd_btn)
-        more_flow.addWidget(self.ab_b_back_btn)
-        more_flow.addWidget(self.ab_b_fwd_btn)
+        nudge_a = QtWidgets.QFrame()
+        nudge_a.setObjectName("acidModeGroup")
+        na_l = QtWidgets.QHBoxLayout(nudge_a)
+        na_l.setContentsMargins(1, 1, 1, 1)
+        na_l.setSpacing(1)
+        na_l.addWidget(self.ab_a_back_btn)
+        na_l.addWidget(self.ab_a_fwd_btn)
+        nudge_b = QtWidgets.QFrame()
+        nudge_b.setObjectName("acidModeGroup")
+        nb_l = QtWidgets.QHBoxLayout(nudge_b)
+        nb_l.setContentsMargins(1, 1, 1, 1)
+        nb_l.setSpacing(1)
+        nb_l.addWidget(self.ab_b_back_btn)
+        nb_l.addWidget(self.ab_b_fwd_btn)
+        more_flow.addWidget(nudge_a)
+        more_flow.addWidget(nudge_b)
         self.ab_snap_btn = QtWidgets.QPushButton("贴近零点")
         self.ab_snap_btn.clicked.connect(self.ab_snap_requested.emit)
         more_flow.addWidget(self.ab_snap_btn)
@@ -992,8 +1011,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.history_overview_plot.hideButtons()
         except Exception:
             pass
-        self.history_overview_plot.setMinimumHeight(56)
-        self.history_overview_plot.setMaximumHeight(70)
+        self.history_overview_plot.setMinimumHeight(40)
+        self.history_overview_plot.setMaximumHeight(48)
         self.history_overview_plot.setBackground("#F8FAFC")
         history_view = self.history_overview_plot.getViewBox()
         history_view.setLimits(xMin=-120.0, xMax=0.0, minXRange=0.25, maxXRange=120.0)
@@ -1107,12 +1126,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         )
         row_b.addWidget(self.sep_2stem_btn)
         row_b.addWidget(self.sep_4stem_btn)
-        bottom_l.addLayout(row_b)
+        more_v.addLayout(row_b)
 
         bottom_dock_l.addWidget(bottom_box)
         self._main_splitter.addWidget(self._bottom_dock)
-        self._main_splitter.setStretchFactor(0, 3)
-        self._main_splitter.setStretchFactor(1, 1)
+        self._main_splitter.setStretchFactor(0, 1)
+        self._main_splitter.setStretchFactor(1, 0)
+        self._bottom_dock.setMaximumHeight(118)
         main_layout.addWidget(self._main_splitter, 1)
 
         self._acid_footer = AcidBarcodeFooter()
@@ -1397,6 +1417,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _on_ab_more_toggled(self, checked: bool) -> None:
         self._ab_more_user_override = bool(checked)
         self._ab_more_panel.setVisible(bool(checked))
+        self._bottom_dock.setMaximumHeight(16777215 if checked else 118)
         set_i18n_text(self.ab_more_btn, "▴ 收起更多" if checked else "⋯ 更多")
 
     def set_bottom_panel_collapsed(self, collapsed: bool) -> None:
@@ -1435,6 +1456,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if self._ab_more_user_override is None:
             show_more = False
             self._ab_more_panel.setVisible(show_more)
+            self._bottom_dock.setMaximumHeight(118)
             self.ab_more_btn.blockSignals(True)
             self.ab_more_btn.setChecked(show_more)
             set_i18n_text(self.ab_more_btn, "▴ 收起更多" if show_more else "⋯ 更多")
