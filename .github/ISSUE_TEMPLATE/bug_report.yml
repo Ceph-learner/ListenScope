@@ -1,0 +1,55 @@
+name: Bug Report
+description: 报告 ListenScope 的 Bug 或兼容问题（请附版本与诊断包）
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈问题！请如实填写以下信息（尤其是页脚版本号与诊断包），以便定位问题。
+  - type: input
+    id: version
+    attributes:
+      label: 软件版本号（页脚显示的 dev / release 版本号）
+      placeholder: "例如：v1.0.1-dev+abc1234 或 v1.1.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: "例如：Windows 11 23H2 (Build 22631)"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: 显卡与内存规格
+      placeholder: "例如：RTX 5060 Ti 8GB / 16GB RAM，或 无独显"
+    validations:
+      required: true
+  - type: dropdown
+    id: capture_mode
+    attributes:
+      label: 捕获模式
+      options:
+        - 进程环回捕获 (Process Loopback)
+        - 系统环回捕获 (System Loopback)
+        - 本地音频文件 / WAV 转 MIDI
+        - 模拟信号 (--simulate)
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述与复现步骤
+      placeholder: "1. 打开软件...\n2. 点击...\n3. 出现..."
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: 诊断包 / 日志摘要
+      description: 请将设置页导出的诊断包（.zip）拖拽至此，或粘贴关键错误日志（注意移除个人路径）。
+    validations:
+      required: false

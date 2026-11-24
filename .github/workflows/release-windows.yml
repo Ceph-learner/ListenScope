@@ -137,6 +137,17 @@ jobs:
           }
           Write-Host "Relocated frozen smoke test passed (ExitCode=0)"
 
+      - name: Stage license and notice files into dist\ListenScopeCore
+        run: |
+          Copy-Item -Path "LICENSE", "THIRD_PARTY_NOTICES.md", "ACKNOWLEDGMENTS.md" -Destination "dist\ListenScopeCore" -Force
+          Copy-Item -Path "licenses" -Destination "dist\ListenScopeCore\licenses" -Recurse -Force
+          foreach ($req in @("LICENSE", "THIRD_PARTY_NOTICES.md", "ACKNOWLEDGMENTS.md", "licenses\LGPL-3.0.txt")) {
+            $p = Join-Path "dist\ListenScopeCore" $req
+            if (-not (Test-Path $p)) {
+              throw "Missing staged license file in dist\ListenScopeCore: $p"
+            }
+          }
+
       - name: Package Portable Core ZIP
         run: |
           New-Item -ItemType Directory -Force -Path "dist\release" | Out-Null

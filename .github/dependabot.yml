@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # AI & MIDI runtimes are pinned/constrained by cu128 and TensorFlow compatibility
+      - dependency-name: "torch*"
+      - dependency-name: "torchaudio*"
+      - dependency-name: "onnxruntime*"
+      - dependency-name: "audio-separator"
+      - dependency-name: "demucs"
+      - dependency-name: "basic-pitch"
+      - dependency-name: "tensorflow*"
+      # PySide6 is intentionally pinned <6.10 due to 6.12 Signal.emit regression
+      - dependency-name: "PySide6*"
