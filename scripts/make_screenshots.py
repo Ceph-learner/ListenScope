@@ -132,10 +132,18 @@ def capture_screenshots(
 ) -> list[Path]:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     if sys.platform == "win32":
+        for font_file in ("msyh.ttc", "msyhbd.ttc", "segoeui.ttf", "consola.ttf"):
+            fp = Path(r"C:\Windows\Fonts") / font_file
+            if fp.exists():
+                QtGui.QFontDatabase.addApplicationFont(str(fp))
         families = set(QtGui.QFontDatabase.families())
         assert any(f in families for f in ("Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI")), (
             f"Missing Windows UI fonts in QFontDatabase: {sorted(families)[:20]}"
         )
+        if "Microsoft YaHei UI" in families:
+            app.setFont(QtGui.QFont("Microsoft YaHei UI", 10))
+        elif "Microsoft YaHei" in families:
+            app.setFont(QtGui.QFont("Microsoft YaHei", 10))
     snap, spec_mat = _build_synthetic_snapshot()
     if spec_mat is None or spec_mat.size == 0:
         n_frames, n_bins = 450, 96

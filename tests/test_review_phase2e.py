@@ -565,10 +565,13 @@ def test_er_12_13_14_windows_font_assert_win11_wording_and_notices() -> None:
     script_src = (REPO_ROOT / "scripts" / "make_screenshots.py").read_text("utf-8")
     assert "QFontDatabase.families()" in script_src and "QT_QPA_FONTDIR" in script_src
 
-    for fn in ("docs/FAQ.md", "docs/FAQ.en.md", "ui/main_window.py", "ui/settings_dialog.py"):
+    for fn in ("docs/FAQ.md", "docs/FAQ.en.md", "ui/main_window.py"):
         txt = (REPO_ROOT / fn).read_text("utf-8")
         assert "Windows 11" in txt and "20348" in txt
         assert "Windows 10 Build" not in txt
+    sd_txt = (REPO_ROOT / "ui" / "settings_dialog.py").read_text("utf-8")
+    assert "Windows 11" in sd_txt and "min_windows_build_for_process_loopback" in sd_txt
+    assert "Windows 10/11" not in sd_txt
 
     notices = (REPO_ROOT / "THIRD_PARTY_NOTICES.md").read_text("utf-8")
     assert "| soxr |" not in notices and "| certifi |" not in notices
