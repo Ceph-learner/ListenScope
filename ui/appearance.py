@@ -295,14 +295,24 @@ QPushButton#analysisAction:enabled {{ background: {sel_bg}; border-color: {accen
 QPushButton#analysisAction:hover:enabled {{ background: {checked_bg}; }}
 QPushButton#analysisAction:checked:enabled {{ background: {checked_bg}; border-color: {accent}; }}
 QPushButton#emergencyStopBtn {{
+    background-color: transparent;
+    color: {subtle_fg};
+    border: 1px solid {rim};
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 4px;
+}}
+QPushButton#emergencyStopBtn:hover {{
+    background-color: {hover};
+    border-color: {sem['err_bd']};
+    color: {sem['err_text']};
+}}
+QPushButton#emergencyStopBtn[ai_active="true"] {{
     background-color: #B81D24;
     color: #FFFFFF;
     border: 1px solid #FF6B6B;
-    font-weight: 700;
-    padding: 5px 12px;
-    border-radius: 5px;
 }}
-QPushButton#emergencyStopBtn:hover {{ background-color: #D9262E; }}
+QPushButton#emergencyStopBtn[ai_active="true"]:hover {{ background-color: #D9262E; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTableWidget:focus, QToolButton#helpBadge:focus {{
     border: 1px solid {accent};
 }}

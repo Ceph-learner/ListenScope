@@ -582,63 +582,96 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         main_layout.setContentsMargins(8, 6, 8, 6)
         main_layout.setSpacing(5)
 
-        # 1. TWO-TIER COMMAND HEADER: Brand Badge + Telemetry + Segmented Skin Switcher + Audio Input + Hazard/Emergency Stop + Window Controls
-        self._topbar_frame = topbar_frame = QtWidgets.QFrame()
+        # 1. SINGLE-ROW COMMAND HEADER (<=56px): Brand + Audio Input + Capture + Freeze | Resource + AI + Theme + Settings + E-STOP + Window Controls
+        self._topbar_frame = self._top_bar = topbar_frame = QtWidgets.QFrame()
         topbar_frame.setObjectName("acidTopbar")
+        topbar_frame.setMaximumHeight(54)
         topbar_frame.installEventFilter(self)
         self._topbar_v = topbar_v = QtWidgets.QVBoxLayout(topbar_frame)
-        topbar_v.setContentsMargins(10, 6, 10, 5)
-        topbar_v.setSpacing(5)
+        topbar_v.setContentsMargins(8, 4, 8, 4)
+        topbar_v.setSpacing(0)
 
         row_cmd = QtWidgets.QHBoxLayout()
         row_cmd.setContentsMargins(0, 0, 0, 0)
         row_cmd.setSpacing(5)
 
-        self._brand_badge = ChamferBadge("LS", size=QtCore.QSize(36, 34), chamfer=7)
-        brand_txt = QtWidgets.QVBoxLayout()
-        brand_txt.setContentsMargins(1, 0, 4, 0)
-        brand_txt.setSpacing(3)
+        self._brand_badge = ChamferBadge("LS", size=QtCore.QSize(28, 28), chamfer=6)
+        self._brand_badge.setToolTip("LISTENSCOPE // 实时音频分析与吉他扒谱工作台")
         self._brand_eye = ElidedLabel("LISTENSCOPE // AUDIO TELEMETRY")
         self._brand_eye.setObjectName("brandEyebrow")
-        self._brand_eye.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Preferred,
-        )
-        brand_title_row = QtWidgets.QHBoxLayout()
-        brand_title_row.setContentsMargins(0, 0, 0, 0)
-        brand_title_row.setSpacing(7)
-        self._brand_title = QtWidgets.QLabel("实时音频分析与吉他扒谱工作台")
+        self._brand_eye.setVisible(False)
+        self._brand_title = QtWidgets.QLabel("ListenScope")
         self._brand_title.setObjectName("telemetryTitle")
-        self._brand_title.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Preferred,
-            QtWidgets.QSizePolicy.Policy.Preferred,
-        )
+        self._brand_title.setVisible(False)
         self._header_pulse = TelemetryPulseStrip(bar_count=6)
+        self._header_pulse.setVisible(False)
         self._acid_hero_echo_lbl = QtWidgets.QLabel("WORKBENCH")
         self._acid_hero_echo_lbl.setObjectName("acidEchoTitle")
         self._acid_hero_echo_lbl.setVisible(False)
         self._acid_hero_sub_lbl = QtWidgets.QLabel("实时频谱 · 120s 分轨终端")
         self._acid_hero_sub_lbl.setObjectName("acidHeroSub")
         self._acid_hero_sub_lbl.setVisible(False)
-        brand_title_row.addWidget(self._brand_title)
-        brand_title_row.addWidget(self._header_pulse)
-        brand_title_row.addStretch(1)
-        brand_txt.addWidget(self._brand_eye)
-        brand_txt.addLayout(brand_title_row)
 
         row_cmd.addWidget(self._brand_badge)
-        row_cmd.addLayout(brand_txt, 1)
+
+        self._src_pill = QtWidgets.QLabel("AUDIO_IN // 音源")
+        self._src_pill.setObjectName("telemetryPill")
+        self._src_pill.setVisible(False)
+        self.source_combo = MarqueeComboBox()
+        self.source_combo.setMinimumWidth(140)
+        self.source_combo.setToolTip("AUDIO_IN // 选择要捕获的音频进程或系统环回")
+        self.source_combo.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.source_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.refresh_btn = QtWidgets.QPushButton("刷新")
+        self.refresh_btn.setToolTip("刷新音频进程列表")
+        self.refresh_btn.clicked.connect(self.refresh_sources_requested.emit)
+
+        self.capture_btn = QtWidgets.QPushButton("开始捕获")
+        self.capture_btn.setToolTip("CAPTURE_START // 开始或停止实时音频捕获 (Space)")
+        self.capture_btn.setObjectName("captureBtn")
+        self.capture_btn.setCheckable(True)
+        self.capture_btn.clicked.connect(self._on_capture_clicked)
+
+        self._capture_dot = SignalLockDot()
+        self.capture_status_lbl = QtWidgets.QLabel("未捕获")
+        self.capture_status_lbl.setObjectName("captureStatus")
+        set_widget_tone(self.capture_status_lbl, "info")
+
+        self.freeze_screen_btn = QtWidgets.QPushButton("⏸ 冻结")
+        self.freeze_screen_btn.setCheckable(True)
+        self.freeze_screen_btn.setToolTip("冻结/恢复实时频谱、和弦、调性与音准画面刷新 (快捷键 F)")
+        self.freeze_screen_btn.toggled.connect(self.set_freeze_screen)
+
+        row_cmd.addWidget(self.source_combo, 1)
+        row_cmd.addWidget(
+            HelpBadge(
+                "按进程捕获说明",
+                "优先选择正在播放音乐的进程（如 QQMusic.exe），仅捕获该应用输出，避免把混音或节拍器再次录回；"
+                "若系统 Build < 20348 或列表未找到播放器，可改用系统环回。",
+            )
+        )
+        row_cmd.addWidget(self.refresh_btn)
+        row_cmd.addWidget(self.capture_btn)
+        row_cmd.addWidget(self._capture_dot)
+        row_cmd.addWidget(self.capture_status_lbl)
+        row_cmd.addWidget(self.freeze_screen_btn)
 
         self._topbar_vdiv = QtWidgets.QFrame()
         self._topbar_vdiv.setObjectName("topbarVDivider")
         self._topbar_vdiv.setFrameShape(QtWidgets.QFrame.Shape.VLine)
-        self._topbar_vdiv.setFixedHeight(30)
+        self._topbar_vdiv.setFixedHeight(24)
         row_cmd.addWidget(self._topbar_vdiv)
 
         self.resource_bar = ResourceMonitorBar()
         self.ai_status_badge = QtWidgets.QLabel("AI: Idle")
         self.ai_status_badge.setObjectName("aiStatusBadge")
         set_widget_tone(self.ai_status_badge, "info")
+        self.ai_status_badge.setVisible(False)
 
         self._skin_switcher = QtWidgets.QWidget()
         self._skin_switcher.setObjectName("acidModeGroup")
@@ -665,15 +698,28 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._hazard_bar.setVisible(False)
 
         self.emergency_stop_btn = QtWidgets.QPushButton("紧急停止 AI")
-        self.emergency_stop_btn.setToolTip("E-STOP // 紧急停止所有 AI 任务并清理显存")
+        self.emergency_stop_btn.setToolTip("E-STOP // 紧急停止所有 AI 任务并清理显存 (Ctrl+Shift+E)")
         self.emergency_stop_btn.setObjectName("emergencyStopBtn")
+        self.emergency_stop_btn.setProperty("ai_active", False)
+        self.emergency_stop_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.emergency_stop_btn.setMinimumWidth(88)
         self.emergency_stop_btn.clicked.connect(self.emergency_stop_requested.emit)
+        self._estop_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Shift+E"), self)
+        self._estop_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
+        self._estop_shortcut.activated.connect(self.emergency_stop_requested.emit)
+
+        self._shortcut_pill = QtWidgets.QLabel("SPACE // 快捷键")
+        self._shortcut_pill.setObjectName("telemetryPill")
+        self._shortcut_pill.setVisible(False)
+        self._skin_badge = QtWidgets.QLabel("ACID // CLINICAL_LIGHT")
+        self._skin_badge.setObjectName("telemetryPill")
+        self._skin_badge.setVisible(False)
 
         # Frameless Window Control Buttons (Minimize / Maximize-Restore / Close)
         self._win_ctrl_box = QtWidgets.QWidget()
         win_ctrl_l = QtWidgets.QHBoxLayout(self._win_ctrl_box)
-        win_ctrl_l.setContentsMargins(4, 0, 0, 0)
-        win_ctrl_l.setSpacing(4)
+        win_ctrl_l.setContentsMargins(2, 0, 0, 0)
+        win_ctrl_l.setSpacing(2)
         self.win_min_btn = WindowGlyphButton("min", "—")
         self.win_min_btn.setObjectName("windowCtrlBtn")
         self.win_min_btn.setAccessibleName("最小化窗口")
@@ -705,67 +751,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_cmd.addWidget(self._win_ctrl_box)
         topbar_v.addLayout(row_cmd)
 
-        self._topbar_divider = divider = QtWidgets.QFrame()
-        divider.setObjectName("acidDivider")
-        divider.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        topbar_v.addWidget(divider)
-
-        row_io = QtWidgets.QHBoxLayout()
-        row_io.setContentsMargins(0, 0, 0, 0)
-        row_io.setSpacing(6)
-        self._src_pill = QtWidgets.QLabel("AUDIO_IN // 音源")
-        self._src_pill.setObjectName("telemetryPill")
-        self.source_combo = MarqueeComboBox()
-        self.source_combo.setMinimumWidth(140)
-        self.source_combo.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-        self.source_combo.setSizeAdjustPolicy(
-            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self.refresh_btn = QtWidgets.QPushButton("刷新进程")
-        self.refresh_btn.clicked.connect(self.refresh_sources_requested.emit)
-
-        self.capture_btn = QtWidgets.QPushButton("开始捕获")
-        self.capture_btn.setToolTip("CAPTURE_START // 开始或停止实时音频捕获 (Space)")
-        self.capture_btn.setObjectName("captureBtn")
-        self.capture_btn.setCheckable(True)
-        self.capture_btn.clicked.connect(self._on_capture_clicked)
-
-        self._capture_dot = SignalLockDot()
-        self.capture_status_lbl = QtWidgets.QLabel("未捕获")
-        self.capture_status_lbl.setObjectName("captureStatus")
-        set_widget_tone(self.capture_status_lbl, "info")
-
-        self._shortcut_pill = QtWidgets.QLabel("SPACE // 快捷键")
-        self._shortcut_pill.setObjectName("telemetryPill")
-        self._skin_badge = QtWidgets.QLabel("ACID // CLINICAL_LIGHT")
-        self._skin_badge.setObjectName("telemetryPill")
-
-        self.freeze_screen_btn = QtWidgets.QPushButton("⏸ 冻结画面")
-        self.freeze_screen_btn.setCheckable(True)
-        self.freeze_screen_btn.setToolTip("冻结/恢复实时频谱、和弦、调性与音准画面刷新 (快捷键 F)")
-        self.freeze_screen_btn.toggled.connect(self.set_freeze_screen)
-
-        row_io.addWidget(self._src_pill)
-        row_io.addWidget(self.source_combo, 1)
-        row_io.addWidget(
-            HelpBadge(
-                "按进程捕获说明",
-                "优先选择正在播放音乐的进程（如 QQMusic.exe），仅捕获该应用输出，避免把混音或节拍器再次录回；"
-                "若系统 Build < 20348 或列表未找到播放器，可改用系统环回。",
-            )
-        )
-        row_io.addWidget(self.refresh_btn)
-        row_io.addWidget(self.capture_btn)
-        row_io.addWidget(self._capture_dot)
-        row_io.addWidget(self.capture_status_lbl)
-        row_io.addWidget(self.freeze_screen_btn)
-        row_io.addStretch(1)
-        row_io.addWidget(self._shortcut_pill)
-        row_io.addWidget(self._skin_badge)
-        topbar_v.addLayout(row_io)
+        self._topbar_divider = QtWidgets.QFrame()
+        self._topbar_divider.setObjectName("acidDivider")
+        self._topbar_divider.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        self._topbar_divider.setVisible(False)
 
         main_layout.addWidget(topbar_frame)
 
@@ -1376,12 +1365,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         # Tighten shell and topbar padding on short/narrow screens
         self._workspace_layout.setContentsMargins(4 if compact_h else 8, 2 if compact_h else 6, 4 if compact_h else 8, 2 if compact_h else 6)
         self._workspace_layout.setSpacing(2 if compact_h else 5)
-        self._topbar_v.setContentsMargins(8 if compact_h else 10, 2 if compact_h else 6, 8 if compact_h else 10, 2 if compact_h else 5)
-        self._topbar_v.setSpacing(2 if compact_h else 5)
-        self._brand_eye.setVisible(not compact_h)
-        self._topbar_divider.setVisible(not compact_h)
-        self._shortcut_pill.setVisible(not compact_h and not compact_w)
-        self._skin_badge.setVisible(not compact_h and not compact_w)
+        self._topbar_v.setContentsMargins(8, 3 if compact_h else 4, 8, 3 if compact_h else 4)
+        self._topbar_v.setSpacing(0)
+        self._brand_eye.setVisible(False)
+        self._topbar_divider.setVisible(False)
+        self._shortcut_pill.setVisible(False)
+        self._skin_badge.setVisible(False)
 
         # Default A/B panel to compact single-row mode; user can expand via '⋯ 更多'
         if self._ab_more_user_override is None:
@@ -1850,7 +1839,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         for idx, title in enumerate(tab_titles):
             if idx < self.tabs.count():
                 self.tabs.setTabText(idx, title)
-        self._hazard_bar.setVisible(is_active)
+        ai_active = bool(self.emergency_stop_btn.property("ai_active"))
+        self._hazard_bar.setVisible(is_active and ai_active)
         self._acid_footer.setVisible(is_active)
         if is_active:
             p = get_acid_palette(variant or "light")
@@ -2673,12 +2663,29 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.spectrum_widget.update_analysis(snap, spectrogram=spectrogram)
         self.chroma_widget.update_analysis(snap, chroma_history=chroma_history)
 
+    def _set_ai_active_ui(self, active: bool) -> None:
+        self.emergency_stop_btn.setProperty("ai_active", active)
+        style = self.emergency_stop_btn.style()
+        if style is not None:
+            style.unpolish(self.emergency_stop_btn)
+            style.polish(self.emergency_stop_btn)
+        self.ai_status_badge.setVisible(active)
+        is_acid = self._acid_variant in ("light", "dark")
+        self._hazard_bar.setVisible(is_acid and active)
+
     def update_ai_progress(self, prog: AIJobProgress) -> None:
         txt = f"AI: {prog.state.value} ({int(round(prog.progress * 100))}%)"
         if txt != self._last_ai_badge_txt:
             self.ai_status_badge.setText(txt)
             self._last_ai_badge_txt = txt
         set_widget_tone(self.ai_status_badge, "info")
+        is_running = prog.state in (
+            AIJobState.QUEUED,
+            AIJobState.LOADING_MODEL,
+            AIJobState.SEPARATING,
+            AIJobState.POSTPROCESSING,
+        )
+        self._set_ai_active_ui(is_running)
         self.mixer_widget.update_ai_progress(prog)
 
     def handle_ai_result(self, res: AIJobResult) -> None:
@@ -2695,6 +2702,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         else:
             tone = "info"
         set_widget_tone(self.ai_status_badge, tone)
+        self._set_ai_active_ui(False)
         self.mixer_widget.handle_ai_result(res)
         if not self.isVisible() or self.isMinimized():
             try:

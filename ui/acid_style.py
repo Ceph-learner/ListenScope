@@ -2475,19 +2475,30 @@ QPushButton#captureBtn:checked:hover {{
     color: {p.text_inverse};
 }}
 QPushButton#emergencyStopBtn {{
+    background-color: transparent;
+    color: {p.text_secondary};
+    border: 1px solid {p.border};
+    border-radius: 0px;
+    min-height: 20px;
+    padding: 3px 9px;
+    font-family: {cjk_family};
+    font-size: {btn_px}px;
+    font-weight: 700;
+    outline: none;
+}}
+QPushButton#emergencyStopBtn:hover {{
+    background-color: {p.bg_hover};
+    border-color: {p.danger};
+    color: {p.danger};
+}}
+QPushButton#emergencyStopBtn[ai_active="true"] {{
     background-color: {p.danger};
     color: #FFFFFF;
     border: 1px solid {p.danger};
     border-bottom: 2px solid #9A0E22;
-    border-radius: 0px;
-    min-height: 20px;
-    padding: 4px 10px;
-    font-family: {cjk_family};
-    font-size: {btn_px}px;
     font-weight: 800;
-    outline: none;
 }}
-QPushButton#emergencyStopBtn:hover {{
+QPushButton#emergencyStopBtn[ai_active="true"]:hover {{
     background-color: #D91432;
     border-color: #FFFFFF;
     color: #FFFFFF;

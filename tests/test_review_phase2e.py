@@ -38,7 +38,6 @@ def _make_window():
     return app, win, mixer
 
 
-@pytest.mark.xfail(strict=True, reason="E1")
 def test_e1_topbar_single_row_le_56px_and_idle_estop_neutral() -> None:
     """E1: At 1366x768 top bar must be single-row (<=56px), E-STOP neutral when AI idle, <=1 solid accent button."""
     app, win, mixer = _make_window()
