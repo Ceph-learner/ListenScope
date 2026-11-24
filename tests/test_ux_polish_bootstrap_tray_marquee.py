@@ -347,9 +347,8 @@ def test_mainwindow_ux_polish_marquee_dismiss_hide_a_resize_tray_and_4lang(
         assert win._acid_hero_sub_lbl.isVisible() is False
         assert "实时频谱" in win._brand_eye.text()
 
-        # 2. STATIC_LOCK badge + footer tooltip + music-reactive micro-animations freeze cleanly
-        assert win._acid_footer.lock_help is not None
-        assert win._acid_footer.lock_help.parentWidget() is win._acid_footer
+        # 2. Reduce-motion toggle + footer tooltip + music-reactive micro-animations freeze cleanly
+        assert win._acid_footer.lock_btn.toolTip()
         win.update_music_telemetry(0.85, 0.90)
         assert win._telemetry_phase > 0.0
         frozen_phase = win._telemetry_phase

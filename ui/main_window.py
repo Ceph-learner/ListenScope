@@ -2754,7 +2754,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.resource_panel.update_performance_records(perf_records)
         self.resource_panel.update_logs(logs)
         if hasattr(self, "_acid_footer"):
-            self._acid_footer.set_telemetry(cpu_pct=snap.cpu_percent)
+            cpu_val = getattr(snap, "cpu_percent", None)
+            if cpu_val is None:
+                try:
+                    import psutil
+
+                    cpu_val = psutil.cpu_percent(interval=None)
+                except Exception:
+                    cpu_val = None
+            self._acid_footer.set_telemetry(cpu_pct=cpu_val)
 
     def set_freeze_screen(self, frozen: bool) -> None:
         self._freeze_screen = bool(frozen)

@@ -600,6 +600,51 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "실시간 스펙트럼, 코드, 조성 및 음정 표시 일시정지/재개 (단축키 F)",
         "ja": "リアルタイムスペクトル・コード・調・音程表示の固定/再開 (ショートカット F)",
     },
+    "LISTENSCOPE // 实时音频分析与吉他扒谱工作台": {
+        "en": "LISTENSCOPE // Realtime Audio Analysis & Guitar Practice Workbench",
+        "ko": "LISTENSCOPE // 실시간 오디오 분석 및 기타 연습 워크벤치",
+        "ja": "LISTENSCOPE // リアルタイム音声解析＆ギター練習ワークベンチ",
+    },
+    "AUDIO_IN // 选择要捕获的音频进程或系统环回": {
+        "en": "AUDIO_IN // Select audio process or system loopback to capture",
+        "ko": "AUDIO_IN // 캡처할 오디오 프로세스 또는 시스템 루프백 선택",
+        "ja": "AUDIO_IN // キャプチャするプロセスまたはシステムループバックを選択",
+    },
+    "CAPTURE_START // 开始或停止实时音频捕获 (Space)": {
+        "en": "CAPTURE_START // Start or stop live audio capture (Space)",
+        "ko": "CAPTURE_START // 실시간 오디오 캡처 시작/중지 (Space)",
+        "ja": "CAPTURE_START // リアルタイム音声キャプチャ開始/停止 (Space)",
+    },
+    "CONFIG // 设置与系统状态": {
+        "en": "CONFIG // Settings & System Status",
+        "ko": "CONFIG // 설정 및 시스템 상태",
+        "ja": "CONFIG // 設定・システム状態",
+    },
+    "E-STOP // 紧急停止所有 AI 任务并清理显存 (Ctrl+Shift+E)": {
+        "en": "E-STOP // Emergency stop all AI jobs & free VRAM (Ctrl+Shift+E)",
+        "ko": "E-STOP // 모든 AI 작업 긴급 정지 및 VRAM 정리 (Ctrl+Shift+E)",
+        "ja": "E-STOP // 全 AI ジョブ緊急停止＆VRAM 解放 (Ctrl+Shift+E)",
+    },
+    "刷新音频进程列表": {
+        "en": "Refresh audio process list",
+        "ko": "오디오 프로세스 목록 새로고침",
+        "ja": "オーディオプロセス一覧を更新",
+    },
+    "展开或收起 A/B 微调、AI 分轨、导出、缩放与书签控件": {
+        "en": "Expand or collapse A/B fine-tune, AI split, export, zoom & bookmark controls",
+        "ko": "A/B 미세 조정, AI 분리, 내보내기, 확대/축소 및 북마크 컨트롤 펼치기/접기",
+        "ja": "A/B 微調整・AI 分離・書き出し・ズーム・ブックマークの展開/折りたたみ",
+    },
+    "冻结界面遥测微动画（不影响实时频谱与和弦分析）": {
+        "en": "Freeze UI telemetry micro-animations (does not affect live spectrum or chord analysis)",
+        "ko": "UI 텔레메트리 미세 애니메이션 고정 (실시간 스펙트럼/코드 분석에 영향 없음)",
+        "ja": "UI テレメトリの微細アニメーションを固定（リアルタイム解析には影響しません）",
+    },
+    "120秒历史缓冲与 A/B 片段 (~46MB)": {
+        "en": "120s History Buffer & A/B Loop (~46MB)",
+        "ko": "120초 히스토리 버퍼 · A/B 구간 (~46MB)",
+        "ja": "120秒履歴バッファ・A/B 区間 (~46MB)",
+    },
     "展开或收起 A/B 微调、导出、缩放与书签控件": {
         "en": "Expand or collapse A/B fine-tune, export, zoom & bookmark controls",
         "ko": "A/B 미세 조정, 내보내기, 확대/축소 및 북마크 컨트롤 펼치기/접기",
