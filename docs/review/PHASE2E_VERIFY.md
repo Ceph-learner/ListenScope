@@ -53,3 +53,30 @@
 | **ER13** | 多处文档与提示写「Windows 10 Build ≥ 20348」 | 统一改为「进程环回需要 Windows 11（Build ≥ 20348）；Windows 10 可用系统环回」（`README*.md` 按指示跳过，转由 PR #53 处理）；新增 `test_er_12_13_14` | 已改 `@404b023`、`@86bf444` |
 | **ER14** | `rg "import soxr\|from soxr\|certifi"` 确认仓库源码 0 处直接导入 | 从 `THIRD_PARTY_NOTICES.md` 移除未直接引用的 `soxr` 与 `certifi`，标注 `NEEDS_TARGET` 待 Windows `dist/` 实测核对 | 已改 `@a235d3b` |
 | **ER15** | 需用修复后界面重拍截图 | 已重拍 Linux `p2er_after_*.png`、Windows CI `p2er_after_*_win.png` 及 README `docs/images/listenscope_*.png`（5 张） | 已改 `@a235d3b` |
+
+---
+
+## 仓库维护（2026-11-23）
+
+### 1. About、Topics 与合并自动删分支
+- 已更新 `Ceph-learner/ListenScope` 描述为：「🎧 免费、离线的 Windows 练耳扒谱工作台：实时频谱与和弦调性识别，120 秒回溯 A/B 慢放循环，本地 AI 分轨与 MIDI 导出。」
+- Topics 已设为：`music`, `ear-training`, `music-transcription`, `chord-detection`, `key-detection`, `audio-analysis`, `stem-separation`, `demucs`, `midi`, `wasapi`, `pyside6`, `windows`。
+- 已开启 `Settings → Automatically delete head branches`（`--delete-branch-on-merge`）。
+
+### 2. 分支备份与清理清单（共删除 39 个，保留 `main` 与 `docs/readme-zh-refresh`）
+- **备份至私有库 `Ceph-learner/ListenScope-archive` 并 1:1 核对 SHA 后删除（12 个）**：
+  `archive/internal-docs` (`13df0bf0f0`)、`backup/phase0-10-audit` (`b7938cbc64`)、`backup/phase0-13-audit3` (`c3f07bc5dc`)、`backup/phase0-phase1` (`1dbc91ce5b`)、`design/layout-review-20261117` (`4c62c63f49`)、`design/realtime-analysis-review` (`0d2d0afde1`)、`feature/ab-zero-crossing` (`7aa6ae7389`)、`feature/chord-practice-midi-audition` (`ff62a14dbd`)、`feature/drum-audition` (`d511bb47e1`)、`feature/drum-midi-export` (`3563623eea`)、`feature/local-chord-practice` (`3b902a62f8`)、`fix/help-hover-startup-flash-and-bootstrap` (`c06c7f2fd7`)。
+- **已完全合入 `main` 直接删除（27 个）**：
+  `docs/ai-memory-audit`、`feat/key-detection-upgrade`、`feature/appearance-presets`、`feature/live-playback-diagnostics`、`feature/settings-categories`、`feature/ui-polish-p2e`、`fix/ab-playback-diagnostics`、`fix/continuous-import-resampling`、`fix/cuda-wheel-preflight`、`fix/live-loopback-feedback`、`fix/live-output-overwrite-diagnostics`、`fix/live-output-ring`、`fix/live-practice-reliability`、`fix/live-rtf-hop-timing`、`fix/offline-stem-seams`、`fix/review-p2a-engine`、`fix/review-p2b-algo`、`fix/review-p2c-ui`、`fix/review-p2d-windows`、`fix/review-phase1`、`fix/review-ub34-waveform`、`fix/single-stem-midi-output`、`fix/stem-analysis-workflow`、`fix/synthetic-audio-audit`、`fix/ui-ux-polish-v1`、`perf/live-output-callback`、`release/v1.1-prep`。
+
+### 3. CI 偶发失败根因与修复
+- **失败用例**：`main@1ce38c9`（Run `45311282823`）、`#43`（Run `45310837871`）与 `#45`（Run `45311401035`）均在同一用例失败：`tests/test_audit5_and_phase16.py::test_system_loopback_reconnect_updates_name_and_clears_transient_notice`（`AssertionError: assert False is True`）。
+- **根因**：该测试的 `_FakeStream.read()` 无延迟，在重连到 `Desk Speakers` 后，后台 `_capture_loop` 线程在数十微秒内即完成 3 次健康读取并调用 `set_error(None)` 清除了重连提示；主测试线程在 `read_chunk(timeout=0.05)` 唤醒后才轮询 `backend.get_stats()`，已错过瞬时提示窗口，导致 `saw_reconnect_msg` 为 `False`。
+- **修复**：在测试中包装 `backend._stats.set_error` 记录有序状态迁移列表，确定性断言先出现含 `Desk Speakers` 的瞬时重连提示、随后在健康帧后被清除为 `None`，消除线程调度竞态且不弱化断言。
+
+### 4. Dependabot 处置与规则收紧
+- **已合并**：`#44`（`actions/upload-artifact` 4→7）、`#46`（`actions/checkout` 4→7）；`#45`（`actions/setup-python` 5→7）重跑通过后合并。
+- **已关闭**：`#47`（`numpy` 2.x 未完成评估，已记入 `#33`）、`#48` / `#49` / `#51`（`winrt` 4.x 双平台 CI 失败）、`#50`（`setuptools` 双平台 CI 失败）。
+- **配置更新**：`.github/dependabot.yml` 改为 `monthly`，`github-actions` 与 `pip` 各自用 `groups` 合并为单 PR，`open-pull-requests-limit: 2`，忽略 `numpy` 与 `winrt-*` 的主版本升级。
+- **待公开仓库后执行**：开启 `main` 分支保护，要求 `pytest` 与 `pytest-windows` 均通过才可合并。
+
