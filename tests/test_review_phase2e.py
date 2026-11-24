@@ -138,7 +138,6 @@ def test_e5_mixer_empty_state_shows_le_3_disabled_buttons() -> None:
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="E6")
 def test_e6_chord_card_deduplicates_primary_label_and_uses_stability_meter() -> None:
     """E6: Chord card must not duplicate primary chord name in secondary line, and must replace raw correlation text with a 5-bar meter."""
     chroma_src = (REPO_ROOT / "ui" / "chroma_widget.py").read_text("utf-8")
