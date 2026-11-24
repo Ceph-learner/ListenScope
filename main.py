@@ -32,6 +32,7 @@ from core.paths import (
     ensure_current_process_in_kill_job,
     get_bundle_root,
     kill_all_active_subprocesses,
+    launch_detached,
     prepend_ffmpeg_path_env,
     run_external_python,
     subprocess_no_window_kwargs,
@@ -1952,15 +1953,8 @@ class ListenScopeController:
         cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, *sys.argv]
         self.shutdown()
         try:
-            spawn_kw: dict[str, Any] = {"cwd": str(self.work_dir.parent if self.work_dir.name == "workspace_outputs" else os.getcwd())}
-            if sys.platform == "win32":
-                spawn_kw["creationflags"] = (
-                    getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
-                )
-            else:
-                spawn_kw["start_new_session"] = True
-            subprocess.Popen(cmd, **spawn_kw)
+            restart_cwd = str(self.work_dir.parent if self.work_dir.name == "workspace_outputs" else os.getcwd())
+            launch_detached(cmd, cwd=restart_cwd)
         except Exception as exc:
             logging.getLogger(__name__).exception("Failed to relaunch ListenScope: %s", exc)
         if hasattr(self, "window") and self.window is not None:

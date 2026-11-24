@@ -39,6 +39,7 @@ from core.paths import (
     find_ffmpeg_executable,
     get_app_root,
     get_bundle_root,
+    launch_detached,
     subprocess_no_window_kwargs,
 )
 from core.system_probe import (
@@ -1340,7 +1341,7 @@ class SettingsDialog(QtWidgets.QDialog):
             cwd=str(get_bundle_root()),
             env=proc_env,
             target_root=target_root,
-            popen_factory=lambda *args, **kwargs: subprocess.Popen(*args, **kwargs),
+            popen_factory=lambda *args, **kwargs: launch_detached(*args, **kwargs),
         )
 
     def _cancel_bootstrap(self) -> None:

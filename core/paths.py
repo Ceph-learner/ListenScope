@@ -89,7 +89,8 @@ def _ensure_windows_kill_job() -> Optional[int]:
             _logger.warning("CreateJobObjectW failed (winerror=%s)", ctypes.get_last_error())
             return None
         info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000) | JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x0800)
+        info.BasicLimitInformation.LimitFlags = 0x2000 | 0x0800
         ok = kernel32.SetInformationJobObject(
             job,
             9,  # JobObjectExtendedLimitInformation
@@ -201,6 +202,28 @@ def terminate_all_active_subprocesses(timeout: float = 1.0) -> None:
                     proc.wait(timeout=0.1)
             except Exception:
                 pass
+
+
+def launch_detached(cmd: Any, **kwargs: Any) -> subprocess.Popen[Any]:
+    """Launch a detached subprocess (e.g. app restart, external tools) that survives parent exit.
+
+    On Windows, breaks away from the parent's KILL_ON_JOB_CLOSE Job Object via
+    CREATE_BREAKAWAY_FROM_JOB and never registers into _ACTIVE_SUBPROCS.
+    """
+    spawn_kw = dict(kwargs)
+    if sys.platform == "win32":
+        create_breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+        detached_process = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        caller_flags = int(spawn_kw.pop("creationflags", 0) or 0)
+        flags = caller_flags | create_breakaway | new_group
+        if not (caller_flags & create_no_window):
+            flags |= detached_process
+        spawn_kw["creationflags"] = flags
+    else:
+        spawn_kw.setdefault("start_new_session", True)
+    return subprocess.Popen(cmd, **spawn_kw)
 
 
 def _strip_bundle_from_path_var(raw_val: str, bundle_paths: tuple[Path, ...]) -> str:

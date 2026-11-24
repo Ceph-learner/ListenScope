@@ -34,6 +34,7 @@
 1. **125% 缩放窄窗口（1093×566 物理）**：确认顶栏无半截字、E-STOP 保留短标签、混音空状态主按钮无需滚动即可点击。
 2. **托盘图标与退出耗时**：确认托盘溢出区显示 3 竖条单色图标并随系统明暗切换；点击 `Quit ListenScope` 后 2 s 内主进程与子进程全部退出，日志可见各阶段 `shutdown stage=... elapsed_ms=...`。另在启动一次 2-Stem 分轨、AI 子进程运行中用 `taskkill /F /PID <主进程>` 强制结束主进程，5 秒内 AI/MIDI 子进程也应全部退出。
 3. **真实音频持续播放 BPM**：确认 15 s 内稳定出 BPM（不再等到 100+ s）。
+9. **重启与外部程序脱离 Job（Round 4）**：在设置里点「立即重启 ListenScope 生效」，新窗口要能正常起来并保持运行；打开导出文件夹后关闭 ListenScope，资源管理器窗口不能被一起关掉。
 
 ---
 
@@ -75,5 +76,30 @@ INFO     listenscope.shutdown:main.py:2320 shutdown total elapsed_ms=543.7
 |---|---|---|---|
 | **1. `wide_req` 实际布局计算** | [`ui/main_window.py`](../../ui/main_window.py)：保存 `self._topbar_cmd_row`，`_apply_responsive_layout` 按顶栏外/内边距 + `spacing × (可见控件数 − 1)` + 所有可见固定控件与宽按钮 `sizeHint` 之和 + `8px` 余量计算 `wide_req`（不再硬编码 `48`/`160`）。 | `tests/test_review_phase2c.py::test_ub03_main_window_fits_small_screens_1093x566_and_1024x528`<br>`tests/test_review_phase2f.py::test_f1_narrow_topbar_no_clipping_and_60s_visible`<br>`tests/test_review_phase2f.py::test_f1_ub03_scaled_125_zh_en` | **PASSED**（含 `1.25x` 下 `zh`/`en` × `1093×566` / `1024×528`；`p2f_after_light_en_chord_1366x768.png` 确认 `VRAM 7.0/8.0G` 不被挤压） |
 | **2. Windows Job Object 健壮性** | [`core/paths.py`](../../core/paths.py) & [`main.py`](../../main.py)：<br>- 为 `CreateJobObjectW`、`SetInformationJobObject`、`AssignProcessToJobObject`、`GetCurrentProcess`、`CloseHandle` 显式声明 `argtypes` / `restype`（`wintypes.HANDLE` 等）；<br>- 新增 `ensure_current_process_in_kill_job()` 并在 `main()` 启动时将主进程加入 Job（后代自动继承），保留 per-process 绑定作为兜底；<br>- 所有失败路径记录 `warning` 日志（不静默吞掉）。 | 代码路径走查（Windows Job Object API 需目标机 `taskkill /F /PID` 实测） | **Linux/offscreen 回归全绿；待 Windows 实测** |
+
+---
+
+## Round 4（`JOB_OBJECT_LIMIT_BREAKAWAY_OK` + `launch_detached()` + 全仓启动点排查）
+
+### 修改内容与测试
+| 项 | 修改内容与文件 | 测试名 | Linux/offscreen 验证结果 |
+|---|---|---|---|
+| **1. Job 允许子进程脱离** | [`core/paths.py`](../../core/paths.py) `_ensure_windows_kill_job()`：`LimitFlags` 由 `0x2000` 改为 `0x2000 \| 0x0800`（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE \| JOB_OBJECT_LIMIT_BREAKAWAY_OK`）。 | `tests/test_review_phase2f.py::test_round4_launch_detached_not_in_active_subprocs_and_job_breakaway` | **PASSED**（源码及常量核对；Windows 实机行为待目标机验证） |
+| **2. 封装 `launch_detached(...)`** | [`core/paths.py`](../../core/paths.py) 新增 `launch_detached(cmd, **kwargs)`：Windows 下 `creationflags` 含 `CREATE_BREAKAWAY_FROM_JOB (0x01000000)` + `CREATE_NEW_PROCESS_GROUP (0x00000200)`（未传 `CREATE_NO_WINDOW` 时并入 `DETACHED_PROCESS (0x00000008)`），非 Windows 设置 `start_new_session=True`，且**不调用** `register_active_subprocess()`。 | `tests/test_review_phase2f.py::test_round4_launch_detached_win32_flags_and_not_registered`（mock `win32` 校验 `creationflags` 与 `_ACTIVE_SUBPROCS`）<br>`tests/test_review_phase2f.py::test_round4_launch_detached_not_in_active_subprocs_and_job_breakaway`（真实子进程不进入 `_ACTIVE_SUBPROCS`） | **PASSED** |
+| **3. 迁移非 AI/MIDI/探针启动点** | [`main.py`](../../main.py) `restart_application`、[`ui/settings_dialog.py`](../../ui/settings_dialog.py) `_start_bootstrap`、[`core/bootstrap_manager.py`](../../core/bootstrap_manager.py) `BootstrapCoordinator.start` 默认工厂均改用 `launch_detached`。 | 同上 | **PASSED** |
+
+### 全仓启动点排查清单（`Popen` / `os.startfile` / `QProcess.startDetached` / `openUrl` / `subprocess.run`）
+
+| 位置 | 用途 | 类别 | 处理方式 |
+|---|---|---|---|
+| `main.py:1957` (`restart_application`) | 「立即重启 ListenScope 生效」拉起新实例 | 重启新实例 | **已改用 `launch_detached()`**（脱离 Job，不注册 `_ACTIVE_SUBPROCS`） |
+| `ui/settings_dialog.py:1344` (`_start_bootstrap`) | 一键环境配置运行 PowerShell `setup_windows.ps1` | 外部配置脚本 | **已改用 `launch_detached()`**（脱离 Job，支持 `CREATE_NO_WINDOW`，不注册 `_ACTIVE_SUBPROCS`） |
+| `core/bootstrap_manager.py:186` (`BootstrapCoordinator.start`) | 一键环境配置默认进程工厂 | 外部配置脚本 | **已改用 `launch_detached` 作为默认工厂** |
+| `core/paths.py:330` (`run_external_python`) | 外部 AI/MIDI 环境探针（同步） | AI/MIDI/探针 | **保持不变**（保留在 Job 内并注册 `_ACTIVE_SUBPROCS`） |
+| `core/paths.py:378, 424` (`popen_external_python`) | AI 分离 Worker（`ai/job_manager.py`、`streaming/live_separator.py`）及 MIDI 探针 | AI/MIDI/探针 | **保持不变**（保留在 Job 内并注册 `_ACTIVE_SUBPROCS`） |
+| `core/version.py:59` / `core/system_probe.py:30` / `core/media_session.py:632` / `core/bootstrap_manager.py:333` | `git`、`nvidia-smi`、SMTC PowerShell、`taskkill` 等短生命周期同步 `subprocess.run` | 探针/取消辅助 | **保持不变**（同步短命令，留在 Job 内） |
+| `ui/resource_widget.py:289` / `ui/settings_dialog.py:111,115,714` | `QtGui.QDesktopServices.openUrl`（打开日志/导出目录、网页与系统设置） | 系统 Shell / DCOM | **保持不变**（经 Windows Shell/Explorer 进程间调用打开，非 `Popen` 子进程） |
+| 全仓 `os.startfile` / `QProcess.startDetached` | 全仓搜索 | — | **无调用** |
+
 
 

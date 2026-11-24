@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional
 
 from PySide6 import QtCore
 
-from .paths import default_work_dir, get_app_root, subprocess_no_window_kwargs
+from .paths import default_work_dir, get_app_root, launch_detached, subprocess_no_window_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +183,7 @@ class BootstrapCoordinator(QtCore.QObject):
             snap = self.snapshot()
         self.state_changed.emit(snap)
 
-        factory = popen_factory if popen_factory is not None else subprocess.Popen
+        factory = popen_factory if popen_factory is not None else launch_detached
 
         def _worker() -> None:
             last_lines: list[str] = []

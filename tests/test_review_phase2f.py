@@ -653,3 +653,51 @@ def test_f12_tray_icon_uses_3_bar_svg_and_follows_system_theme() -> None:
     finally:
         win.close()
         mixer.close()
+
+
+def test_round4_launch_detached_win32_flags_and_not_registered(monkeypatch) -> None:
+    import core.paths as paths_mod
+
+    captured: list[tuple[Any, dict[str, Any]]] = []
+
+    class _DummyProc:
+        pass
+
+    def _fake_popen(cmd, **kwargs):
+        captured.append((cmd, kwargs))
+        return _DummyProc()
+
+    monkeypatch.setattr(paths_mod.sys, "platform", "win32")
+    monkeypatch.setattr(paths_mod.subprocess, "Popen", _fake_popen)
+
+    proc1 = paths_mod.launch_detached(["ListenScope.exe"], cwd="C:/app")
+    assert proc1 not in paths_mod._ACTIVE_SUBPROCS
+    flags1 = captured[-1][1]["creationflags"]
+    assert flags1 & 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+    assert (flags1 & 0x00000008) or (flags1 & 0x00000200)  # DETACHED_PROCESS or CREATE_NEW_PROCESS_GROUP
+
+    proc2 = paths_mod.launch_detached(["powershell.exe"], creationflags=0x08000000)
+    assert proc2 not in paths_mod._ACTIVE_SUBPROCS
+    flags2 = captured[-1][1]["creationflags"]
+    assert flags2 & 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+    assert flags2 & 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    assert flags2 & 0x08000000  # CREATE_NO_WINDOW preserved
+    assert not (flags2 & 0x00000008)  # do not mix DETACHED_PROCESS with CREATE_NO_WINDOW
+
+
+def test_round4_launch_detached_not_in_active_subprocs_and_job_breakaway() -> None:
+    import core.paths as paths_mod
+
+    proc = paths_mod.launch_detached([sys.executable, "-c", "pass"])
+    try:
+        assert proc not in paths_mod._ACTIVE_SUBPROCS
+        assert proc.wait(timeout=10) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+    paths_src = (REPO_ROOT / "core" / "paths.py").read_text("utf-8")
+    assert "0x2000 | 0x0800" in paths_src
+    main_src = (REPO_ROOT / "main.py").read_text("utf-8")
+    assert "launch_detached(cmd, cwd=restart_cwd)" in main_src
+
