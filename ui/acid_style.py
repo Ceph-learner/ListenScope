@@ -2183,42 +2183,76 @@ class HazardStripeBar(QtWidgets.QWidget):
 
 
 class AcidBarcodeFooter(QtWidgets.QWidget):
-    """High-contrast acid telemetry footer strip with stencil, [STATIC_LOCK] toggle + help, and barcode."""
+    """24px real telemetry status bar (version, capture source/rate, p50 ms, buffer, CPU%, reduce-motion toggle)."""
 
     static_lock_toggled = QtCore.Signal(bool)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        from ui.help_badge import HelpBadge
-
-        self._bg = QtGui.QColor("#CEFF18")
-        self._fg = QtGui.QColor("#090D10")
+        self._bg = QtGui.QColor("#1C2026")
+        self._fg = QtGui.QColor("#B4BECB")
+        self._border = QtGui.QColor("#2C323C")
         self._locked = False
-        self.setFixedHeight(26)
+        self._show_barcode = False
+        self._source_name = "--"
+        self._sample_rate_hz = 48000
+        self._p50_ms: float | None = None
+        self._buffer_sec: float = 0.0
+        self._cpu_pct: float | None = None
+        self.setFixedHeight(24)
 
         row = QtWidgets.QHBoxLayout(self)
-        row.setContentsMargins(12, 2, 114, 2)
-        row.setSpacing(6)
-        row.addStretch(1)
+        row.setContentsMargins(10, 2, 10, 2)
+        row.setSpacing(8)
+        self.status_lbl = QtWidgets.QLabel("")
+        self.status_lbl.setObjectName("monoTelemetry")
+        row.addWidget(self.status_lbl, 1)
 
-        self.lock_btn = QtWidgets.QPushButton("[STATIC_DECOR: OFF]")
+        self.lock_btn = QtWidgets.QPushButton("减少动效")
         self.lock_btn.setObjectName("acidStaticLockBtn")
         self.lock_btn.setCheckable(True)
         self.lock_btn.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.lock_btn.setFixedHeight(19)
+        self.lock_btn.setFixedHeight(18)
+        self.lock_btn.setToolTip("冻结界面遥测微动画（不影响实时频谱与和弦分析）")
         self.lock_btn.toggled.connect(self._on_lock_btn_toggled)
-        self.lock_help = HelpBadge(
-            "静态装饰锁定 (STATIC_DECOR) 与遥测微动画",
-            "• 右侧卡片上的跳动圆点、信号能量柱及电池分段条属于「遥测微动画」，开启音乐动态响应后会随音量与高潮实时变化。\n"
-            "• 点击 [STATIC_DECOR] 可立即冻结底部装饰微动画（不影响主屏幕实时频谱/和弦刷新；如需冻结主屏幕请点顶栏「暂停/冻结画面」）。",
-        )
         row.addWidget(self.lock_btn)
-        row.addWidget(self.lock_help)
+        self._refresh_text()
+
+    def _refresh_text(self) -> None:
+        from core.version import get_app_version_display
+
+        ver = get_app_version_display()
+        p50_txt = f"{self._p50_ms:.1f}ms" if self._p50_ms is not None else "--"
+        cpu_txt = f"{self._cpu_pct:.0f}%" if self._cpu_pct is not None else "--"
+        khz = self._sample_rate_hz / 1000.0
+        rate_txt = f"{khz:g}kHz"
+        self.status_lbl.setText(
+            f"v{ver}  |  {self._source_name} · {rate_txt}  |  p50: {p50_txt}  |  Buf: {self._buffer_sec:.1f}s  |  CPU: {cpu_txt}"
+        )
+
+    def set_telemetry(
+        self,
+        *,
+        source_name: str | None = None,
+        sample_rate_hz: int | None = None,
+        p50_ms: float | None = None,
+        buffer_sec: float | None = None,
+        cpu_pct: float | None = None,
+    ) -> None:
+        if source_name is not None:
+            self._source_name = source_name or "--"
+        if sample_rate_hz is not None and sample_rate_hz > 0:
+            self._sample_rate_hz = int(sample_rate_hz)
+        if p50_ms is not None:
+            self._p50_ms = float(p50_ms)
+        if buffer_sec is not None:
+            self._buffer_sec = float(buffer_sec)
+        if cpu_pct is not None:
+            self._cpu_pct = float(cpu_pct)
+        self._refresh_text()
 
     def _on_lock_btn_toggled(self, checked: bool) -> None:
         self._locked = bool(checked)
-        self.lock_btn.setText("[STATIC_DECOR: ON]" if self._locked else "[STATIC_DECOR: OFF]")
-        self.update()
         self.static_lock_toggled.emit(self._locked)
 
     def is_locked(self) -> bool:
@@ -2229,13 +2263,13 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         self._locked = val
         self.lock_btn.blockSignals(True)
         self.lock_btn.setChecked(val)
-        self.lock_btn.setText("[STATIC_DECOR: ON]" if val else "[STATIC_DECOR: OFF]")
         self.lock_btn.blockSignals(False)
-        self.update()
 
-    def set_colors(self, bg: str, fg: str = "#090D10") -> None:
+    def set_colors(self, bg: str, fg: str = "#090D10", border: str | None = None) -> None:
         self._bg = QtGui.QColor(bg)
         self._fg = QtGui.QColor(fg)
+        self._border = QtGui.QColor(border) if border else self._fg
+        self.status_lbl.setStyleSheet(f"color: {self._fg.name()}; background: transparent;")
         self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
@@ -2244,41 +2278,8 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         p = QtGui.QPainter(self)
         w, h = self.width(), self.height()
         p.fillRect(0, 0, w, h, self._bg)
-        p.setPen(QtGui.QPen(self._fg, 1))
+        p.setPen(QtGui.QPen(self._border, 1))
         p.drawLine(0, 0, w, 0)
-
-        f_tall = QtGui.QFont("Segoe UI")
-        f_tall.setBold(True)
-        f_tall.setPixelSize(12)
-        p.setFont(f_tall)
-        p.setPen(self._fg)
-        p.drawText(QtCore.QRect(12, 0, 148, h), QtCore.Qt.AlignmentFlag.AlignVCenter, "SIGNAL_GRID // V2")
-
-        # Keep center telemetry text strictly left of interactive [STATIC_LOCK] button
-        text_left = 154
-        text_right = max(text_left, self.lock_btn.x() - 10)
-        avail_w = text_right - text_left
-        if avail_w >= 48:
-            f_mono = QtGui.QFont("Consolas")
-            f_mono.setStyleHint(QtGui.QFont.StyleHint.Monospace)
-            f_mono.setBold(True)
-            f_mono.setPixelSize(10)
-            f_mono.setLetterSpacing(QtGui.QFont.SpacingType.AbsoluteSpacing, 0.4)
-            p.setFont(f_mono)
-            from core.version import get_app_version_display
-
-            raw = f"LISTENSCOPE_V{get_app_version_display()} :: 85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE"
-            elided = QtGui.QFontMetrics(f_mono).elidedText(raw, QtCore.Qt.TextElideMode.ElideRight, avail_w)
-            p.drawText(QtCore.QRect(text_left, 0, avail_w, h), QtCore.Qt.AlignmentFlag.AlignVCenter, elided)
-
-        # Crisp vertical barcode on right
-        bars = [2, 1, 3, 1, 4, 1, 2, 3, 1, 2, 4, 1, 2, 3, 1, 2, 4, 1, 3]
-        bx = w - 104
-        for idx, bw in enumerate(bars):
-            if bx + bw >= w - 8:
-                break
-            p.fillRect(bx, 4, bw, h - 8, self._fg)
-            bx += bw + (2 if idx % 2 == 0 else 3)
         p.end()
 
 

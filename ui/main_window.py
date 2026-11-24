@@ -1841,11 +1841,20 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self.tabs.setTabText(idx, title)
         ai_active = bool(self.emergency_stop_btn.property("ai_active"))
         self._hazard_bar.setVisible(is_active and ai_active)
-        self._acid_footer.setVisible(is_active)
+        self._acid_footer.setVisible(True)
         if is_active:
             p = get_acid_palette(variant or "light")
             self._hazard_bar.set_color(p.danger)
-            self._acid_footer.set_colors(p.micro_tag_bg, "#090D10")
+            self._acid_footer.set_colors(p.micro_tag_bg, "#090D10", p.border)
+        else:
+            mode = self.appearance.resolve_theme_mode(system_is_dark=detect_system_is_dark())
+            bg, fg, _ac = self.appearance.effective_colors(system_is_dark=detect_system_is_dark())
+            is_l = mode == "light"
+            self._acid_footer.set_colors(
+                _blend(bg, fg, 0.045 if is_l else 0.055),
+                _blend(bg, fg, 0.78 if is_l else 0.82),
+                _blend(bg, fg, 0.22 if is_l else 0.18),
+            )
         self.capture_btn.setText(
             tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang)
         )
@@ -2626,6 +2635,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         elif stats.mode == CaptureMode.SYSTEM_LOOPBACK and stats.warning_message:
             banner_msg = stats.warning_message
 
+        src_txt = self.source_combo.currentText().strip() or "--"
+        if hasattr(self, "_acid_footer"):
+            self._acid_footer.set_telemetry(
+                source_name=src_txt[:28],
+                sample_rate_hz=int(getattr(stats, "sample_rate", 48000) or 48000),
+                buffer_sec=ring_available_sec,
+            )
+
         if banner_msg != self._last_capture_banner:
             self._last_capture_banner = banner_msg
             if banner_msg:
@@ -2645,6 +2662,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.resource_panel.update_snapshot(snap)
         self.resource_panel.update_performance_records(perf_records)
         self.resource_panel.update_logs(logs)
+        if hasattr(self, "_acid_footer"):
+            self._acid_footer.set_telemetry(cpu_pct=snap.cpu_percent)
 
     def set_freeze_screen(self, frozen: bool) -> None:
         self._freeze_screen = bool(frozen)
@@ -2662,6 +2681,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             return
         self.spectrum_widget.update_analysis(snap, spectrogram=spectrogram)
         self.chroma_widget.update_analysis(snap, chroma_history=chroma_history)
+        if hasattr(self, "_acid_footer"):
+            p50 = getattr(snap, "latency_ms", None)
+            if p50 is not None:
+                self._acid_footer.set_telemetry(p50_ms=float(p50))
 
     def _set_ai_active_ui(self, active: bool) -> None:
         self.emergency_stop_btn.setProperty("ai_active", active)

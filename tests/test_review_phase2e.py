@@ -91,7 +91,6 @@ def test_e2_no_double_slash_in_interactive_buttons_or_tabs_and_5_tabs_fit_1093()
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="E3")
 def test_e3_footer_is_real_24px_status_bar_not_decorative_barcode() -> None:
     """E3: Footer must be a real ~24px status bar (version, sample rate, p50 ms, buffer, CPU%, reduce-motion toggle)."""
     acid_src = (REPO_ROOT / "ui" / "acid_style.py").read_text("utf-8")
