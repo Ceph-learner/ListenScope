@@ -12,6 +12,8 @@ from pathlib import Path
 import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if sys.platform == "win32":
+    os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -26,6 +28,8 @@ from audio.ring_buffer import FixedRingBuffer
 from core.config import AIConfig, AnalysisConfig, AudioConfig, ResourceLimits
 from core.models import (
     AnalysisSnapshot,
+    CaptureMode,
+    CaptureStats,
     ChordEstimate,
     KeyEstimate,
     PitchEstimate,
@@ -127,7 +131,27 @@ def capture_screenshots(
     max_kb: int = 200,
 ) -> list[Path]:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    if sys.platform == "win32":
+        for font_file in ("msyh.ttc", "msyhbd.ttc", "segoeui.ttf", "consola.ttf"):
+            fp = Path(r"C:\Windows\Fonts") / font_file
+            if fp.exists():
+                QtGui.QFontDatabase.addApplicationFont(str(fp))
+        families = set(QtGui.QFontDatabase.families())
+        assert any(f in families for f in ("Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI")), (
+            f"Missing Windows UI fonts in QFontDatabase: {sorted(families)[:20]}"
+        )
+        if "Microsoft YaHei UI" in families:
+            app.setFont(QtGui.QFont("Microsoft YaHei UI", 10))
+        elif "Microsoft YaHei" in families:
+            app.setFont(QtGui.QFont("Microsoft YaHei", 10))
     snap, spec_mat = _build_synthetic_snapshot()
+    if spec_mat is None or spec_mat.size == 0:
+        n_frames, n_bins = 450, 96
+        t_idx = np.linspace(0.0, 1.0, n_frames, dtype=np.float32)[:, None]
+        spec_mat = np.full((n_frames, n_bins), -78.0, dtype=np.float32)
+        spec_mat[:, 20:24] = -18.0 + 6.0 * np.sin(2.0 * np.pi * 2.0 * t_idx)
+        spec_mat[:, 44:47] = -12.0 + 4.0 * np.cos(2.0 * np.pi * 1.5 * t_idx)
+        spec_mat[:, 56:58] = -26.0
     mixer = StemMixerEngine(sample_rate=48000, channels=2)
     win = ListenScopeMainWindow(
         hardware_report=probe_system(),
@@ -157,15 +181,29 @@ def capture_screenshots(
             ai_buffer_seconds=3.0,
             status=ResourceStatus.NORMAL,
         )
+        cap_stats = CaptureStats(
+            mode=CaptureMode.SYNTHETIC_SIMULATION,
+            pid=None,
+            process_name="Simulated",
+            is_running=True,
+            sample_rate=48000,
+            channels=2,
+            dtype="float32",
+            rms_dbfs=-18.0,
+            peak_dbfs=-6.2,
+            is_silent=False,
+        )
 
-        chroma_hist = np.full((12, 45), 0.15, dtype=np.float32)
-        chroma_hist[4, :] = 0.92  # E
-        chroma_hist[1, :] = 0.85  # C#
-        chroma_hist[8, :] = 0.80  # G#
+        chroma_hist = np.full((450, 12), 0.12, dtype=np.float32)
+        chroma_hist[:, 4] = 0.92  # E
+        chroma_hist[:, 1] = 0.85  # C#
+        chroma_hist[:, 8] = 0.80  # G#
 
         def _feed_and_flush() -> None:
             win.update_analysis_snapshot(snap, spec_mat, chroma_hist)
+            win.update_capture_stats(cap_stats, ring_available_sec=3.0)
             win.update_resource_snapshot(res_snap, [], [])
+            win._acid_footer.set_telemetry(cpu_pct=4.2)
             for _ in range(4):
                 app.processEvents()
 

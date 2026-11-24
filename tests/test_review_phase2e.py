@@ -9,8 +9,9 @@ import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import numpy as np
 import pytest
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -247,3 +248,331 @@ def test_e11_default_ab_panel_single_row_le_120px_at_1366x768() -> None:
     finally:
         win.close()
         mixer.close()
+
+
+def test_er_1_icon_buttons_have_no_unicode_glyph_chars() -> None:
+    """ER1: Any button with a non-null icon must not also embed ⏸▶■●□❐×− in its text."""
+    app, win, mixer = _make_window()
+    try:
+        win.show()
+        app.processEvents()
+        forbidden = set("⏸▶■●□❐×−")
+        for btn in win.findChildren(QtWidgets.QPushButton):
+            if not btn.icon().isNull():
+                txt = btn.text() or ""
+                hit = [ch for ch in txt if ch in forbidden]
+                assert not hit, f"Icon button {btn.objectName() or txt!r} contains forbidden glyph(s) {hit}"
+        win.set_freeze_screen(True)
+        app.processEvents()
+        assert not any(ch in (win.freeze_screen_btn.text() or "") for ch in forbidden)
+    finally:
+        win.close()
+        mixer.close()
+
+
+def test_er_2_tab_titles_no_underscore_slash_or_ampersand() -> None:
+    """ER2: Tab titles in all 4 languages must not contain '_', '//', or '&'."""
+    from ui.appearance import Appearance
+
+    app, win, mixer = _make_window()
+    try:
+        for lang in ("zh", "en", "ko", "ja"):
+            win.apply_appearance(Appearance(theme_mode="light", language=lang))
+            app.processEvents()
+            for i in range(win.tabs.count()):
+                title = win.tabs.tabText(i)
+                assert "_" not in title and "//" not in title and "&" not in title, (
+                    f"Tab {i} in {lang!r} has invalid char: {title!r}"
+                )
+    finally:
+        win.close()
+        mixer.close()
+
+
+def test_er_3_estop_never_truncated_and_resource_capsule_adaptive() -> None:
+    """ER3: E-STOP text is never truncated at 1093x566 or 1366x768 (en/zh) and resource capsule adapts."""
+    from core.models import ResourceSnapshot, ResourceStatus
+    from ui.appearance import Appearance
+
+    app, win, mixer = _make_window()
+    try:
+        snap = ResourceSnapshot(
+            timestamp=1.0,
+            main_ram_mb=320.0,
+            ai_worker_ram_mb=0.0,
+            system_ram_total_mb=16384.0,
+            system_ram_available_mb=6200.0,
+            gpu_name="Test GPU",
+            vram_total_mb=8192.0,
+            vram_used_mb=1024.0,
+            vram_free_mb=7168.0,
+            gpu_utilization_pct=4.0,
+            active_ai_jobs=0,
+            loaded_models=0,
+            current_model=None,
+            current_task=None,
+            audio_queue_size=1,
+            audio_queue_maxsize=64,
+            ai_buffer_seconds=3.0,
+            status=ResourceStatus.NORMAL,
+        )
+        win.update_resource_snapshot(snap, [], [])
+        for lang in ("zh", "en"):
+            for w, h in ((1366, 768), (1093, 566)):
+                win.apply_appearance(Appearance(theme_mode="light", language=lang))
+                win.resize(w, h)
+                win.show()
+                app.processEvents()
+                btn = win.emergency_stop_btn
+                txt = btn.text()
+                if txt:
+                    fm = QtGui.QFontMetrics(btn.font())
+                    assert btn.width() >= fm.horizontalAdvance(txt), (
+                        f"E-STOP truncated at {w}x{h} ({lang}): width={btn.width()} < text={fm.horizontalAdvance(txt)}"
+                    )
+                if w < 1200:
+                    assert win.resource_bar._compact_mode is True
+                else:
+                    assert win.resource_bar._compact_mode is False
+                    assert "G" in win.resource_bar.ram_label.text()
+    finally:
+        win.close()
+        mixer.close()
+
+
+def test_er_4_footer_telemetry_and_process_cpu() -> None:
+    """ER4: Simulated capture populates footer source/Buf/p50/CPU consistently with A/B buffer."""
+    from analysis.worker import AnalysisWorker
+    from audio.ring_buffer import FixedRingBuffer
+    from core.config import AnalysisConfig, AudioConfig
+    from core.models import CaptureMode, CaptureStats
+
+    acfg = AudioConfig(sample_rate=48000, channels=2, ring_buffer_seconds=10)
+    rb = FixedRingBuffer(acfg)
+    rb.write(np.zeros((4800, 2), dtype=np.float32))
+    worker = AnalysisWorker(rb, audio_config=acfg, analysis_config=AnalysisConfig())
+    snap = worker.analyze_latest_once()
+    assert snap.latency_ms is not None and snap.latency_ms >= 0.0
+
+    app, win, mixer = _make_window()
+    try:
+        cap = CaptureStats(
+            mode=CaptureMode.SYNTHETIC_SIMULATION,
+            pid=None,
+            process_name="Simulated",
+            is_running=True,
+            sample_rate=48000,
+            channels=2,
+            dtype="float32",
+            rms_dbfs=-20.0,
+            peak_dbfs=-6.0,
+            is_silent=False,
+        )
+        win.update_capture_stats(cap, ring_available_sec=3.0)
+        win.update_analysis_snapshot(snap, None, None)
+        app.processEvents()
+        footer_texts = " ".join(lbl.text() for lbl in win._acid_footer.findChildren(QtWidgets.QLabel))
+        assert "Simulated" in footer_texts
+        assert "3.0s" in footer_texts
+        assert "3.0 / 120.0 s" in win.history_coverage_lbl.text()
+        assert "p50:" in footer_texts and "p50: --" not in footer_texts
+    finally:
+        win.close()
+        mixer.close()
+
+
+def test_er_5_spectrogram_fixed_range_and_empty_placeholder() -> None:
+    """ER5: Spectrogram X axis stays fixed at -30..0 s and shows placeholder when empty."""
+    from core.models import (
+        AnalysisSnapshot,
+        ChordEstimate,
+        KeyEstimate,
+        PitchEstimate,
+        TempoEstimate,
+    )
+
+    app, win, mixer = _make_window()
+    try:
+        win.show()
+        app.processEvents()
+        x_range = win.spectrum_widget.spec_plot.viewRange()[0]
+        assert abs(x_range[0] - (-30.0)) < 0.5 and abs(x_range[1] - 0.0) < 0.5
+        assert win.spectrum_widget._spec_empty_item.isVisible() is True
+
+        dummy_snap = AnalysisSnapshot(
+            timestamp=1.0,
+            waveform_min=[0.0] * 16,
+            waveform_max=[0.0] * 16,
+            fft_freqs_hz=[100.0, 200.0],
+            fft_db=[-40.0, -50.0],
+            log_freqs_hz=[100.0, 200.0],
+            log_spectrum_db=[-40.0, -50.0],
+            chroma_12=[0.1] * 12,
+            chord=ChordEstimate("C", "Am", "High", 0.9, 0.2, False),
+            key=KeyEstimate("C major", "A minor", "High", 0.9, 0.2),
+            tempo=TempoEstimate(120.0, "High", 0.9, 60.0),
+            pitch=PitchEstimate(440.0, "A4", 0.0, 0.9, False, "full"),
+            rms_dbfs=-20.0,
+            peak_dbfs=-10.0,
+            window_seconds=3.0,
+            latency_ms=5.0,
+        )
+        win.spectrum_widget.update_analysis(dummy_snap, spectrogram=np.full((45, 96), -40.0, dtype=np.float32))
+        assert win.spectrum_widget._spec_empty_item.isVisible() is False
+    finally:
+        win.close()
+        mixer.close()
+
+
+def test_er_6_chroma_heatmap_orientation_and_axis() -> None:
+    """ER6: Chroma heatmap disables SI prefix, shows -30..0s, >=6 ticks, and maps C# (idx 1) to row 1."""
+    from core.models import (
+        AnalysisSnapshot,
+        ChordEstimate,
+        KeyEstimate,
+        PitchEstimate,
+        TempoEstimate,
+    )
+
+    app, win, mixer = _make_window()
+    try:
+        win.tabs.setCurrentIndex(1)
+        win.show()
+        app.processEvents()
+        ax_b = win.chroma_widget.chroma_hist_plot.getAxis("bottom")
+        assert ax_b.autoSIPrefix is False
+        x_range = win.chroma_widget.chroma_hist_plot.viewRange()[0]
+        assert abs(x_range[0] - (-30.0)) < 0.5 and abs(x_range[1] - 0.0) < 0.5
+
+        # Synthetic history where ONLY C# (index 1) has energy
+        hist = np.zeros((12, 30), dtype=np.float32)
+        hist[1, :] = 0.95
+        dummy_snap = AnalysisSnapshot(
+            timestamp=1.0,
+            waveform_min=[0.0] * 16,
+            waveform_max=[0.0] * 16,
+            fft_freqs_hz=[100.0, 200.0],
+            fft_db=[-40.0, -50.0],
+            log_freqs_hz=[100.0, 200.0],
+            log_spectrum_db=[-40.0, -50.0],
+            chroma_12=[0.1] * 12,
+            chord=ChordEstimate("C#m", "E", "High", 0.9, 0.2, False),
+            key=KeyEstimate("E major", "C# minor", "High", 0.9, 0.2),
+            tempo=TempoEstimate(120.0, "High", 0.9, 60.0),
+            pitch=PitchEstimate(440.0, "A4", 0.0, 0.9, False, "full"),
+            rms_dbfs=-20.0,
+            peak_dbfs=-10.0,
+            window_seconds=3.0,
+            latency_ms=5.0,
+        )
+        win.chroma_widget.update_analysis(dummy_snap, chroma_history=hist)
+        img = win.chroma_widget._chroma_img.image
+        assert img is not None and img.shape == (30, 12)
+        assert float(img[:, 1].mean()) > 0.9
+        assert float(img[:, 0].mean()) < 0.05
+    finally:
+        win.close()
+        mixer.close()
+
+
+def test_er_7_compact_metric_labels_not_clipped() -> None:
+    """ER7: At 1093x566, no metric value QLabel has sizeHint().height() > height()."""
+    app, win, mixer = _make_window()
+    try:
+        win.tabs.setCurrentIndex(0)
+        win.resize(1093, 566)
+        win.show()
+        app.processEvents()
+        for lbl in (
+            win.spectrum_widget.pitch_label,
+            win.spectrum_widget.rms_label,
+            win.spectrum_widget.peak_label,
+            win.spectrum_widget.window_label,
+        ):
+            assert lbl.height() >= lbl.sizeHint().height(), (
+                f"Metric label {lbl.text()!r} clipped: height={lbl.height()} < sizeHint={lbl.sizeHint().height()}"
+            )
+    finally:
+        win.close()
+        mixer.close()
+
+
+def test_er_8_mixer_empty_state_consistent_and_no_4x_watermark() -> None:
+    """ER8: Mixer empty card primary button triggers 2-Stem, WAV-to-MIDI is flat link, no 4X watermark, centered table hint."""
+    app, win, mixer = _make_window()
+    try:
+        win.tabs.setCurrentIndex(2)
+        win.show()
+        app.processEvents()
+        mw = win.mixer_widget
+        assert mw._empty_quick_2stem_btn.objectName() == "acidPrimaryBtn"
+        assert mw._empty_open_midi_btn.isFlat() is True
+        assert not hasattr(mw, "_empty_tracks_ov")
+        assert mw._chord_empty_lbl.isVisible() is True
+    finally:
+        win.close()
+        mixer.close()
+
+
+def test_er_9_10_11_dark_ab_region_key_separator_and_source_placeholder() -> None:
+    """ER9/ER10/ER11: Dark A/B region uses theme lime, key card omits empty separator, source_combo has i18n placeholder."""
+    from core.models import (
+        AnalysisSnapshot,
+        ChordEstimate,
+        KeyEstimate,
+        PitchEstimate,
+        TempoEstimate,
+    )
+    from ui.acid_style import get_acid_palette
+    from ui.appearance import Appearance
+
+    assert get_acid_palette("dark").plot_region_rgba[:3] == (206, 255, 24)
+    app, win, mixer = _make_window()
+    try:
+        win.source_combo.clear()
+        for lang in ("zh", "en", "ko", "ja"):
+            win.apply_appearance(Appearance(theme_mode="dark", language=lang))
+            app.processEvents()
+            assert len(win.source_combo.placeholderText().strip()) > 0
+
+        dummy_snap = AnalysisSnapshot(
+            timestamp=1.0,
+            waveform_min=[0.0] * 16,
+            waveform_max=[0.0] * 16,
+            fft_freqs_hz=[100.0, 200.0],
+            fft_db=[-40.0, -50.0],
+            log_freqs_hz=[100.0, 200.0],
+            log_spectrum_db=[-40.0, -50.0],
+            chroma_12=[0.1] * 12,
+            chord=ChordEstimate("E", "C#m", "High", 0.9, 0.2, False),
+            key=KeyEstimate("E major", "C# minor", "High", 0.9, 0.2, relation_note=""),
+            tempo=TempoEstimate(120.0, "High", 0.9, 60.0),
+            pitch=PitchEstimate(440.0, "A4", 0.0, 0.9, False, "full"),
+            rms_dbfs=-20.0,
+            peak_dbfs=-10.0,
+            window_seconds=3.0,
+            latency_ms=5.0,
+        )
+        win.chroma_widget.update_analysis(dummy_snap, None)
+        assert not win.chroma_widget.key_relation_lbl.text().endswith("·")
+    finally:
+        win.close()
+        mixer.close()
+
+
+def test_er_12_13_14_windows_font_assert_win11_wording_and_notices() -> None:
+    """ER12/ER13/ER14: Verify Windows font check in screenshot script, Win11 Build 20348 wording, and THIRD_PARTY_NOTICES cleanup."""
+    script_src = (REPO_ROOT / "scripts" / "make_screenshots.py").read_text("utf-8")
+    assert "QFontDatabase.families()" in script_src and "QT_QPA_FONTDIR" in script_src
+
+    for fn in ("docs/FAQ.md", "docs/FAQ.en.md", "ui/main_window.py"):
+        txt = (REPO_ROOT / fn).read_text("utf-8")
+        assert "Windows 11" in txt and "20348" in txt
+        assert "Windows 10 Build" not in txt
+    sd_txt = (REPO_ROOT / "ui" / "settings_dialog.py").read_text("utf-8")
+    assert "Windows 11" in sd_txt and "min_windows_build_for_process_loopback" in sd_txt
+    assert "Windows 10/11" not in sd_txt
+
+    notices = (REPO_ROOT / "THIRD_PARTY_NOTICES.md").read_text("utf-8")
+    assert "| soxr |" not in notices and "| certifi |" not in notices
+    assert "NEEDS_TARGET" in notices

@@ -821,7 +821,7 @@ def test_home_feedback_i18n_bass_boost_export_singleline_chords_pytorch_scan_and
         app.processEvents()
         assert w.geometry() == geom_before
         assert w.capture_btn.text() == "Start Capture"
-        assert w.tabs.tabText(0) == "Spectrum & Waveform"
+        assert w.tabs.tabText(0) == "Spectrum · Waveform"
         w.apply_appearance(replace(w.appearance, language="ko"))
         app.processEvents()
         assert w.geometry() == geom_before

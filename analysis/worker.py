@@ -306,6 +306,7 @@ class AnalysisWorker:
             return self._analyze_latest_locked()
 
     def _analyze_latest_locked(self) -> AnalysisSnapshot:
+        t0 = time.perf_counter()
         sr = self.audio_config.sample_rate
         fft_size = self.config.fft_size
         window_sec = max(0.1, fft_size / float(sr))
@@ -449,6 +450,7 @@ class AnalysisWorker:
             rms_dbfs=rms_db,
             peak_dbfs=peak_db,
             window_seconds=self.ring_buffer.available_seconds,
+            latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
         )
         with self._lock:
             self._latest_snapshot = snap

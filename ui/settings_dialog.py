@@ -486,7 +486,7 @@ class SettingsDialog(QtWidgets.QDialog):
         target = TargetHardwareSpec()
         target_row = QtWidgets.QHBoxLayout()
         target_lbl = QtWidgets.QLabel(
-            f"目标真机基线规格: Windows 10/11 (Build >= {target.min_windows_build_for_process_loopback}) | "
+            f"目标真机基线规格: Windows 11 (Build >= {target.min_windows_build_for_process_loopback}，Win10 可用系统环回) | "
             f"GPU: {target.gpu_name} | 显存: {target.vram_gb}GB VRAM (非 16GB) | 系统内存: {target.ram_gb}GB RAM"
         )
         target_lbl.setWordWrap(True)
