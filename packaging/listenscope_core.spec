@@ -62,6 +62,10 @@ a = Analysis(
     binaries=extra_binaries,
     datas=[
         (str(project_root / "README.md"), "."),
+        (str(project_root / "LICENSE"), "."),
+        (str(project_root / "THIRD_PARTY_NOTICES.md"), "."),
+        (str(project_root / "ACKNOWLEDGMENTS.md"), "."),
+        (str(project_root / "licenses"), "licenses"),
         (str(project_root / "requirements-ai.txt"), "."),
         (str(project_root / "constraints-ai-cu128.txt"), "."),
         (str(project_root / "requirements-midi.txt"), "."),

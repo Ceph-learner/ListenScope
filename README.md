@@ -9,101 +9,116 @@
 
 <p align="left">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64)-0078D4?style=flat-square" alt="Windows" />
-  <img src="https://img.shields.io/badge/Release-v1.0.1-00A878?style=flat-square" alt="Release" />
   <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License" />
+  <a href="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml"><img src="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml/badge.svg" alt="Tests" /></a>
 </p>
 
-**免费、离线、本地运行**的 Windows 桌面听歌分析、A/B 循环与扒谱练习工作台。
-
-无需下载加密音乐缓存，也不必折腾虚拟声卡。在播放器或浏览器正常听歌时，ListenScope 直接通过 Windows 标准音频接口按进程捕获实时声音，提供频谱/音准分析、和弦与调性识别、120 秒回溯 A/B 慢放、本地 AI 分轨和 Cubase 兼容 MIDI 导出。
-
-<p align="center">
-  <img src="docs/images/demo.gif" alt="ListenScope 实时分析演示（模拟信号）" width="820" />
-</p>
+免费、离线、本地运行的 Windows 桌面听歌分析、A/B 循环练习与扒谱辅助工具。本项目由作者与 AI 助手协作开发，旨在提供轻量、可控的本地音频分析工作台。
 
 ---
 
-## 快速上手（图形界面一键配置 · 无需命令行）
+## 1. 界面预览
 
-1. **下载安装**：前往 [Releases](https://github.com/Ceph-learner/ListenScope/releases) 下载安装版 `ListenScope-Setup-Windows-x64.exe` 或免安装便携版 `ListenScope-Core-Windows-x64-Portable.zip`。
-2. **双击启动**：运行 `ListenScope.exe`。**实时频谱、和弦/调性/BPM 识别、120 秒 A/B 慢放循环与节拍器开箱即用**，无需显卡即可运行。
-3. **配置 AI 分轨与 MIDI（可选，图形界面一键完成）**：
-   - 点击右上角 **`CONFIG // 设置`** → 左侧 **`AI 与 MIDI 环境`**。
-   - 若本机已有 PyTorch / Conda 环境，点击 **「扫描本机 PyTorch 环境」** 自动识别；
-   - 若尚未安装，点击 **「一键自动配置 AI + MIDI」** 自动下载配置独立运行环境，完成后点击重启按钮即可生效。
-4. **开始使用**：在顶栏 `AUDIO_IN // 音源` 下拉框选择正在播放音乐的进程，点击 **`CAPTURE_START // 开始捕获`**。
-
-> 配置文件（`settings.json`）、工作区缓存与导出的 WAV/MIDI 默认保存在**软件同级目录**，不向 `C:\` 盘写入冗余文件。
-
-<p align="center">
-  <img src="docs/images/settings_ai.png" alt="设置页图形化一键配置 AI 与 MIDI" width="740" />
-</p>
+> **TODO**：UI 打磨分支（#42）合并后，此处将统一更新为最新实机与合成数据截图及演示 GIF。
 
 ---
 
-## 核心功能
+## 2. 主要功能（已实测）
 
-| 模块 | 功能说明 |
-| :--- | :--- |
-| **实时捕获与频谱** | Windows 进程环回捕获（Build ≥ 20348，无需虚拟声卡）或系统环回；仅通过系统标准音频接口捕获实时播放输出，不涉及绕过加密或缓存提取；提供波形、FFT / 对数频谱、基频 `F0` 与 `-50 ~ +50 cents` 音准刻度条 |
-| **和弦、调性与 Capo** | 12-bin Chroma 热图、大/小三和弦与构成音识别、罗马级数、12 步和弦轨迹、纯 CPU **Capo 移调联动**、24 调和弦练习弹窗（支持本地合成试听与 `.mid` 导出） |
-| **120 秒回溯与 A/B 练习** | 固定 120s 环形缓冲（`48 kHz / Stereo / float32`）、拖拽 A/B 选区、`0.5x–1.25x` 不变调变速回放、12 个练习书签、Tap 定速节拍器（含预备拍）及练习 WAV 导出 |
-| **本地 AI 分轨与混音** | 独立子进程按需运行 2-Stem（人声/伴奏）或 4-Stem（人声/鼓组/贝斯/其他）分离，默认 6 秒安全分块与随时急停释放显存；支持 **`0–24 dB` 贝斯独听增益**与 FFT-YIN 贝斯最低音（低至 `B0`/`E1`）检测 |
-| **MIDI 导出与 Cubase 适配** | 支持分轨后一键转 MIDI 或直接打开本地单轨 WAV 转 MIDI；所有和弦、鼓点与单轨 MIDI 均统一规范为 **Steinberg Cubase 兼容 SMF Type-0 (`480 TPB`)** |
-| **主题与四语界面** | 默认 **酸性遥测（临床浅色）** 工业视觉，顶栏一键切换暗夜/浅色；内置经典、极光冰蓝、石墨靛紫、暖砂琥珀主题，支持 **中 / 英 / 韩 / 日** 实时切换与无边框圆角窗口 |
-
-<p align="center">
-  <img src="docs/images/chroma.png" alt="和弦、调性与音准分析" width="440" />
-  <img src="docs/images/main_dark.png" alt="暗夜工业模式" width="440" />
-</p>
+- **实时捕获与频谱**：通过 Windows 标准 WASAPI 进程环回（Build ≥ 20348）或系统环回捕获实时播放输出，提供波形、FFT / 对数频谱、基频 `F0` 与 `-50 ~ +50 cents` 音准刻度条。
+- **和弦、调性与移调**：12-bin Chroma 热图、大/小三和弦与构成音识别、罗马级数、12 步和弦轨迹、纯 CPU Capo 移调联动及 24 调和弦练习弹窗（支持本地合成试听与 `.mid` 导出）。
+- **120 秒回溯与 A/B 练习**：固定 120s 环形缓冲（`48 kHz / Stereo / float32`）、拖拽 A/B 选区、`0.5x–1.25x` 不变调变速回放（WSOLA）、12 个练习书签、Tap 定速节拍器及练习 WAV 导出。
+- **本地 AI 分轨与混音（可选）**：独立子进程按需运行 2-Stem（MDX-Net）或 4-Stem（HTDemucs）分离，默认 6 秒安全分块与随时急停释放显存；支持 `0–24 dB` 贝斯独听增益与 FFT-YIN 贝斯最低音检测。
+- **MIDI 导出与 Cubase 适配**：支持分轨后单轨转 MIDI 或直接打开本地单轨 WAV 转 MIDI，导出为 Steinberg Cubase 兼容 SMF Type-0（`480 TPB`）。
+- **多主题与四语界面**：支持亮暗模式切换及多套内置配色，提供简体中文 / English / 한국어 / 日本語实时切换。
 
 ---
 
-## 硬件兼容性说明与已知限制
+## 3. 系统要求
 
-- 目前实机主要在 **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM** 环境验证通过，默认 6 秒分块与三级内存护栏（5120 / 3072 / 2048 MiB）均按该规格保守标定。
-- 其余显卡型号、核显或不同系统配置尚未全面实测；如在使用中遇到兼容或性能问题，欢迎在 [Issues](https://github.com/Ceph-learner/ListenScope/issues) 反馈硬件信息与诊断包日志。
-- **已知限制**：无边框主窗口暂不支持 Windows 11 Snap Layouts（悬停最大化按钮弹出贴靠布局菜单需要原生 `WM_NCHITTEST` 返回 `HTMAXBUTTON`，已规划至 Phase 3 `#33 P3-WIN`）。
+- **操作系统**：Windows 10 / 11（64 位，进程环回捕获需 Windows 11 / Windows 10 Build ≥ 20348）。
+- **基准验证环境**：目前实机验证主要集中于 **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM**；其余显卡与系统配置尚未全面实测。
+- **显卡需求**：**AI 分轨为可选功能**；实时频谱、和弦/调性/BPM 识别、A/B 慢放与节拍器仅需 CPU 即可运行。
 
 ---
 
-## 开发者与源码运行
+## 4. 下载与安装
 
-为保持主界面轻量流畅（无显卡也可运行全部实时分析与 A/B 练习），项目采用三环境隔离结构：
+前往 [Releases](https://github.com/Ceph-learner/ListenScope/releases) 下载：
 
-```text
-ListenScope/
-├── core/         # 配置与同级便携路径、多语言 (zh/en/ko/ja)、外观模型、PyTorch 扫描与资源守卫
-├── audio/        # WASAPI 捕获、120s 环形缓冲、WSOLA 变速、节拍器、试听合成与四轨混音
-├── analysis/     # CPU 频谱/Chroma/和弦/调性/BPM、FFT-YIN 贝斯与 Cubase SMF Type-0 MIDI 导出
-├── ai/           # 分轨模型注册表、流式分块守护与独立 AI 子进程管理
-├── separation/   # 2-Stem MDX-ONNX 与 4-Stem HTDemucs 后端
-├── streaming/    # 实验性近实时 2-Stem 监听（默认关闭）
-├── ui/           # PySide6 + PyQtGraph 桌面界面与样式引擎
-├── packaging/    # PyInstaller 打包规范与环境依赖约束
-├── scripts/      # Windows 一键初始化 (setup_windows.ps1)、硬件探针与 Inno Setup 脚本
-└── docs/         # 架构说明、技术决策、开发指南与打包文档
-```
+- **安装版**：`ListenScope-Setup-Windows-x64.exe`（默认安装至非 `C:` 盘或用户目录，卸载时保留 `exports\`）。
+- **便携版**：`ListenScope-Core-Windows-x64-Portable.zip`（解压即用，`settings.json` 与导出文件保存在同级目录）。
 
-### 从源码启动与测试
+**校验与 SmartScreen 提示**：
+- 发行包尚未购买商业代码签名证书，Windows 首次运行时可能弹出 SmartScreen 提示，可点击「更多信息 → 仍要运行」。
+- 建议下载后对照 Release 中的 `SHA256SUMS.txt` 校验文件完整性（PowerShell：`Get-FileHash <文件名> -Algorithm SHA256`）。
+- 官方 Core 发行包**不内置 FFmpeg**；如需额外格式解码，FFmpeg 由用户自行安装或选用。
 
-```powershell
-# Windows：在短路径目录初始化 Core / GPU AI / CPU MIDI 三个环境
-pwsh -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
-.\.venv-core\Scripts\python.exe main.py
-```
+---
+
+## 5. 快速上手
+
+1. 运行 `ListenScope.exe`（无需显卡即可使用全部实时分析与 A/B 练习）。
+2. 如需 AI 分轨或单轨转 MIDI，可在设置页 **`AI 与 MIDI 环境`** 一键扫描本机 PyTorch 或配置独立运行环境。
+3. 在顶栏音源下拉框选择正在播放音乐的进程，点击开始捕获。
+
+详细图文操作、典型扒谱场景与界面分区说明见 [用户指南 (docs/USER_GUIDE.md)](docs/USER_GUIDE.md)。
+
+---
+
+## 6. 在线更新说明
+
+- 当前版本需从 GitHub Releases 页面手动下载新版安装包或便携包覆盖更新（便携版请保留 `settings.json`、`exports/` 及本地环境目录）。
+- 应用内在线更新检查功能规划于后续版本（仅读取 GitHub 公开版本信息，不上传任何用户数据）。
+
+---
+
+## 7. 常见问题
+
+- **没有 NVIDIA 显卡能用吗？** 可以，AI 分轨为可选功能，其余分析与练习功能仅使用 CPU。
+- **捕获没有信号怎么办？** 请确认已选对正在出声的播放进程，或切换为系统环回测试。
+- **如何彻底退出？** 若启用了最小化到托盘，请在系统托盘右键图标选择退出。
+
+更多问题见 [常见问题 (docs/FAQ.md)](docs/FAQ.md) 与 [术语表 (docs/GLOSSARY.md)](docs/GLOSSARY.md)。
+
+---
+
+## 8. 已知限制
+
+- 无边框主窗口暂不支持 Windows 11 Snap Layouts（悬停最大化按钮弹出贴靠布局菜单）。
+- 除基准机（Windows 11 + RTX 5060 Ti 8 GB + 16 GB RAM）外的其他硬件配置尚未全面实测，遇到兼容问题欢迎附诊断包提交 Issue。
+
+---
+
+## 9. 参与贡献
+
+欢迎提交 Issue 与 Pull Request！本项目遵循三环境隔离结构，Core 环境保持零 PyTorch / CUDA / TensorFlow 依赖：
 
 ```bash
-# Linux / 无声卡环境使用模拟信号与运行测试
+# Linux / 无声卡环境测试
 pip install -r requirements-core.txt pytest
 python main.py --simulate
-QT_QPA_PLATFORM=offscreen pytest -q --tb=short
+QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short
 ```
+
+开发规范、基准测试、国际化与行为准则见 [贡献指南 (CONTRIBUTING.md)](CONTRIBUTING.md)、[行为准则 (CODE_OF_CONDUCT.md)](CODE_OF_CONDUCT.md)、[开发指南 (docs/DEVELOPMENT.md)](docs/DEVELOPMENT.md)、[测试说明 (docs/TESTING.md)](docs/TESTING.md) 与 [路线图 (ROADMAP.md)](ROADMAP.md)。
 
 ---
 
-## 相关文档与开源协议
+## 10. 许可证、隐私与免责声明
 
-- [架构设计 (docs/ARCHITECTURE.md)](docs/ARCHITECTURE.md) · [技术决策 (docs/DECISIONS.md)](docs/DECISIONS.md) · [开发指南 (docs/DEVELOPMENT.md)](docs/DEVELOPMENT.md) · [打包文档 (docs/PACKAGING.md)](docs/PACKAGING.md) · [贡献指南 (CONTRIBUTING.md)](CONTRIBUTING.md)
-- 本项目基于 [MIT License](LICENSE) 开源；所集成的第三方模型与开源库保留各自许可协议，详见 [致谢与来源 (ACKNOWLEDGMENTS.md)](ACKNOWLEDGMENTS.md)。
-- ListenScope 与文中提及的任何第三方音乐播放器、DAW 或硬件厂商均无隶属或商业合作关系；各商标归其各自所有者所有。
+- **开源协议**：本项目代码基于 [MIT License](LICENSE) 开源（`Copyright (c) 2026 Ceph-learner and ListenScope contributors`）。第三方组件清单与许可证文本见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 [licenses/](licenses/)；算法学术出处审计见 [docs/PROVENANCE.md](docs/PROVENANCE.md)。
+- **模型权重**：仓库及官方发行包**不包含**任何 AI 模型权重文件；各模型（UVR / MDX-Net、HTDemucs、Basic Pitch）均遵循各自许可证与使用条款，用户在运行时下载前请自行核对。
+- **免责声明**：
+  - 本项目与腾讯、QQ 音乐及其他音乐平台无任何关联；
+  - 本软件仅通过系统标准音频接口捕获本机正在播放的声音，不下载、不解密、不绕过任何 DRM 保护；
+  - 用户应遵守所在地法律法规，对所处理音频的版权自行负责；
+  - 本软件按「原样」提供，不作任何明示或暗示担保；如用于商业场景请自行评估相关算法与第三方组件条款。
+- **商标声明**：文中提及的 QQ 音乐、Cubase、NVIDIA / RTX、Windows 等名称均为各自权利人的商标，本项目与其无关联。
+- **隐私与 AI 协作文件**：软件全部功能本地运行，无遥测与数据上传（详见 [PRIVACY.md](PRIVACY.md)）。仓库内保留的 `AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、`docs/HANDOFF.md`、`docs/AI_COLLABORATION.md` 与 `docs/review/` 用于记录项目约束与多轮协作上下文。
+
+---
+
+## 11. 致谢
+
+感谢所有为音频信号处理、音源分离、MIDI 转录及桌面界面生态作出贡献的开源项目与研究者。完整致谢名单与出处链接见 [致谢与来源 (ACKNOWLEDGMENTS.md)](ACKNOWLEDGMENTS.md)。

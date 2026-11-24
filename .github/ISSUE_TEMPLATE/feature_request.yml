@@ -1,0 +1,26 @@
+name: Feature Request
+description: 提交新功能或体验改进建议
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决什么问题或练习痛点？
+      placeholder: "例如：扒贝斯时希望..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      placeholder: "希望增加..."
+    validations:
+      required: true
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: 约束确认
+      options:
+        - label: 该需求不破坏 Core 环境零 PyTorch/CUDA/TensorFlow 约束（详见 docs/DECISIONS.md）
+          required: false

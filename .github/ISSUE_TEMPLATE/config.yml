@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Discussions
+    url: https://github.com/Ceph-learner/ListenScope/discussions
+    about: 使用疑问、扒谱技巧或想法交流请前往 Discussions（Q&A / Ideas / Show & tell）
+  - name: Security Vulnerability
+    url: https://github.com/Ceph-learner/ListenScope/security/advisories/new
+    about: 安全漏洞请勿公开提交 Issue，请使用私密漏洞报告

@@ -10,10 +10,26 @@
 
 | ID | 状态 | 验收方式 | 结果 |
 |---|---|---|---|
+| **R1-1** | `DONE` | 核对 `LICENSE` 版权行及四语言 README 一致性 | 已更新 `LICENSE` 为 `Copyright (c) 2026 Ceph-learner and ListenScope contributors`，四语言 README 许可证段一致。 |
+| **R1-2** | `DONE (NEEDS_TARGET)` | Linux Core `pip-licenses` + `importlib.metadata` 依赖树生成 `THIRD_PARTY_NOTICES.md`，Windows 专属包按 PyPI 元数据补录 | 已生成 [`THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md)（含 Qt/PySide6 LGPL-3.0、`soxr` LGPL-2.1-or-later、`certifi` MPL-2.0 提示及可替换说明）；`proc-tap`/`pycaw`/`comtypes`/`PyAudioWPatch`/`winrt-*` 标注 `待 Windows 构建核对`。 |
+| **R1-3** | `DONE (NEEDS_TARGET)` | 检查 `packaging/listenscope_core.spec` 与 `.github/workflows/release-windows.yml` | 已将 `LICENSE`、`THIRD_PARTY_NOTICES.md`、`ACKNOWLEDGMENTS.md`、`licenses/` 加入 spec 与 Windows release 打包前置步骤（实际 ZIP/EXE 产物待 Windows CI 核验）。 |
+| **R1-4** | `DONE` | 核对 `release-windows.yml` 与四语言 README | 确认 Core 发行包不内置 FFmpeg；已在四语言 README 与 `THIRD_PARTY_NOTICES.md` 注明「FFmpeg 由用户自行安装或选用」。 |
+| **R1-5** | `DONE` | 核对 `ACKNOWLEDGMENTS.md` 与四语言 README | 已写明仓库与发行包不含模型权重，各模型遵循各自许可证与条款，需用户自行核对。 |
+| **R1-6** | `DONE` | `rg` 扫描 `qfluentwidgets`/`FluentWindow`/`SettingCardGroup` + 核对 `ui/assets/settings/LICENSE.txt` | 0 处复制 GPL 代码；Lucide 许可证保留于 `ui/assets/settings/LICENSE.txt` 与 `licenses/ISC-Lucide.txt`。 |
+| **R1-7** | `DONE` | 检查四语言 README 免责声明 | 四语言 README 均已补齐无关联、仅捕获本机播放输出不绕过 DRM、版权自负及按原样提供免责声明。 |
+| **R1-8** | `DONE` | 比对 `ACKNOWLEDGMENTS.md` 修改前后内容 | 完整保留原有致谢内容，补充 Temperley (1999)/Shaath/Albrecht 引用及模型权重条款说明。 |
+| **R1-9** | `DONE` | `analysis/key_detection.py` 更名 + A-BENCH / `realistic_mix` / `test_key_detection_accuracy.py` 前后对比 + 定稿 `docs/PROVENANCE.md` | `"keyfinder"` 已更名为 `"temperley1999"`（保留别名）；`algo_benchmark.py` 与 `realistic_mix.py` 前后 `diff -u` 完全一致，`test_key_detection_accuracy.py` 5 passed；`docs/PROVENANCE.md` 已定稿。 |
+| **R1-10** | `DONE` | 检查四语言 README 商标声明 | 四语言 README 均已补齐 QQ 音乐、Cubase、NVIDIA/RTX、Windows 商标归属与无关联声明。 |
+| **R3-1** | `DONE` | 检查 `README.md`、`README.en.md`、`README.ja.md`、`README.ko.md` | 四语言 README 已按 12 段结构重排，语气谦虚，仅列已实测功能，截图位置留 `TODO` 占位（待 #42 合并）。 |
+| **R3-2** | `DONE` | `rg` 检查 `docs/` 硬编码旧版本号 | 已移除 `docs/ARCHITECTURE.md`（`0.2.1`）与 `docs/DEVELOPMENT.md`（`0.2.4`）硬编码，统一引用 `pyproject.toml`。 |
+| **R3-4** | `DONE` | 检查社区治理与模板文件 | 已更新 `CONTRIBUTING.md`，新增 `CODE_OF_CONDUCT.md`、`SECURITY.md`、`CHANGELOG.md`、YAML Issue 表单与 `PULL_REQUEST_TEMPLATE.md`。 |
+| **R3-5** | `DONE` | `rg` 扫描内部文档个人路径与凭据 + README 说明 | 无真实个人路径或凭据；已在四语言 README 说明 `AGENTS.md`/`docs/review/` 等协作文件用途。 |
+| **R3-6** | `DONE` | 检查用户文档与双语覆盖 | 已新增中英双语 [`docs/USER_GUIDE.md`](../USER_GUIDE.md)/[`.en.md`](../USER_GUIDE.en.md)、[`docs/FAQ.md`](../FAQ.md)/[`.en.md`](../FAQ.en.md)、[`docs/GLOSSARY.md`](../GLOSSARY.md)/[`.en.md`](../GLOSSARY.en.md)。 |
+| **R3-7** | `DONE` | 检查开发者文档与配置 | 已更新 `docs/DEVELOPMENT.md` 与 `CONTRIBUTING.md`（含 AI 辅助开发说明），新增 [`docs/TESTING.md`](../TESTING.md)、[`docs/I18N.md`](../I18N.md)、[`ROADMAP.md`](../../ROADMAP.md)、[`.editorconfig`](../../.editorconfig)。 |
+| **R3-8** | `DONE (ACTION FOR OWNER)` | 检查 `.github/` 配置文件与操作指南 | 已新增 YAML Issue 表单、`PULL_REQUEST_TEMPLATE.md`、`CODEOWNERS`、`dependabot.yml`、`PRIVACY.md`、`SUPPORT.md`；仓库网页设置已写入 [`REPO_SETTINGS_GUIDE.md`](REPO_SETTINGS_GUIDE.md) 待主人操作，未改动任何仓库设置。 |
 | **R5-1** | `AUDITED (CLEAN)` | 遍历 `git rev-list --objects --all` 共 1,737 个唯一对象（覆盖全 39 个远程分支与全部 tag），匹配 PAT / AWS / Google / OpenAI / Slack / Private Key 及 `.env`/`.pem`/`.key` | **0 个密钥命中**，**0 个敏感文件名**。 |
 | **R5-2** | `AUDITED (ACTION FOR OWNER)` | 全历史 `git log --all` 作者邮箱汇总 + `HEAD`/`archive/internal-docs`/全历史 1,737 对象路径与邮箱扫描 | `HEAD` 与全历史文件 **0 处真实个人 Windows 路径**（仅有 `tests/test_review_phase1.py` 的合成占位 `C:\Users\Alice` 及 `archive/internal-docs` 中云端沙盒 `/home/antigravity`）；但 **Git 提交历史中有 39 次提交包含主人个人 Gmail 邮箱**（含 GitHub merge commit），需主人按 R1-11 操作启用 GitHub noreply 隐私设置并决定是否接受历史记录。 |
 | **R5-3** | `AUDITED (AWAITING OWNER)` | 统计 `origin` 全部 39 个远程分支与 `origin/main` 合并关系 | 共 39 个远程分支：**建议删除 25 个已合并分支**、**必须保留 4 个**（`main` + 3 个 `backup/*`）、**待主人审查决定 10 个**（1 个 `archive/internal-docs` + 1 个活跃 `feature/ui-polish-p2e` + 8 个历史未合并 `design/*`/`feature/*`/`fix/*`）。 |
-| **R1-9** | `DRAFTED` | `rg` 扫描 GPL/AGPL 项目特征符号 + 人工核对 `analysis/key_detection.py` 与各算法模块，起草 [`docs/PROVENANCE.md`](../PROVENANCE.md) | **未发现复制 GPL/AGPL 代码**；仅 `analysis/key_detection.py:30` `"keyfinder"` 轮廓命名易引起误解（实际数值为 Temperley 1999），待实现阶段更名为 `"temperley1999"` 并保留别名；已记录 Phase 3 `madmom` / `Rubber Band` / `Essentia` 许可风险。 |
 
 ---
 

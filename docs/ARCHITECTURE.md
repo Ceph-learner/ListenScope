@@ -37,4 +37,4 @@ flowchart LR
 
 ## 技术栈
 
-Python 3.11 / 3.12，PySide6 `>=6.8,<6.10`（含 Qt 6.8 `colorScheme()`），pyqtgraph，numpy/scipy/librosa，soundfile，mido，psutil，nvidia-ml-py。AI 环境：PyTorch 2.11.0+cu128，onnxruntime-gpu 1.26，audio-separator 0.48，demucs 4.1。MIDI 环境：basic-pitch 0.4.0，TensorFlow 2.15.0。打包使用 PyInstaller（[listenscope_core.spec](../packaging/listenscope_core.spec)）、GitHub Actions Windows Release 工作流（[release-windows.yml](../.github/workflows/release-windows.yml)）及 Inno Setup 6（[`scripts/installer.iss`](../scripts/installer.iss)）。软件版本号见 [pyproject.toml](../pyproject.toml)（当前为 `0.2.1`）。
+Python 3.11 / 3.12，PySide6 `>=6.8,<6.10`（含 Qt 6.8 `colorScheme()`），pyqtgraph，numpy/scipy/librosa，soundfile，mido，psutil，nvidia-ml-py。AI 环境：PyTorch 2.11.0+cu128，onnxruntime-gpu 1.26，audio-separator 0.48，demucs 4.1。MIDI 环境：basic-pitch 0.4.0，TensorFlow 2.15.0。打包使用 PyInstaller（[listenscope_core.spec](../packaging/listenscope_core.spec)）、GitHub Actions Windows Release 工作流（[release-windows.yml](../.github/workflows/release-windows.yml)）及 Inno Setup 6（[`scripts/installer.iss`](../scripts/installer.iss)）。软件版本号统一在 [pyproject.toml](../pyproject.toml) 中维护。
