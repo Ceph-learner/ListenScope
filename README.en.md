@@ -19,7 +19,13 @@ A **free, offline, local-first** Windows desktop workstation for real-time audio
 
 ## 1. Screenshots
 
-> **TODO**: Screenshots and demo GIF will be updated here after the UI polish branch (#42) is merged.
+![Realtime Spectrum & Waveform (Dark Theme)](docs/images/listenscope_dark_en_spectrum_1366x768.png)
+
+| Light Theme | Chords, Key & Tempo | Stem Mixer & MIDI |
+| :---: | :---: | :---: |
+| ![Light Theme](docs/images/listenscope_light_spectrum_1366x768.png) | ![Chords & Key](docs/images/listenscope_light_chord_1366x768.png) | ![Stem Mixer](docs/images/listenscope_light_mixer_empty_1366x768.png) |
+
+> All screenshots above are generated offscreen from deterministic synthetic audio via `scripts/make_screenshots.py` (no real track titles or personal paths).
 
 ---
 

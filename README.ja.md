@@ -19,7 +19,13 @@
 
 ## 1. スクリーンショット
 
-> **TODO**：UI ブラッシュアップブランチ（#42）のマージ後、最新のスクリーンショットおよびデモ GIF に更新予定です。
+![リアルタイムスペクトル・波形分析（ライトテーマ）](docs/images/listenscope_light_spectrum_1366x768.png)
+
+| ダークテーマ（英語） | コード・調性・テンポ | ステムミキサー・MIDI |
+| :---: | :---: | :---: |
+| ![ダークテーマ](docs/images/listenscope_dark_en_spectrum_1366x768.png) | ![コードと調性](docs/images/listenscope_light_chord_1366x768.png) | ![ステムミキサー](docs/images/listenscope_light_mixer_empty_1366x768.png) |
+
+> 上記のスクリーンショットはすべて `scripts/make_screenshots.py` により合成信号からオフスクリーン生成したもので、実曲名や個人パスは含まれません。
 
 ---
 

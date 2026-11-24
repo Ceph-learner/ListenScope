@@ -19,7 +19,13 @@
 
 ## 1. 界面预览
 
-> **TODO**：UI 打磨分支（#42）合并后，此处将统一更新为最新实机与合成数据截图及演示 GIF。
+![实时频谱与波形分析（浅色主题）](docs/images/listenscope_light_spectrum_1366x768.png)
+
+| 深色主题（英文） | 和弦、调性与节拍 | 分轨混音与 MIDI |
+| :---: | :---: | :---: |
+| ![深色主题](docs/images/listenscope_dark_en_spectrum_1366x768.png) | ![和弦与调性](docs/images/listenscope_light_chord_1366x768.png) | ![分轨混音](docs/images/listenscope_light_mixer_empty_1366x768.png) |
+
+> 以上界面截图均使用合成信号通过 `scripts/make_screenshots.py` 离线生成，不含真实曲名或个人路径。
 
 ---
 

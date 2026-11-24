@@ -19,7 +19,13 @@
 
 ## 1. 스크린샷
 
-> **TODO**: UI 다듬기 브랜치(#42) 병합 후 최신 스크린샷 및 데모 GIF로 업데이트될 예정입니다.
+![실시간 스펙트럼 및 파형 분석 (라이트 테마)](docs/images/listenscope_light_spectrum_1366x768.png)
+
+| 다크 테마 (영문) | 코드 · 조성 · 템포 | 스템 믹서 · MIDI |
+| :---: | :---: | :---: |
+| ![다크 테마](docs/images/listenscope_dark_en_spectrum_1366x768.png) | ![코드 및 조성](docs/images/listenscope_light_chord_1366x768.png) | ![스템 믹서](docs/images/listenscope_light_mixer_empty_1366x768.png) |
+
+> 위 스크린샷은 모두 `scripts/make_screenshots.py`로 합성 오디오에서 오프스크린 생성되었으며 실제 곡 제목이나 개인 경로를 포함하지 않습니다.
 
 ---
 
