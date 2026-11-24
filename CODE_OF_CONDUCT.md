@@ -1,70 +1,41 @@
-# Contributor Covenant Code of Conduct
+# 行为准则
 
-## Our Pledge
+简体中文 · [English](CODE_OF_CONDUCT.en.md)
 
-We as members, contributors, and leaders pledge to make participation in our
-community a harassment-free experience for everyone, regardless of age, body
-size, visible or invisible disability, ethnicity, sex characteristics, gender
-identity and expression, level of experience, education, socio-economic status,
-nationality, personal appearance, race, caste, color, religion, or sexual
-identity and orientation.
+ListenScope 是一个很小的业余项目，希望这里能一直是个让人放松、愿意交流的地方。无论你是第一次提 Issue，还是来帮忙改代码，都欢迎。
 
-We pledge to act and interact in ways that contribute to an open, welcoming,
-diverse, inclusive, and healthy community.
+## 我们的约定
 
-## Our Standards
+不论年龄、体型、是否有可见或不可见的障碍、民族、性别特征、性别认同与表达、经验水平、教育程度、社会经济地位、国籍、外貌、种族、宗教信仰或性取向，每个人在这里都应当被友善、平等地对待。
 
-Examples of behavior that contributes to a positive environment for our
-community include:
+## 希望大家这样做
 
-* Demonstrating empathy and kindness toward other people
-* Being respectful of differing opinions, viewpoints, and experiences
-* Giving and gracefully accepting constructive feedback
-* Accepting responsibility and apologizing to those affected by our mistakes,
-  and learning from the experience
-* Focusing on what is best not just for us as individuals, but for the overall
-  community
+- 对他人保持耐心和善意，尤其是刚入门的朋友
+- 尊重不同的观点和经验，就事论事
+- 友好地给出建议，也大方地接受建议
+- 做错了就承认、道歉，并从中学习
+- 多考虑什么对整个社区最好，而不只是对自己
 
-Examples of unacceptable behavior include:
+## 请不要这样做
 
-* The use of sexualized language or imagery, and sexual attention or advances of
-  any kind
-* Trolling, insulting or derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or email address,
-  without their explicit permission
-* Other conduct which could reasonably be considered inappropriate in a
-  professional setting
+- 使用带有性暗示的语言或图片，或进行任何形式的性骚扰
+- 挑衅、侮辱、贬低他人，或进行人身攻击、政治攻击
+- 公开或私下骚扰他人
+- 未经许可公开他人的隐私信息（例如住址、邮箱）
+- 其他在公共交流中明显不合适的行为
 
-## Enforcement Responsibilities
+## 维护者的责任
 
-Community leaders are responsible for clarifying and enforcing our standards of
-acceptable behavior and will take appropriate and fair corrective action in
-response to any behavior that they deem inappropriate, threatening, offensive, or
-harmful.
+维护者负责解释和执行这份准则，对不合适的行为会采取适当、公正的处理，例如删除或编辑相关评论、提交、Issue 等，并在合适的时候说明理由。
 
-Community leaders have the right and responsibility to remove, edit, or reject
-comments, commits, code, wiki edits, issues, and other contributions that are
-not aligned to this Code of Conduct, and will communicate reasons for moderation
-decisions when appropriate.
+## 适用范围
 
-## Scope
+这份准则适用于本项目的所有交流场所（Issue、Pull Request、Discussions 等），也适用于以本项目名义在公开场合发言的情况。
 
-This Code of Conduct applies within all community spaces, and also applies when
-an individual is officially representing the community in public spaces.
+## 如何反馈
 
-## Enforcement
+如果你遇到或看到了不合适的行为，可以在 Issue 中 @Ceph-learner；如果涉及隐私、不方便公开，请通过仓库 **Security** 页面的私密报告渠道（`Security → Report a vulnerability`）联系，并在标题注明「行为准则」。所有反馈都会被认真、公正地对待，并保护反馈者的隐私。
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainer via GitHub Issues or private contact listed
-in the repository profile. All complaints will be reviewed and investigated
-promptly and fairly.
+## 出处
 
-## Attribution
-
-This Code of Conduct is adapted from the [Contributor Covenant][homepage],
-version 2.1, available at
-[https://www.contributor-covenant.org/version/2/1/code_of_conduct.html][v2.1].
-
-[homepage]: https://www.contributor-covenant.org
-[v2.1]: https://www.contributor-covenant.org/version/2/1/code_of_conduct.html
+本准则改编自 [Contributor Covenant](https://www.contributor-covenant.org) 2.1 版（[原文](https://www.contributor-covenant.org/version/2/1/code_of_conduct.html) · [官方中文译本](https://www.contributor-covenant.org/zh-cn/version/2/1/code_of_conduct/)），以 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 授权。如中英文版本有出入，以英文原版精神为准。
