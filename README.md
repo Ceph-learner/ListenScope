@@ -89,7 +89,7 @@
 | 主要验证环境 | Windows 11 · NVIDIA RTX 5060 Ti 8 GB · 16 GB 内存 |
 
 - 默认的 6 秒分块与三级内存保护阈值均按上述验证环境保守设定。其他显卡、核显或系统配置尚未全面测试，如遇到兼容或性能问题，欢迎在 [Issues](https://github.com/Ceph-learner/ListenScope/issues) 反馈硬件信息与诊断包。
-- 无边框主窗口暂不支持 Windows 11 贴靠布局（悬停最大化按钮时弹出的菜单），已列入后续计划。
+- 无边框主窗口暂不支持 Windows 11 贴靠布局（Snap Layouts，即悬停最大化按钮时弹出的布局菜单），已列入后续计划。
 - 发行包暂未进行代码签名，首次运行时 Windows 可能弹出 SmartScreen 提示，点击「更多信息 → 仍要运行」即可。可对照 Release 中的 `SHA256SUMS.txt` 校验文件完整性。
 
 ---
