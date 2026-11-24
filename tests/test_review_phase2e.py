@@ -173,7 +173,6 @@ def test_e7_charts_uniform_fft_ticks_left_alignment_and_perceptual_colormap() ->
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="E8")
 def test_e8_unified_lucide_icons_registered_and_no_unicode_window_buttons() -> None:
     """E8: ui/assets/icons/ICONS.md must register every icon in ui/assets/icons/, and window buttons must use SVG instead of □ ❐ × −."""
     icons_dir = REPO_ROOT / "ui" / "assets" / "icons"

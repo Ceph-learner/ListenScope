@@ -92,6 +92,7 @@ from .acid_style import (
     apply_acid_plot_theme,
     get_acid_palette,
     is_acid_eligible,
+    load_lucide_icon,
     resolve_acid_variant,
 )
 from .mixer_widget import StemMixerWidget
@@ -720,19 +721,19 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         win_ctrl_l = QtWidgets.QHBoxLayout(self._win_ctrl_box)
         win_ctrl_l.setContentsMargins(2, 0, 0, 0)
         win_ctrl_l.setSpacing(2)
-        self.win_min_btn = WindowGlyphButton("min", "—")
+        self.win_min_btn = WindowGlyphButton("min", "")
         self.win_min_btn.setObjectName("windowCtrlBtn")
         self.win_min_btn.setAccessibleName("最小化窗口")
         self.win_min_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.win_min_btn.clicked.connect(self.showMinimized)
 
-        self.win_max_btn = WindowGlyphButton("max", "□")
+        self.win_max_btn = WindowGlyphButton("max", "")
         self.win_max_btn.setObjectName("windowCtrlBtn")
         self.win_max_btn.setAccessibleName("最大化 / 还原窗口")
         self.win_max_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.win_max_btn.clicked.connect(self._toggle_maximize_restore)
 
-        self.win_close_btn = WindowGlyphButton("close", "×")
+        self.win_close_btn = WindowGlyphButton("close", "")
         self.win_close_btn.setObjectName("windowCloseBtn")
         self.win_close_btn.setAccessibleName("关闭 ListenScope")
         self.win_close_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
@@ -1230,11 +1231,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _toggle_maximize_restore(self) -> None:
         if self.isMaximized():
             self.showNormal()
-            self.win_max_btn.setText("□")
             self.win_max_btn.set_maximized(False)
         else:
             self.showMaximized()
-            self.win_max_btn.setText("❐")
             self.win_max_btn.set_maximized(True)
         self._update_rounded_mask()
 
@@ -1470,7 +1469,6 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             m = self.isMaximized()
             if hasattr(self, "win_max_btn"):
                 self.win_max_btn.set_maximized(m)
-                self.win_max_btn.setText("❐" if m else "□")
             if hasattr(self, "_update_rounded_mask"):
                 self._update_rounded_mask()
             if hasattr(self, "_sync_frame_clock"):
@@ -1855,6 +1853,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 _blend(bg, fg, 0.78 if is_l else 0.82),
                 _blend(bg, fg, 0.22 if is_l else 0.18),
             )
+        icon_fg = p.text_primary if is_active else self.appearance.effective_colors(system_is_dark=detect_system_is_dark())[1]
+        self.refresh_btn.setIcon(load_lucide_icon("refresh-cw", icon_fg, 14))
+        self.settings_btn.setIcon(load_lucide_icon("settings", icon_fg, 14))
+        self._pill_dark.setIcon(load_lucide_icon("moon", icon_fg, 13))
+        self._pill_light.setIcon(load_lucide_icon("sun", icon_fg, 13))
+        self.freeze_screen_btn.setIcon(load_lucide_icon("pause", icon_fg, 14))
+        self.emergency_stop_btn.setIcon(load_lucide_icon("octagon-alert", "#FFFFFF" if ai_active else icon_fg, 14))
         self.capture_btn.setText(
             tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang)
         )

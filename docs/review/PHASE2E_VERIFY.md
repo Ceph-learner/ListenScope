@@ -20,7 +20,7 @@
 |---|---|---|---|
 | **E1** | `已改 @a5920ad` | `test_e1_topbar_single_row_le_56px_and_idle_estop_neutral` | 1366×768 下顶栏仍为双行且含 `_skin_badge` / `_shortcut_pill`；AI 空闲时 E-STOP 仍为红底。<br>改为单行 `<= 56 px`：左侧品牌/可拉伸音源/唯一实心主按钮(开始停止捕获)/电平小表/冻结图标；右侧合并资源胶囊/空闲隐藏 AI 胶囊/明暗/快捷键/设置图标/中性描边 E-STOP(AI 运行时红底脉冲)/窗口按钮；主题名移入设置页。 |
 | **E2** | `已改 @0c83d80` | `test_e2_no_double_slash_in_interactive_buttons_or_tabs_and_5_tabs_fit_1093` | 实测 5 个标签页全含 `//`（如 `// 01 SPECTRUM // 实时频谱`），7 个可见按钮含 `//`（如 `CAPTURE_START // 开始捕获`）。<br>按钮/标签页/下拉仅显示当前语言文字，工程代号仅保留在卡片 eyebrow 或 tooltip；1093 宽下 5 个标签页无滚动完整显示。 |
-| **E3** | `CONFIRMED` | `test_e3_footer_is_real_24px_status_bar_not_decorative_barcode` | `ui/acid_style.py` 仍渲染装饰性 `85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE` 与条形码。<br>改为 24 px 真实状态栏：版本号（W9）、捕获源/48 kHz、分析周期 p50 (ms)、缓冲时长、CPU%、右侧「减少动效」开关；荧光底仅 Acid 预设使用，条形码默认关闭。 |
+| **E3** | `已改 @551adb7` | `test_e3_footer_is_real_24px_status_bar_not_decorative_barcode` | `ui/acid_style.py` 仍渲染装饰性 `85/15_ANTI_FATIGUE: OK :: ZERO_GLOW: TRUE` 与条形码。<br>改为 24 px 真实状态栏：版本号（W9）、捕获源/48 kHz、分析周期 p50 (ms)、缓冲时长、CPU%、右侧「减少动效」开关；荧光底仅 Acid 预设使用，条形码默认关闭。 |
 | **E4** | `CONFIRMED` | `test_e4_visible_help_badges_le_10_per_page_and_f1_help_supported` | 实测和弦页整窗可见 `HelpBadge` 为 **11 个**（> 10）且缺 F1 焦点控件帮助。<br>每个卡片/区块仅保留 1 个 `?`，控件级说明转为 tooltip（内容不丢），补充 `F1` 快捷键打开当前焦点控件帮助。 |
 | **E5** | `CONFIRMED` | `test_e5_mixer_empty_state_shows_le_3_disabled_buttons` | 实测分轨前混音页可见禁用按钮 **12 个**（> 3）。<br>分轨前折叠依赖分轨结果的控件，只显示空状态引导卡（「① 选中片段 → ② AI 2-Stem 分轨」+ 主按钮），空表格居中提示与操作入口。 |
 | **E6** | `CONFIRMED` | `test_e6_chord_card_deduplicates_primary_label_and_uses_stability_meter` | 实测和弦卡仍重复显示主和弦名并展示原始 `稳定度: ... \| 相关 ... \| 差 ...` 字符串。<br>主和弦名只显示一次，副行显示「级数 · 构成音 · 第二候选」，稳定度改为 5 格小表 + 文字等级（原始数值放 tooltip），调性卡同理。 |

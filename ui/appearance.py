@@ -236,36 +236,36 @@ QLabel#brandEyebrow {{
 QPushButton#windowCtrlBtn {{
     background: transparent;
     color: {subtle_fg};
-    border: 1px solid {rim};
-    border-radius: 5px;
+    border: 1px solid transparent;
+    border-radius: 4px;
     padding: 0px;
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 24px;
-    max-height: 24px;
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 32px;
+    max-height: 32px;
     font-weight: 700;
 }}
 QPushButton#windowCtrlBtn:hover {{
     background: {hover};
     color: {foreground};
-    border-color: {accent};
+    border-color: {rim};
 }}
 QPushButton#windowCloseBtn {{
     background: transparent;
     color: {subtle_fg};
-    border: 1px solid {rim};
-    border-radius: 5px;
+    border: 1px solid transparent;
+    border-radius: 4px;
     padding: 0px;
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 24px;
-    max-height: 24px;
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 32px;
+    max-height: 32px;
     font-weight: 700;
 }}
 QPushButton#windowCloseBtn:hover {{
-    background: #D9262E;
+    background: #C42B1C;
     color: #FFFFFF;
-    border-color: #FF6B6B;
+    border-color: #C42B1C;
 }}
 QToolTip {{
     background-color: {surface};

@@ -1720,12 +1720,38 @@ class WorkspaceRailHandle(QtWidgets.QWidget):
         p.end()
 
 
-class WindowGlyphButton(QtWidgets.QPushButton):
-    """Frameless window control painting crisp 1px vector glyphs (minimize / maximize / restore / close).
+def load_lucide_icon(name: str, color: str, size: int = 15) -> QtGui.QIcon:
+    """Load a Lucide SVG from ui/assets/icons/ and replace currentColor at runtime."""
+    try:
+        from PySide6 import QtSvg
+    except Exception:
+        return QtGui.QIcon()
 
-    The visible text is kept (for accessibility / i18n) but replaced on screen by pixel-snapped glyphs,
-    avoiding font-dependent '—' '□' '×' rendering differences across Windows fonts and DPI scales.
-    """
+    icon_path = get_bundle_root() / "ui" / "assets" / "icons" / f"{name}.svg"
+    if not icon_path.exists():
+        icon_path = Path(__file__).resolve().parent / "assets" / "icons" / f"{name}.svg"
+    if not icon_path.exists():
+        return QtGui.QIcon()
+    svg_data = icon_path.read_text("utf-8").replace("currentColor", color)
+    renderer = QtSvg.QSvgRenderer(QtCore.QByteArray(svg_data.encode("utf-8")))
+    if not renderer.isValid():
+        return QtGui.QIcon()
+    icon = QtGui.QIcon()
+    for scale in (1, 2):
+        px = size * scale
+        pm = QtGui.QPixmap(px, px)
+        pm.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pm)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        renderer.render(painter, QtCore.QRectF(0, 0, px, px))
+        painter.end()
+        pm.setDevicePixelRatio(float(scale))
+        icon.addPixmap(pm)
+    return icon
+
+
+class WindowGlyphButton(QtWidgets.QPushButton):
+    """Frameless window control painting unified Lucide SVG icons (minimize / maximize / restore / close)."""
 
     def __init__(self, kind: str, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(text, parent)
@@ -1753,27 +1779,18 @@ class WindowGlyphButton(QtWidgets.QPushButton):
         sp = QtWidgets.QStylePainter(self)
         sp.drawControl(QtWidgets.QStyle.ControlElement.CE_PushButton, opt)
         col = self._hover if (self.underMouse() or self.isDown()) else self._idle
-        dpr = self.devicePixelRatioF() or 1.0
-        pen = QtGui.QPen(col, 1.0 if dpr < 1.5 else 1.25)
-        pen.setCapStyle(QtCore.Qt.PenCapStyle.SquareCap)
-        sp.setPen(pen)
-        sp.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-        cx = self.width() / 2.0
-        cy = self.height() / 2.0
-        s = 4.5
         if self._kind == "min":
-            sp.drawLine(QtCore.QPointF(cx - s, cy + 0.5), QtCore.QPointF(cx + s, cy + 0.5))
+            icon_name = "minus"
         elif self._kind == "max":
-            if self._maximized:
-                sp.drawRect(QtCore.QRectF(cx - s, cy - s + 2.0, 2 * s - 2.0, 2 * s - 2.0))
-                sp.drawLine(QtCore.QPointF(cx - s + 2.0, cy - s), QtCore.QPointF(cx + s, cy - s))
-                sp.drawLine(QtCore.QPointF(cx + s, cy - s), QtCore.QPointF(cx + s, cy + s - 2.0))
-            else:
-                sp.drawRect(QtCore.QRectF(cx - s, cy - s, 2 * s, 2 * s))
+            icon_name = "copy" if self._maximized else "square"
         else:
-            sp.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-            sp.drawLine(QtCore.QPointF(cx - s, cy - s), QtCore.QPointF(cx + s, cy + s))
-            sp.drawLine(QtCore.QPointF(cx + s, cy - s), QtCore.QPointF(cx - s, cy + s))
+            icon_name = "x"
+        icon = load_lucide_icon(icon_name, col.name(), size=14)
+        if not icon.isNull():
+            pm = icon.pixmap(14, 14)
+            x = int((self.width() - 14) / 2)
+            y = int((self.height() - 14) / 2)
+            sp.drawPixmap(x, y, pm)
         sp.end()
 
 
@@ -3071,15 +3088,15 @@ QFrame#dialogShellFrame[frameless="true"] {{
     border-radius: 10px;
 }}
 QPushButton#windowCtrlBtn {{
-    background-color: {p.bg_code};
+    background-color: transparent;
     color: {p.text_secondary};
-    border: 1px solid {p.border_strong};
+    border: 1px solid transparent;
     border-radius: 0px;
     padding: 0px;
-    min-width: 26px;
-    max-width: 26px;
-    min-height: 22px;
-    max-height: 22px;
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 32px;
+    max-height: 32px;
     font-family: {mono_family};
     font-size: {max(10, base_px - 1)}px;
     font-weight: 800;
@@ -3090,23 +3107,23 @@ QPushButton#windowCtrlBtn:hover {{
     border-color: {p.accent};
 }}
 QPushButton#windowCloseBtn {{
-    background-color: {p.bg_code};
+    background-color: transparent;
     color: {p.text_secondary};
-    border: 1px solid {p.border_strong};
+    border: 1px solid transparent;
     border-radius: 0px;
     padding: 0px;
-    min-width: 26px;
-    max-width: 26px;
-    min-height: 22px;
-    max-height: 22px;
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 32px;
+    max-height: 32px;
     font-family: {mono_family};
     font-size: {max(10, base_px - 1)}px;
     font-weight: 800;
 }}
 QPushButton#windowCloseBtn:hover {{
-    background-color: {p.danger};
+    background-color: #C42B1C;
     color: #FFFFFF;
-    border-color: {p.danger};
+    border-color: #C42B1C;
 }}
 QMainWindow, QDialog, QWidget {{
     color: {p.text_primary};
