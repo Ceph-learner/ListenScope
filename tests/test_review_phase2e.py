@@ -223,7 +223,6 @@ def test_e9_app_icon_ico_tray_and_icon_doc() -> None:
     assert (REPO_ROOT / "docs" / "design" / "legacy" / "listenscope_v1.svg").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="E10")
 def test_e10_design_doc_and_design_sheet_cli_exist() -> None:
     """E10: docs/DESIGN.md must document spacing/radius/type/color tokens, and scripts/make_screenshots.py must support --design-sheet."""
     design_md = REPO_ROOT / "docs" / "DESIGN.md"

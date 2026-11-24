@@ -218,13 +218,61 @@ def capture_screenshots(
     return saved
 
 
+def render_design_sheet(out_dir: Path, *, max_kb: int = 200) -> Path:
+    """Render a compact visual design token & component state sheet PNG."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    w, h = 960, 540
+    pm = QtGui.QPixmap(w, h)
+    pm.fill(QtGui.QColor("#14161A"))
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+
+    p.setPen(QtGui.QColor("#CEFF18"))
+    p.setFont(QtGui.QFont("Cascadia Mono", 14, QtGui.QFont.Weight.Bold))
+    p.drawText(24, 38, "LISTENSCOPE DESIGN SYSTEM // TOKENS & STATES")
+
+    swatches = [
+        ("bg_canvas", "#14161A"),
+        ("bg_surface", "#1C2026"),
+        ("border_rim", "#2C323C"),
+        ("fg_primary", "#E6EAF0"),
+        ("accent_dark", "#CEFF18"),
+        ("accent_light", "#00A878"),
+        ("danger", "#C42B1C"),
+    ]
+    for i, (name, col) in enumerate(swatches):
+        x = 24 + i * 130
+        p.fillRect(x, 64, 112, 56, QtGui.QColor(col))
+        p.setPen(QtGui.QColor("#2C323C"))
+        p.drawRect(x, 64, 112, 56)
+        p.setPen(QtGui.QColor("#E6EAF0"))
+        p.setFont(QtGui.QFont("Cascadia Mono", 9))
+        p.drawText(x, 136, f"{name} {col}")
+
+    p.setPen(QtGui.QColor("#B4BECB"))
+    p.setFont(QtGui.QFont("Microsoft YaHei UI", 11))
+    p.drawText(24, 180, "Spacing: 4/8/12/16/24/32 px   |   Radius: 0/2/4 px   |   Type: 11/12/13/16/20/28 px")
+    p.drawText(24, 210, "Fonts: Segoe UI / Microsoft YaHei UI + Cascadia Mono / Consolas (OS fonts, unbundled)")
+    p.end()
+
+    out_path = out_dir / "design_sheet.png"
+    _save_png_under_limit(pm, out_path, max_kb=max_kb)
+    app.processEvents()
+    return out_path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Capture offscreen synthetic screenshots for ListenScope.")
     parser.add_argument("--out-dir", type=Path, default=REPO_ROOT / "docs" / "review" / "screens")
     parser.add_argument("--prefix", type=str, default="p2e_before_")
     parser.add_argument("--suffix", type=str, default="")
     parser.add_argument("--max-kb", type=int, default=200)
+    parser.add_argument("--design-sheet", action="store_true", help="Generate design token & component state sheet")
     args = parser.parse_args(argv)
+    if args.design_sheet:
+        sheet = render_design_sheet(args.out_dir, max_kb=args.max_kb)
+        print(f"{sheet} ({sheet.stat().st_size / 1024.0:.1f} KB)")
+        return 0
     paths = capture_screenshots(args.out_dir, prefix=args.prefix, suffix=args.suffix, max_kb=args.max_kb)
     for p in paths:
         print(f"{p} ({p.stat().st_size / 1024.0:.1f} KB)")
