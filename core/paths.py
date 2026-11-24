@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -11,11 +12,31 @@ import tempfile
 from threading import Lock
 from typing import Any, Optional
 
+_logger = logging.getLogger(__name__)
 
 _external_launch_lock = Lock()
 _active_subprocs_lock = Lock()
 _ACTIVE_SUBPROCS: set[subprocess.Popen[Any]] = set()
 _win_job_handle: Optional[int] = None
+_win_self_job_attempted: bool = False
+
+
+def _configure_win32_job_api():
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
 
 
 def _ensure_windows_kill_job() -> Optional[int]:
@@ -62,9 +83,10 @@ def _ensure_windows_kill_job() -> Optional[int]:
                 ("PeakJobMemoryUsed", ctypes.c_size_t),
             ]
 
-        kernel32 = ctypes.windll.kernel32
+        kernel32 = _configure_win32_job_api()
         job = kernel32.CreateJobObjectW(None, None)
         if not job:
+            _logger.warning("CreateJobObjectW failed (winerror=%s)", ctypes.get_last_error())
             return None
         info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -75,12 +97,42 @@ def _ensure_windows_kill_job() -> Optional[int]:
             ctypes.sizeof(info),
         )
         if not ok:
+            _logger.warning("SetInformationJobObject failed (winerror=%s)", ctypes.get_last_error())
             kernel32.CloseHandle(job)
             return None
         _win_job_handle = int(job)
         return _win_job_handle
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Failed to initialize Windows Job Object: %s", exc)
         return None
+
+
+def ensure_current_process_in_kill_job() -> bool:
+    """Assign the current process to the kill-on-close Job Object so all descendants inherit it."""
+    global _win_self_job_attempted
+    if sys.platform != "win32":
+        return False
+    job = _ensure_windows_kill_job()
+    if not job:
+        return False
+    if _win_self_job_attempted:
+        return True
+    _win_self_job_attempted = True
+    try:
+        import ctypes
+
+        kernel32 = _configure_win32_job_api()
+        ok = kernel32.AssignProcessToJobObject(job, kernel32.GetCurrentProcess())
+        if not ok:
+            _logger.warning(
+                "AssignProcessToJobObject(self) failed (winerror=%s); per-subprocess fallback remains active",
+                ctypes.get_last_error(),
+            )
+            return False
+        return True
+    except Exception as exc:
+        _logger.warning("AssignProcessToJobObject(self) error: %s", exc)
+        return False
 
 
 def register_active_subprocess(proc: subprocess.Popen[Any]) -> subprocess.Popen[Any]:
@@ -96,9 +148,16 @@ def register_active_subprocess(proc: subprocess.Popen[Any]) -> subprocess.Popen[
             try:
                 import ctypes
 
-                ctypes.windll.kernel32.AssignProcessToJobObject(job, int(handle))
-            except Exception:
-                pass
+                kernel32 = _configure_win32_job_api()
+                ok = kernel32.AssignProcessToJobObject(job, int(handle))
+                if not ok:
+                    _logger.warning(
+                        "AssignProcessToJobObject(pid=%s) failed (winerror=%s)",
+                        getattr(proc, "pid", None),
+                        ctypes.get_last_error(),
+                    )
+            except Exception as exc:
+                _logger.warning("AssignProcessToJobObject(pid=%s) error: %s", getattr(proc, "pid", None), exc)
     return proc
 
 

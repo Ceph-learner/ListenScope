@@ -644,7 +644,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         topbar_v.setContentsMargins(8, 4, 8, 4)
         topbar_v.setSpacing(0)
 
-        row_cmd = QtWidgets.QHBoxLayout()
+        self._topbar_cmd_row = row_cmd = QtWidgets.QHBoxLayout()
         row_cmd.setContentsMargins(0, 0, 0, 0)
         row_cmd.setSpacing(5)
 
@@ -1479,30 +1479,41 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         lang = get_current_language()
         if hasattr(self, "resource_bar"):
             self.resource_bar.set_compact_mode(w < 1200, lang=lang)
-        # Compute required width for wide topbar in the current language from actual widget sizeHints
-        wide_req = 48  # margins + spacing + brand/help/dot/divider slack
-        if hasattr(self, "source_combo"):
-            src_min = max(116, self.source_combo.fontMetrics().horizontalAdvance("0123456789AB") + 32)
-            self.source_combo.setMinimumWidth(src_min)
-            wide_req += src_min
-        if hasattr(self, "resource_bar"):
-            wide_req += max(60, self.resource_bar.sizeHint().width())
-        if hasattr(self, "_win_ctrl_box"):
-            wide_req += max(120, self._win_ctrl_box.sizeHint().width())
-        if hasattr(self, "capture_status_lbl"):
-            wide_req += max(80, self.capture_status_lbl.sizeHint().width())
-        for btn, wide_txt in (
-            (getattr(self, "refresh_btn", None), translate_text("刷新", lang)),
-            (getattr(self, "settings_btn", None), tr("btn_settings", lang)),
-            (getattr(self, "freeze_screen_btn", None), translate_text("恢复画面" if getattr(self, "_freeze_screen", False) else "冻结画面", lang)),
-            (getattr(self, "capture_btn", None), tr("btn_stop_capture", lang) if (hasattr(self, "capture_btn") and self.capture_btn.isChecked()) else tr("btn_start_capture", lang)),
-            (getattr(self, "emergency_stop_btn", None), tr("btn_estop", lang)),
-            (getattr(self, "_pill_dark", None), translate_text("黑夜", lang)),
-            (getattr(self, "_pill_light", None), translate_text("白天", lang)),
-        ):
-            if btn is not None:
-                fm = btn.fontMetrics()
-                wide_req += fm.horizontalAdvance(wide_txt) + 34
+        # Compute required width for wide topbar from actual layout margins, spacing, and visible widget sizeHints
+        top_m = self._topbar_v.contentsMargins()
+        cmd_m = self._topbar_cmd_row.contentsMargins()
+        wide_req = top_m.left() + top_m.right() + cmd_m.left() + cmd_m.right() + 8
+        src_min = max(116, self.source_combo.fontMetrics().horizontalAdvance("0123456789AB") + 32)
+        self.source_combo.setMinimumWidth(src_min)
+        wide_btn_texts = {
+            self.refresh_btn: translate_text("刷新", lang),
+            self.settings_btn: tr("btn_settings", lang),
+            self.freeze_screen_btn: translate_text("恢复画面" if getattr(self, "_freeze_screen", False) else "冻结画面", lang),
+            self.capture_btn: tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang),
+            self.emergency_stop_btn: tr("btn_estop", lang),
+        }
+        vis_items = 0
+        for i in range(self._topbar_cmd_row.count()):
+            wdg = self._topbar_cmd_row.itemAt(i).widget()
+            if wdg is None:
+                continue
+            if wdg in (self.ai_status_badge, self._hazard_bar) and not wdg.isVisible():
+                continue
+            vis_items += 1
+            if wdg is self.source_combo:
+                wide_req += src_min
+            elif wdg is self._skin_switcher:
+                sm = self._skin_switcher.layout().contentsMargins()
+                sp = max(0, self._skin_switcher.layout().spacing())
+                d_w = self._pill_dark.fontMetrics().horizontalAdvance(translate_text("黑夜", lang)) + 34
+                l_w = self._pill_light.fontMetrics().horizontalAdvance(translate_text("白天", lang)) + 34
+                wide_req += sm.left() + sm.right() + sp + d_w + l_w
+            elif wdg in wide_btn_texts:
+                txt_w = wdg.fontMetrics().horizontalAdvance(wide_btn_texts[wdg]) + 34
+                wide_req += max(wdg.sizeHint().width(), txt_w)
+            else:
+                wide_req += max(wdg.minimumWidth(), wdg.sizeHint().width())
+        wide_req += max(0, self._topbar_cmd_row.spacing()) * max(0, vis_items - 1)
         narrow_top = w < wide_req
         self._is_narrow_top = narrow_top
         if hasattr(self, "_pill_dark") and hasattr(self, "_pill_light") and hasattr(self, "_theme_icon_btn"):

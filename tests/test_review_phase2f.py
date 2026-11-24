@@ -185,6 +185,35 @@ def test_f1_narrow_topbar_no_clipping_and_60s_visible() -> None:
     assert proc.returncode == 0, f"1.25x subprocess failed: {proc.stderr}"
 
 
+def test_f1_ub03_scaled_125_zh_en() -> None:
+    """Round 3 #1: Under QT_SCALE_FACTOR=1.25, zh and en must fit 1093x566 and 1024x528 without clipping outside."""
+    env = dict(os.environ)
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["QT_SCALE_FACTOR"] = "1.25"
+    code = (
+        "import sys; from PySide6 import QtCore, QtWidgets; "
+        "from audio.playback import StemMixerEngine; "
+        "from core.appearance import Appearance; "
+        "from core.config import AIConfig, ResourceLimits; "
+        "from core.system_probe import probe_system; "
+        "from ui.main_window import ListenScopeMainWindow; "
+        "app = QtWidgets.QApplication([]); "
+        "m = StemMixerEngine(sample_rate=48000, channels=2); "
+        "w = ListenScopeMainWindow(hardware_report=probe_system(), resource_limits=ResourceLimits(), ai_config=AIConfig(), mixer_engine=m)\n"
+        "for lang in ('zh', 'en'):\n"
+        "    w.apply_appearance(Appearance(theme_mode='light', language=lang))\n"
+        "    for ww, hh in ((1093, 566), (1024, 528)):\n"
+        "        w.resize(ww, hh); w.show(); app.processEvents()\n"
+        "        for b in w.findChildren(QtWidgets.QPushButton):\n"
+        "            if not b.isVisible() or b.width() <= 0 or b.height() <= 0: continue\n"
+        "            br = b.mapTo(w, QtCore.QPoint(b.width(), b.height()))\n"
+        "            assert br.x() <= w.width() + 1 and br.y() <= w.height() + 1, f'[{lang}] {ww}x{hh} btn {b.text()!r} clipped br={br}'\n"
+        "w.close(); m.close()"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=45)
+    assert proc.returncode == 0, f"1.25x ub03 check failed: {proc.stderr}"
+
+
 def test_f2_resource_capsule_status_consistent_wide_and_compact() -> None:
     from core.models import ResourceSnapshot, ResourceStatus
     from ui.resource_widget import ResourceMonitorBar

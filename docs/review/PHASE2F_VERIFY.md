@@ -32,7 +32,7 @@
 
 ## Windows 目标机待复测项
 1. **125% 缩放窄窗口（1093×566 物理）**：确认顶栏无半截字、E-STOP 保留短标签、混音空状态主按钮无需滚动即可点击。
-2. **托盘图标与退出耗时**：确认托盘溢出区显示 3 竖条单色图标并随系统明暗切换；点击 `Quit ListenScope` 后 2 s 内主进程与子进程全部退出，日志可见各阶段 `shutdown stage=... elapsed_ms=...`。
+2. **托盘图标与退出耗时**：确认托盘溢出区显示 3 竖条单色图标并随系统明暗切换；点击 `Quit ListenScope` 后 2 s 内主进程与子进程全部退出，日志可见各阶段 `shutdown stage=... elapsed_ms=...`。另在启动一次 2-Stem 分轨、AI 子进程运行中用 `taskkill /F /PID <主进程>` 强制结束主进程，5 秒内 AI/MIDI 子进程也应全部退出。
 3. **真实音频持续播放 BPM**：确认 15 s 内稳定出 BPM（不再等到 100+ s）。
 
 ---
@@ -66,4 +66,14 @@ INFO     listenscope.shutdown:main.py:2283 shutdown stage=subprocesses elapsed_m
 INFO     listenscope.shutdown:main.py:2283 shutdown stage=resource_manager elapsed_ms=0.2
 INFO     listenscope.shutdown:main.py:2320 shutdown total elapsed_ms=543.7
 ```
+
+---
+
+## Round 3（`wide_req` 实际布局计算 + Job Object 健壮性）
+
+| 项 | 修改内容与文件 | 测试名 | Linux/offscreen 验证结果 |
+|---|---|---|---|
+| **1. `wide_req` 实际布局计算** | [`ui/main_window.py`](../../ui/main_window.py)：保存 `self._topbar_cmd_row`，`_apply_responsive_layout` 按顶栏外/内边距 + `spacing × (可见控件数 − 1)` + 所有可见固定控件与宽按钮 `sizeHint` 之和 + `8px` 余量计算 `wide_req`（不再硬编码 `48`/`160`）。 | `tests/test_review_phase2c.py::test_ub03_main_window_fits_small_screens_1093x566_and_1024x528`<br>`tests/test_review_phase2f.py::test_f1_narrow_topbar_no_clipping_and_60s_visible`<br>`tests/test_review_phase2f.py::test_f1_ub03_scaled_125_zh_en` | **PASSED**（含 `1.25x` 下 `zh`/`en` × `1093×566` / `1024×528`；`p2f_after_light_en_chord_1366x768.png` 确认 `VRAM 7.0/8.0G` 不被挤压） |
+| **2. Windows Job Object 健壮性** | [`core/paths.py`](../../core/paths.py) & [`main.py`](../../main.py)：<br>- 为 `CreateJobObjectW`、`SetInformationJobObject`、`AssignProcessToJobObject`、`GetCurrentProcess`、`CloseHandle` 显式声明 `argtypes` / `restype`（`wintypes.HANDLE` 等）；<br>- 新增 `ensure_current_process_in_kill_job()` 并在 `main()` 启动时将主进程加入 Job（后代自动继承），保留 per-process 绑定作为兜底；<br>- 所有失败路径记录 `warning` 日志（不静默吞掉）。 | 代码路径走查（Windows Job Object API 需目标机 `taskkill /F /PID` 实测） | **Linux/offscreen 回归全绿；待 Windows 实测** |
+
 

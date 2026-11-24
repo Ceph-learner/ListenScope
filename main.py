@@ -29,6 +29,7 @@ if str(_SRC_DIR) not in sys.path:
 
 from core.paths import (
     default_work_dir,
+    ensure_current_process_in_kill_job,
     get_bundle_root,
     kill_all_active_subprocesses,
     prepend_ffmpeg_path_env,
@@ -2331,6 +2332,7 @@ class ListenScopeController:
 
 def main(argv: Optional[list[str]] = None) -> int:
     multiprocessing.freeze_support()
+    ensure_current_process_in_kill_job()
     parser = argparse.ArgumentParser(description="ListenScope Desktop Application")
     parser.add_argument("--simulate", action="store_true", help="启动合成信号 + Mock 测试模式（用于无真机调试）")
     parser.add_argument("--ai-python", type=str, default=None, help="独立 AI Worker 虚拟环境 python.exe 路径")
