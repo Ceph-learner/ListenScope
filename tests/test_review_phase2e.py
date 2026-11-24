@@ -119,7 +119,6 @@ def test_e4_visible_help_badges_le_10_per_page_and_f1_help_supported() -> None:
         mixer.close()
 
 
-@pytest.mark.xfail(strict=True, reason="E5")
 def test_e5_mixer_empty_state_shows_le_3_disabled_buttons() -> None:
     """E5: Before separation, mixer page must show an empty-state card and <= 3 visible disabled buttons."""
     app, win, mixer = _make_window()
