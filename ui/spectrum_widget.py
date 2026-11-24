@@ -273,12 +273,22 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self.spec_plot.setLabel("bottom", "时间 (s)", **{"font-size": "9pt"})
         self.spec_plot.setLabel("left", "频率 (Hz)", **{"font-size": "9pt"})
         self.spec_plot.setYRange(0, n_bins, padding=0)
+        self.spec_plot.setXRange(-30.0, 0.0, padding=0)
+        self.spec_plot.enableAutoRange(axis="x", enable=False)
+        self.spec_plot.getAxis("bottom").enableAutoSIPrefix(False)
         self._spec_n_bins = n_bins
         self._spec_bin_freqs = np.geomspace(27.5, 16000.0, n_bins)
         self._refresh_axis_ticks()
         self._spec_img = pg.ImageItem()
         self._spec_img.setLookupTable(acid_colormap_lut("spectrogram", "light"))
         self.spec_plot.addItem(self._spec_img)
+        self._spec_empty_item = pg.TextItem(
+            text="开始捕获后显示",
+            color=(120, 130, 145, 190),
+            anchor=(0.5, 0.5),
+        )
+        self._spec_empty_item.setPos(-15.0, float(n_bins) * 0.5)
+        self.spec_plot.addItem(self._spec_empty_item)
         self._plots = (self.wave_plot, self.fft_plot, self.log_plot, self.spec_plot)
         for p in self._plots:
             try:
@@ -449,12 +459,22 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             eb.setVisible(not cards_compact)
         self.pitch_detail.setVisible(not cards_compact)
         self.level_meter.setVisible(not cards_compact)
+        for lbl, px in (
+            (self.pitch_label, 14),
+            (self.rms_label, 13),
+            (self.peak_label, 13),
+            (self.window_label, 13),
+        ):
+            lbl.setStyleSheet(f"font-size: {px}px; font-weight: 700;" if cards_compact else "")
+            lbl.updateGeometry()
         for card in self._metric_cards:
-            card.setMaximumHeight(36 if cards_compact else 16777215)
+            card.setMaximumHeight(16777215)
             lay = card.layout()
             if lay is not None:
-                lay.setContentsMargins(8 if cards_compact else 11, 1 if cards_compact else 7, 8 if cards_compact else 11, 1 if cards_compact else 7)
+                lay.setContentsMargins(8 if cards_compact else 11, 2 if cards_compact else 7, 8 if cards_compact else 11, 2 if cards_compact else 7)
                 lay.setSpacing(0 if cards_compact else 2)
+                lay.activate()
+            card.updateGeometry()
         self._arrange_plots()
         self._refresh_axis_ticks()
 
@@ -703,8 +723,11 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._log_curve.setData(snap.log_freqs_hz, snap.log_spectrum_db, skipFiniteCheck=True)
 
         if spectrogram is not None and spectrogram.size > 0:
+            self._spec_empty_item.setVisible(False)
             self._spec_img.setImage(spectrogram, autoLevels=False, levels=(-90.0, -5.0))
             frames = int(spectrogram.shape[0])
             bins = int(spectrogram.shape[1]) if spectrogram.ndim > 1 else 96
             dur_s = max(1.0 / 15.0, frames / 15.0)
             self._spec_img.setRect(QtCore.QRectF(-dur_s, 0.0, dur_s, float(bins)))
+        else:
+            self._spec_empty_item.setVisible(True)

@@ -13,20 +13,17 @@ This document lists the third-party software, libraries, icons, and optional com
 - **URL**: <https://pyside.org>
 - **User Rights**: Under the GNU Lesser General Public License v3.0, you are free to replace the dynamically linked Qt / PySide6 shared libraries (`.dll` / `.pyd` / `.so`) in the ListenScope distribution with your own compatible build (e.g., inside `_internal\PySide6\` in the frozen Core package).
 
-### `soxr` (`python-soxr` / `libsoxr`)
-- **License**: `LGPL-2.1-or-later`
+### `libsndfile` (via `soundfile`)
+- **License**: `LGPL-2.1`
 - **License Text**: [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt)
-- **URL**: <https://github.com/dofuuz/python-soxr>
-- **Note**: Transitive dependency of `librosa`; dynamically linked as a Python extension module.
-
-### `certifi`
-- **License**: `MPL-2.0` (Mozilla Public License 2.0)
-- **URL**: <https://github.com/certifi/python-certifi>
-- **Note**: Transitive dependency of `requests` / `pooch`.
+- **URL**: <https://github.com/libsndfile/libsndfile>
+- **Note**: Bundled by `soundfile`; dynamically linked shared library.
 
 ---
 
 ## 2. Core Python Packages (Linux Core Environment · `pip-licenses`)
+
+> Note: Direct codebase scan (`rg "import soxr|from soxr|certifi"`) confirmed 0 direct imports of `soxr` or `certifi`, so they are omitted below; final transitive bundle list is **NEEDS_TARGET** pending inspection of Windows PyInstaller `dist/ListenScopeCore/`.
 
 | Package | Version | License | Project URL |
 |---|---|---|---|
@@ -48,13 +45,11 @@ This document lists the third-party software, libraries, icons, and optional com
 | scikit-learn | 1.9.1 | BSD-3-Clause | <https://scikit-learn.org> |
 | joblib | 1.6.0 | BSD-3-Clause | <https://joblib.readthedocs.io> |
 | threadpoolctl | 3.8.0 | BSD-3-Clause | <https://github.com/joblib/threadpoolctl> |
-| soxr | 1.1.0 | LGPL-2.1-or-later | <https://github.com/dofuuz/python-soxr> |
 | pooch | 1.9.0 | BSD-3-Clause | <https://github.com/fatiando/pooch> |
 | requests | 2.34.2 | Apache-2.0 | <https://github.com/psf/requests> |
 | urllib3 | 2.8.0 | MIT | <https://github.com/urllib3/urllib3> |
 | charset-normalizer | 3.5.3 | MIT | <https://github.com/jawah/charset_normalizer> |
 | idna | 3.20 | BSD-3-Clause | <https://github.com/kjd/idna> |
-| certifi | 2026.10.23 | MPL-2.0 | <https://github.com/certifi/python-certifi> |
 | cffi | 2.1.1 | MIT-0 | <https://github.com/python-cffi/cffi> |
 | pycparser | 3.12 | BSD-3-Clause | <https://github.com/eliben/pycparser> |
 | decorator | 5.3.2 | BSD-2-Clause | <https://github.com/micheles/decorator> |

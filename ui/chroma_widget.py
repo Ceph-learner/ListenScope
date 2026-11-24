@@ -682,6 +682,9 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         ay.geometryChanged.connect(self.refresh_chroma_note_ticks)
         self.chroma_hist_plot.setLabel("bottom", "时间 (s)", **{"font-size": "9pt"})
         self.chroma_hist_plot.setYRange(0, len(PITCH_CLASSES), padding=0)
+        self.chroma_hist_plot.setXRange(-30.0, 0.0, padding=0)
+        self.chroma_hist_plot.enableAutoRange(axis="x", enable=False)
+        self.chroma_hist_plot.getAxis("bottom").enableAutoSIPrefix(False)
         self.chroma_hist_plot.setMouseEnabled(x=True, y=False)
         self.refresh_chroma_note_ticks()
         self._chroma_frame_dt = 3200.0 / 48000.0
@@ -702,9 +705,9 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
     def refresh_chroma_note_ticks(self) -> None:
         axis = self.chroma_hist_plot.getAxis("left")
         font = axis.style["tickFont"] or self.font()
-        label_height = QtGui.QFontMetrics(font).height() + 3
+        label_height = QtGui.QFontMetrics(font).height() + 1
         available = max(1.0, axis.height())
-        stride = max(1, min(len(PITCH_CLASSES), int(np.ceil(len(PITCH_CLASSES) * label_height / available))))
+        stride = 1 if available >= len(PITCH_CLASSES) * label_height else 2
         if stride != getattr(self, "_chroma_tick_stride", None):
             self._chroma_tick_stride = stride
             axis.setTicks([[(i + 0.5, PITCH_CLASSES[i]) for i in range(0, len(PITCH_CLASSES), stride)]])
@@ -1123,9 +1126,11 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self._set_cached_text(self.key_secondary_lbl, f"第二候选: {disp_key_sec}")
         mod_tag = " [可能转调]" if ky.modulation_hint else ""
         set_widget_tone(self.key_relation_lbl, "warn" if ky.modulation_hint else "info")
+        rel_note = (ky.relation_note or "").strip()
+        rel_txt = f"{ky.stability}{mod_tag}" if not rel_note else f"{ky.stability}{mod_tag} · {rel_note}"
         self._set_cached_text(
             self.key_relation_lbl,
-            f"{ky.stability}{mod_tag} · {ky.relation_note}",
+            rel_txt,
         )
         self.key_relation_lbl.setToolTip(f"相关度 {ky.correlation:.2f} · 差值 {ky.margin:.2f} ({ky.stability})")
         self._key_dots.setToolTip(f"相关度 {ky.correlation:.2f} · 差值 {ky.margin:.2f} ({ky.stability})")
@@ -1192,8 +1197,11 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self._bar_item.setOpts(height=self._chroma_bar_heights)
 
         if chroma_history is not None and chroma_history.size > 0:
-            self._chroma_img.setImage(chroma_history, autoLevels=False, levels=(0.0, 0.9))
-            n_frames = int(chroma_history.shape[0])
+            arr = np.asarray(chroma_history, dtype=np.float32)
+            if arr.ndim == 2 and arr.shape[1] != len(PITCH_CLASSES) and arr.shape[0] == len(PITCH_CLASSES):
+                arr = arr.T
+            self._chroma_img.setImage(arr, autoLevels=False, levels=(0.0, 0.9))
+            n_frames = int(arr.shape[0])
             dt = float(getattr(self, "_chroma_frame_dt", 3200.0 / 48000.0))
             dur_s = max(0.1, n_frames * dt)
             self._chroma_img.setRect(QtCore.QRectF(-dur_s, 0.0, dur_s, float(len(PITCH_CLASSES))))

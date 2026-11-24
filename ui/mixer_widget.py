@@ -202,6 +202,7 @@ class StemMixerWidget(QtWidgets.QWidget):
     metronome_overlay_toggled = QtCore.Signal(bool)
     midi_settings_requested = QtCore.Signal()
     clear_results_requested = QtCore.Signal()
+    quick_2stem_requested = QtCore.Signal()
 
     def __init__(self, mixer_engine: StemMixerEngine, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -504,15 +505,21 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._empty_tracks_hint_lbl.setObjectName("mutedCaption")
         self._empty_tracks_hint_lbl.setWordWrap(True)
         empty_btn_row = QtWidgets.QHBoxLayout()
+        self._empty_quick_2stem_btn = QtWidgets.QPushButton("选最近 30 s 并 2-Stem 分轨")
+        self._empty_quick_2stem_btn.setObjectName("acidPrimaryBtn")
+        self._empty_quick_2stem_btn.clicked.connect(self.quick_2stem_requested.emit)
         self._empty_open_midi_btn = QtWidgets.QPushButton("打开单轨 WAV 转 MIDI…")
-        self._empty_open_midi_btn.setObjectName("acidPrimaryBtn")
+        self._empty_open_midi_btn.setFlat(True)
+        self._empty_open_midi_btn.setStyleSheet(
+            "QPushButton { border: none; background: transparent; text-decoration: underline; padding: 2px 6px; }"
+        )
         self._empty_open_midi_btn.clicked.connect(self._on_open_single_stem_clicked)
+        empty_btn_row.addWidget(self._empty_quick_2stem_btn)
         empty_btn_row.addWidget(self._empty_open_midi_btn)
         empty_btn_row.addStretch(1)
         empty_l.addWidget(empty_hdr)
         empty_l.addWidget(self._empty_tracks_hint_lbl)
         empty_l.addLayout(empty_btn_row)
-        self._empty_tracks_ov = AcidGraphicOverlay(self._empty_tracks_card, stencil="4X")
         self._tracks_layout.addWidget(self._empty_tracks_card)
         self._tracks_layout.addStretch(1)
         scroll.setWidget(self._tracks_container)
@@ -587,6 +594,13 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.chord_timeline_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.chord_timeline_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.chord_timeline_table.cellClicked.connect(self._on_chord_row_clicked)
+        self._chord_empty_lbl = QtWidgets.QLabel("分轨后点击『分析和弦与节奏』")
+        self._chord_empty_lbl.setObjectName("mutedCaption")
+        self._chord_empty_lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._chord_empty_lbl.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        vp_lay = QtWidgets.QVBoxLayout(self.chord_timeline_table.viewport())
+        vp_lay.setContentsMargins(8, 8, 8, 8)
+        vp_lay.addWidget(self._chord_empty_lbl, 1, QtCore.Qt.AlignmentFlag.AlignCenter)
         deep_l.addWidget(self._deep_summary_scroll)
         deep_l.addWidget(self.chord_timeline_table, 1)
         deep_scroll.setWidget(deep_inner)
@@ -832,19 +846,6 @@ class StemMixerWidget(QtWidgets.QWidget):
                 p.accent if acid_variant == "light" else p.ribbon_bg,
                 p.accent_secondary,
             )
-            self._empty_tracks_ov.setVisible(True)
-            if acid_variant == "dark":
-                self._empty_tracks_ov.set_colors(
-                    QtGui.QColor(241, 242, 236, 65),
-                    QtGui.QColor(241, 242, 236, 15),
-                    QtGui.QColor(206, 255, 24, 190),
-                )
-            else:
-                self._empty_tracks_ov.set_colors(
-                    QtGui.QColor(9, 13, 20, 52),
-                    QtGui.QColor(9, 13, 20, 12),
-                    QtGui.QColor(0, 168, 120, 175),
-                )
             self.job_progress.set_theme_colors(
                 accent=p.accent,
                 accent_hi=p.accent_secondary,
@@ -861,7 +862,6 @@ class StemMixerWidget(QtWidgets.QWidget):
             dot_color = QtGui.QColor(p.accent)
             self._pr_empty_text.setColor(p.text_muted)
         else:
-            self._empty_tracks_ov.setVisible(False)
             apply_plot_appearance(self.piano_roll_plot, appearance, system_is_dark=system_is_dark)
             mode = appearance.resolve_theme_mode(system_is_dark=system_is_dark)
             bg, fg, accent = appearance.effective_colors(system_is_dark=system_is_dark)
@@ -1463,6 +1463,8 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.clear_results_btn.setEnabled(bool(tracks))
         self.export_sheet_btn.setEnabled(False)
         self.chord_timeline_table.setRowCount(0)
+        if hasattr(self, "_chord_empty_lbl"):
+            self._chord_empty_lbl.setVisible(True)
         self.analysis_tabs.setCurrentIndex(0)
         set_widget_tone(self.deep_summary_lbl, "info")
         self.deep_summary_lbl.setText(
@@ -1600,6 +1602,8 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._chord_segments = rows
         self._chord_starts = [float(s.start_sec) for s in rows]
         self.chord_timeline_table.setRowCount(len(rows))
+        if hasattr(self, "_chord_empty_lbl"):
+            self._chord_empty_lbl.setVisible(len(rows) == 0)
         for idx, seg in enumerate(rows):
             dur_s = max(0.0, float(seg.end_sec - seg.start_sec))
             beats_txt = f"{dur_s / (60.0 / bpm_val):.1f} 拍" if bpm_val is not None else f"{dur_s:.1f}s"

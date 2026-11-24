@@ -8,7 +8,7 @@
 </p>
 
 <p align="left">
-  <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64)-0078D4?style=flat-square" alt="Windows" />
+  <img src="https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Win10%20(System%20Loopback)-0078D4?style=flat-square" alt="Windows" />
   <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License" />
   <a href="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml"><img src="https://github.com/Ceph-learner/ListenScope/actions/workflows/tests.yml/badge.svg" alt="Tests" /></a>
 </p>
@@ -31,7 +31,7 @@
 
 ## 2. 主な機能（検証済み）
 
-- **リアルタイムキャプチャ & 解析**：Windows 標準の WASAPI プロセス単位ループバック（Build ≥ 20348）またはシステムループバックにより再生音声を取得し、波形、FFT/対数スペクトラム、`F0` ピッチ、`-50 ~ +50 cents` 音程バーを表示します。
+- **リアルタイムキャプチャ & 解析**：Windows 標準の WASAPI プロセス単位ループバック（Windows 11 Build ≥ 20348）またはシステムループバック（Windows 10/11）により再生音声を取得し、波形、FFT/対数スペクトラム、`F0` ピッチ、`-50 ~ +50 cents` 音程バーを表示します。
 - **コード・調性・移調**：12-bin Chroma ヒートマップ、長/短三和音判定、ローマ数字度数、12 ステップ履歴、CPU カポ移調、24 調コード練習ダイアログ（試聴・`.mid` 出力対応）を備えています。
 - **120 秒履歴 & A/B ループ**：固定 120 秒リングバッファ（`48 kHz / Stereo / float32`）、ドラッグ A/B 指定、`0.5x–1.25x` 音程維持 WSOLA 再生速度変更、12 個のブックマーク、タップメトロノーム、練習 WAV 出力に対応します。
 - **ローカル AI ステム分離 & ミキサー（任意）**：独立サブプロセスで 2-Stem（MDX-Net）または 4-Stem（HTDemucs）分離を実行し、6 秒安全チャンクと即時停止（E-STOP）によるメモリ解放、`0–24 dB` ベースソロブースト、FFT-YIN ベース音高解析を提供します。
@@ -42,7 +42,7 @@
 
 ## 3. システム要件
 
-- **OS**：Windows 10 / 11（64-bit；プロセス単位ループバックには Windows 11 または Windows 10 Build ≥ 20348 が必要です）。
+- **OS**：Windows 11 / Windows 10（64-bit）。**プロセス単位ループバックには Windows 11（Build ≥ 20348）が必要であり、Windows 10 ではシステムループバックを利用できます。**
 - **実機検証環境**：これまでの実機確認は主に **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM** 環境で行われています。その他の GPU や構成は網羅的に検証されていません。
 - **GPU 要件**：**AI ステム分離は任意機能**です。リアルタイムスペクトラム、コード/調性/BPM 解析、A/B 再生、メトロノームは CPU のみで動作します。
 
