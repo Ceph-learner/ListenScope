@@ -64,7 +64,7 @@ jobs:
         run: python scripts/make_screenshots.py --out-dir artifacts/p2e_win_screens --prefix p2e_before_ --suffix _win
       - name: Upload Windows offscreen screenshots artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: p2e-windows-screenshots
           path: artifacts/p2e_win_screens/*.png
