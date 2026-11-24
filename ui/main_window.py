@@ -602,6 +602,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._hist_x_key: Optional[tuple[int, float, float]] = None
         self._hist_x_buf: Optional[np.ndarray] = None
         self._last_hist_empty = False
+        from collections import deque
+        self._latency_samples: deque[float] = deque(maxlen=30)
+        self._process_cpu_proc: Any = None
+        self._last_cpu_poll_ts: float = 0.0
+        self._last_cpu_pct: Optional[float] = None
 
         app_inst = QtGui.QGuiApplication.instance()
         if app_inst is not None:
@@ -665,7 +670,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._src_pill.setObjectName("telemetryPill")
         self._src_pill.setVisible(False)
         self.source_combo = MarqueeComboBox()
-        self.source_combo.setMinimumWidth(140)
+        self.source_combo.setMinimumWidth(90)
+        self.source_combo.setPlaceholderText("选择音源…")
         self.source_combo.setToolTip("AUDIO_IN // 选择要捕获的音频进程或系统环回")
         self.source_combo.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -689,7 +695,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_status_lbl.setObjectName("captureStatus")
         set_widget_tone(self.capture_status_lbl, "info")
 
-        self.freeze_screen_btn = QtWidgets.QPushButton("⏸ 冻结")
+        self.freeze_screen_btn = QtWidgets.QPushButton("冻结")
         self.freeze_screen_btn.setCheckable(True)
         self.freeze_screen_btn.setToolTip("冻结/恢复实时频谱、和弦、调性与音准画面刷新 (快捷键 F)")
         self.freeze_screen_btn.toggled.connect(self.set_freeze_screen)
@@ -699,7 +705,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             HelpBadge(
                 "按进程捕获说明",
                 "优先选择正在播放音乐的进程（如 QQMusic.exe），仅捕获该应用输出，避免把混音或节拍器再次录回；"
-                "若系统 Build < 20348 或列表未找到播放器，可改用系统环回。",
+                "进程环回需要 Windows 11（Build ≥ 20348），Windows 10 可改用系统环回。",
             )
         )
         row_cmd.addWidget(self.refresh_btn)
@@ -746,10 +752,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         self.emergency_stop_btn = QtWidgets.QPushButton("紧急停止 AI")
         self.emergency_stop_btn.setToolTip("E-STOP // 紧急停止所有 AI 任务并清理显存 (Ctrl+Shift+E)")
+        self.emergency_stop_btn.setAccessibleName("紧急停止 AI")
         self.emergency_stop_btn.setObjectName("emergencyStopBtn")
         self.emergency_stop_btn.setProperty("ai_active", False)
         self.emergency_stop_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
-        self.emergency_stop_btn.setMinimumWidth(88)
+        self.emergency_stop_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.emergency_stop_btn.clicked.connect(self.emergency_stop_requested.emit)
         self._estop_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Shift+E"), self)
         self._estop_shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
@@ -837,6 +847,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.spectrum_widget.view_combo.activated.connect(self._on_analysis_layout_selected)
         self.chroma_widget = ChromaAndHarmonyWidget()
         self.mixer_widget = StemMixerWidget(mixer_engine)
+        self.mixer_widget.quick_2stem_requested.connect(self._on_quick_2stem_from_mixer)
         self.resource_panel = ResourceStatusPanel()
         self.live_widget = ExperimentalLiveWidget(ai_config)
 
@@ -1435,6 +1446,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         target = (not self._bottom_panel_collapsed) if collapsed is None else bool(collapsed)
         self.set_bottom_panel_collapsed(target)
 
+    def _on_quick_2stem_from_mixer(self) -> None:
+        if hasattr(self, "recent_30_btn"):
+            self.recent_30_btn.click()
+        self._on_sep_2stem()
+
     def _apply_responsive_layout(self) -> None:
         w = max(1, self.width())
         h = max(1, self.height())
@@ -1451,6 +1467,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._topbar_divider.setVisible(False)
         self._shortcut_pill.setVisible(False)
         self._skin_badge.setVisible(False)
+        if hasattr(self, "resource_bar"):
+            self.resource_bar.set_compact_mode(w < 1200, lang=get_current_language())
+        if hasattr(self, "emergency_stop_btn"):
+            estop_full = tr("btn_estop", get_current_language())
+            self.emergency_stop_btn.setAccessibleName(estop_full)
+            self.emergency_stop_btn.setText("" if w < 920 else estop_full)
+            self.emergency_stop_btn.setMinimumWidth(self.emergency_stop_btn.sizeHint().width())
+            self.emergency_stop_btn.adjustSize()
 
         # Default A/B panel to compact single-row mode; user can expand via '⋯ 更多'
         if self._ab_more_user_override is None:
@@ -1464,22 +1488,23 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         if not self._bottom_panel_collapsed:
             practice = getattr(self.appearance, "layout", "split") == "practice"
-            narrow_compact = compact_h and w < 1150 and not practice
+            narrow_compact = self.isVisible() and compact_h and w < 1150 and not practice
             self.recent_60_btn.setVisible(not narrow_compact)
             self._ai_model_lbl.setVisible(not narrow_compact)
             self.ai_2stem_combo.setMaximumWidth(170 if narrow_compact else 240)
-            self.ai_gpu_chk.setMaximumWidth(175 if narrow_compact else 260)
+            self.ai_gpu_chk.setMaximumWidth(175 if narrow_compact else 360)
             orig_gpu = self.ai_gpu_chk.property("_ls_orig_text")
             if isinstance(orig_gpu, str) and orig_gpu:
                 translated_gpu = translate_text(orig_gpu, get_current_language())
                 self.ai_gpu_chk.setToolTip(translated_gpu)
-                max_chk_w = self.ai_gpu_chk.maximumWidth()
-                avail_gpu = max(1, max_chk_w - 28)
-                self.ai_gpu_chk.setText(
-                    self.ai_gpu_chk.fontMetrics().elidedText(
-                        translated_gpu, QtCore.Qt.TextElideMode.ElideRight, avail_gpu
+                if narrow_compact:
+                    self.ai_gpu_chk.setText(
+                        self.ai_gpu_chk.fontMetrics().elidedText(
+                            translated_gpu, QtCore.Qt.TextElideMode.ElideRight, 147
+                        )
                     )
-                )
+                else:
+                    self.ai_gpu_chk.setText(translated_gpu)
             self._bottom_dock.setMinimumHeight(0)
             if compact_h and not practice:
                 self.history_overview_plot.setMinimumHeight(34)
@@ -1865,7 +1890,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._pill_dark.setText(tr("黑夜", "Dark", "다크", "ダーク", lang=lang))
             self._pill_light.setText(tr("白天", "Light", "라이트", "ライト", lang=lang))
             self.settings_btn.setText(tr("btn_settings", lang))
-            self.emergency_stop_btn.setText(tr("btn_estop", lang))
+            self.source_combo.setPlaceholderText(translate_text("选择音源…", lang))
+            self.emergency_stop_btn.setAccessibleName(tr("btn_estop", lang))
+            self.emergency_stop_btn.setText("" if self.width() < 920 else tr("btn_estop", lang))
             self._history_box.setTitle(
                 tr_telemetry(
                     "RING BUFFER // 120S HISTORY · A/B LOOP + AI DISPATCH (~46MB)",
@@ -1897,7 +1924,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._src_pill.setText(tr_telemetry("AUDIO INPUT", lang, zh="音源", ko="오디오 입력", ja="音声入力"))
             self._shortcut_pill.setText(tr_telemetry("SPACE", lang, zh="快捷键", ko="단축키", ja="ショートカット"))
             self.settings_btn.setText(tr("btn_settings", lang))
-            self.emergency_stop_btn.setText(tr("btn_estop", lang))
+            self.source_combo.setPlaceholderText(translate_text("选择音源…", lang))
+            self.emergency_stop_btn.setAccessibleName(tr("btn_estop", lang))
+            self.emergency_stop_btn.setText("" if self.width() < 920 else tr("btn_estop", lang))
             self._history_box.setTitle(
                 tr_telemetry(
                     "120S HISTORY BUFFER · A/B LOOP (~46MB) + AI SEPARATION",
@@ -2119,6 +2148,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             translate_widget_tree(self._tray_icon.contextMenu(), appearance.language)
         # Re-apply Acid telemetry tab/header labels so fixed English + single localized caption stays crisp
         self._sync_acid_chrome(variant in ("light", "dark"), variant)
+        self._apply_responsive_layout()
         if was_visible and saved_geom is not None and saved_geom.isValid() and not self.isMaximized():
             if self.geometry() != saved_geom:
                 self.setGeometry(saved_geom)
@@ -2726,7 +2756,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         elif stats.mode == CaptureMode.SYSTEM_LOOPBACK and stats.warning_message:
             banner_msg = stats.warning_message
 
-        src_txt = self.source_combo.currentText().strip() or "--"
+        if stats.mode == CaptureMode.SYNTHETIC_SIMULATION:
+            src_txt = "Simulated"
+        else:
+            src_txt = self.source_combo.currentText().strip() or "--"
         if hasattr(self, "_acid_footer"):
             self._acid_footer.set_telemetry(
                 source_name=src_txt[:28],
@@ -2756,12 +2789,29 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "_acid_footer"):
             cpu_val = getattr(snap, "cpu_percent", None)
             if cpu_val is None:
-                try:
-                    import psutil
+                import os
+                import time as _time
 
-                    cpu_val = psutil.cpu_percent(interval=None)
-                except Exception:
-                    cpu_val = None
+                now_ts = _time.monotonic()
+                if self._process_cpu_proc is None:
+                    try:
+                        import psutil
+
+                        self._process_cpu_proc = psutil.Process()
+                        self._process_cpu_proc.cpu_percent(interval=None)
+                        self._last_cpu_poll_ts = now_ts
+                        self._last_cpu_pct = 0.0
+                    except Exception:
+                        self._process_cpu_proc = None
+                elif now_ts - self._last_cpu_poll_ts >= 1.0:
+                    try:
+                        n_cores = max(1, os.cpu_count() or 1)
+                        raw_pct = float(self._process_cpu_proc.cpu_percent(interval=None))
+                        self._last_cpu_pct = max(0.0, min(100.0, raw_pct / float(n_cores)))
+                        self._last_cpu_poll_ts = now_ts
+                    except Exception:
+                        pass
+                cpu_val = self._last_cpu_pct
             self._acid_footer.set_telemetry(cpu_pct=cpu_val)
 
     def set_freeze_screen(self, frozen: bool) -> None:
@@ -2769,7 +2819,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "freeze_screen_btn"):
             self.freeze_screen_btn.blockSignals(True)
             self.freeze_screen_btn.setChecked(self._freeze_screen)
-            set_i18n_text(self.freeze_screen_btn, "▶ 恢复画面" if self._freeze_screen else "⏸ 冻结画面")
+            set_i18n_text(self.freeze_screen_btn, "恢复画面" if self._freeze_screen else "冻结画面")
             self.freeze_screen_btn.blockSignals(False)
 
     def toggle_freeze_screen(self) -> None:
@@ -2783,7 +2833,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "_acid_footer"):
             p50 = getattr(snap, "latency_ms", None)
             if p50 is not None:
-                self._acid_footer.set_telemetry(p50_ms=float(p50))
+                self._latency_samples.append(float(p50))
+                med_ms = float(np.median(self._latency_samples))
+                self._acid_footer.set_telemetry(p50_ms=med_ms)
 
     def _set_ai_active_ui(self, active: bool) -> None:
         self.emergency_stop_btn.setProperty("ai_active", active)

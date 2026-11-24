@@ -3,12 +3,22 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    groups:
+      pip-dependencies:
+        patterns:
+          - "*"
     ignore:
       # AI & MIDI runtimes are pinned/constrained by cu128 and TensorFlow compatibility
       - dependency-name: "torch*"
@@ -20,3 +30,8 @@ updates:
       - dependency-name: "tensorflow*"
       # PySide6 is intentionally pinned <6.10 due to 6.12 Signal.emit regression
       - dependency-name: "PySide6*"
+      # Defer major upgrades for numpy 2.x (tracked in #33) and winrt 4.x (CI incompatible)
+      - dependency-name: "numpy"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "winrt-*"
+        update-types: ["version-update:semver-major"]

@@ -176,21 +176,32 @@ def test_system_loopback_reconnect_updates_name_and_clears_transient_notice() ->
         max_device_reconnects=3,
         allow_non_windows=True,
     )
+    error_transitions: list[str | None] = []
+    orig_set_error = backend._stats.set_error
+
+    def _recording_set_error(msg: str | None) -> None:
+        error_transitions.append(msg)
+        orig_set_error(msg)
+
+    backend._stats.set_error = _recording_set_error  # type: ignore[method-assign]
     backend.start()
     try:
-        saw_reconnect_msg = False
         cleared_after_healthy = False
         for _ in range(80):
             _ = backend.read_chunk(timeout=0.05)
             st = backend.get_stats()
-            if st.last_error and "Desk Speakers" in st.last_error:
-                saw_reconnect_msg = True
             if st.process_name == "Desk Speakers" and st.last_error is None:
                 cleared_after_healthy = True
                 break
         final_st = backend.get_stats()
         assert final_st.process_name == "Desk Speakers"
-        assert saw_reconnect_msg is True
+        reconnect_indices = [
+            i for i, msg in enumerate(error_transitions) if msg and "Desk Speakers" in msg
+        ]
+        assert reconnect_indices, f"Expected transient reconnect notice for Desk Speakers, got {error_transitions!r}"
+        assert any(msg is None for msg in error_transitions[reconnect_indices[0] + 1 :]), (
+            f"Transient reconnect notice was not cleared after healthy chunks: {error_transitions!r}"
+        )
         assert cleared_after_healthy is True
     finally:
         backend.stop()

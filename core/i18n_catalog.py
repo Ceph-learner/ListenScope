@@ -869,11 +869,11 @@ DYNAMIC_REGEX_RULES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
         },
     ),
     (
-        re.compile(r"目标真机基线规格: Windows 10/11 \(Build >= 20348\) \| GPU: NVIDIA GeForce RTX 5060 Ti \| 显存: 8GB VRAM \(非 16GB\) \| 系统内存: 16GB RAM"),
+        re.compile(r"目标真机基线规格: Windows 11 \(Build >= 20348，Win10 可用系统环回\) \| GPU: NVIDIA GeForce RTX 5060 Ti \| 显存: 8GB VRAM \(非 16GB\) \| 系统内存: 16GB RAM"),
         {
-            "en": "Target Hardware Baseline: Windows 10/11 (Build >= 20348) | GPU: NVIDIA GeForce RTX 5060 Ti | VRAM: 8GB (not 16GB) | System RAM: 16GB",
-            "ko": "타깃 하드웨어 기준: Windows 10/11 (Build >= 20348) | GPU: NVIDIA GeForce RTX 5060 Ti | VRAM: 8GB (16GB 아님) | RAM: 16GB",
-            "ja": "ターゲット実機基準: Windows 10/11 (Build >= 20348) | GPU: NVIDIA GeForce RTX 5060 Ti | VRAM: 8GB (16GB非搭載) | RAM: 16GB",
+            "en": "Target Hardware Baseline: Windows 11 (Build >= 20348; Win10: System Loopback) | GPU: NVIDIA GeForce RTX 5060 Ti | VRAM: 8GB (not 16GB) | System RAM: 16GB",
+            "ko": "타깃 하드웨어 기준: Windows 11 (Build >= 20348; Win10: 시스템 루프백) | GPU: NVIDIA GeForce RTX 5060 Ti | VRAM: 8GB (16GB 아님) | RAM: 16GB",
+            "ja": "ターゲット実機基準: Windows 11 (Build >= 20348、Win10はシステムループバック) | GPU: NVIDIA GeForce RTX 5060 Ti | VRAM: 8GB (16GB非搭載) | RAM: 16GB",
         },
     ),
     (
@@ -1151,15 +1151,15 @@ HELP_TRANSLATIONS: dict[str, dict[str, tuple[str, str]]] = {
     "按进程捕获说明": {
         "en": (
             "Per-Process Audio Capture (WASAPI)",
-            "Select the music player process (e.g. Spotify.exe, QQMusic.exe) to capture only that app without re-recording ListenScope's metronome or mixer output. Fall back to System Loopback if Windows Build < 20348.",
+            "Select the music player process (e.g. Spotify.exe, QQMusic.exe) to capture only that app without re-recording ListenScope's metronome or mixer output. Requires Windows 11 (Build >= 20348); on Windows 10, use System Loopback.",
         ),
         "ko": (
             "프로세스별 오디오 캡처 (WASAPI)",
-            "음악 재생기 프로세스(예: Spotify.exe)를 선택하면 해당 앱 소리만 깔끔하게 캡처하여 메트로놈이나 믹서 출력이 다시 녹음되지 않습니다. Windows Build < 20348이면 시스템 루프백을 사용하세요.",
+            "음악 재생기 프로세스(예: Spotify.exe)를 선택하면 해당 앱 소리만 깔끔하게 캡처하여 메트로놈이나 믹서 출력이 다시 녹음되지 않습니다. Windows 11(Build >= 20348)이 필요하며, Windows 10에서는 시스템 루프백을 사용하세요.",
         ),
         "ja": (
             "プロセス別音声キャプチャ (WASAPI)",
-            "音楽再生アプリ（例: Spotify.exe等）を指定するとそのアプリ音のみを録音でき、メトロノームやミキサー出力の再録音を防止できます。Build < 20348ではシステムループバックをご利用ください。",
+            "音楽再生アプリ（例: Spotify.exe等）を指定するとそのアプリ音のみを録音でき、メトロノームやミキサー出力の再録音を防止できます。Windows 11（Build >= 20348）が必要であり、Windows 10ではシステムループバックをご利用ください。",
         ),
     },
     "120 秒历史缓冲与 A/B 选区用法": {

@@ -229,6 +229,7 @@ class AnalysisSnapshot:
     rms_dbfs: float
     peak_dbfs: float
     window_seconds: float
+    latency_ms: Optional[float] = None
 
 
 @dataclass

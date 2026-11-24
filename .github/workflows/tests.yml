@@ -23,8 +23,8 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -46,8 +46,8 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           architecture: "x64"
@@ -61,10 +61,12 @@ jobs:
         run: python -m pytest -v --tb=short -o faulthandler_timeout=60
       - name: Capture Windows offscreen UI screenshots
         if: always()
-        run: python scripts/make_screenshots.py --out-dir artifacts/p2e_win_screens --prefix p2e_before_ --suffix _win
+        env:
+          QT_QPA_FONTDIR: C:\Windows\Fonts
+        run: python scripts/make_screenshots.py --out-dir artifacts/p2e_win_screens --prefix p2er_after_ --suffix _win
       - name: Upload Windows offscreen screenshots artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: p2e-windows-screenshots
           path: artifacts/p2e_win_screens/*.png

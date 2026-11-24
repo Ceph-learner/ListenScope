@@ -4,7 +4,7 @@
 **Yes.** AI stem separation is optional. Live spectrum, pitch tracking, chord/key/BPM detection, 120s A/B time-stretch looping, metronome, and WAV export all run on CPU out of the box.
 
 ### 2. Why should I choose Per-Process Loopback capture?
-Windows per-process loopback (Windows 11 / Windows 10 Build ≥ 20348) captures audio only from the selected player or browser process. It prevents system notifications, voice chat, or game audio from polluting chord/pitch analysis and requires no virtual audio cable.
+Per-process loopback requires Windows 11 (Build ≥ 20348); Windows 10 users can use System Loopback. Per-process loopback captures audio only from the selected player or browser process. It prevents system notifications, voice chat, or game audio from polluting chord/pitch analysis and requires no virtual audio cable.
 
 ### 3. Why does Windows SmartScreen show a warning on first launch?
 ListenScope binaries are not currently signed with a commercial code-signing certificate.
