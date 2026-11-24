@@ -478,11 +478,11 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._track_scroll = scroll = QtWidgets.QScrollArea()
         scroll.setObjectName("stemTrackScroll")
         scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(84)
+        scroll.setMinimumHeight(110)
         self._tracks_container = QtWidgets.QWidget()
         self._tracks_layout = QtWidgets.QVBoxLayout(self._tracks_container)
-        self._tracks_layout.setContentsMargins(6, 6, 6, 6)
-        self._tracks_layout.setSpacing(6)
+        self._tracks_layout.setContentsMargins(6, 4, 6, 4)
+        self._tracks_layout.setSpacing(4)
 
         self._empty_tracks_card = QtWidgets.QFrame()
         self._empty_tracks_card.setObjectName("emptyStemBay")
@@ -491,15 +491,15 @@ class StemMixerWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         empty_l = QtWidgets.QVBoxLayout(self._empty_tracks_card)
-        empty_l.setContentsMargins(10, 8, 10, 8)
-        empty_l.setSpacing(6)
-        empty_hdr = TelemetryHeader(
+        empty_l.setContentsMargins(8, 6, 8, 6)
+        empty_l.setSpacing(4)
+        self._empty_tracks_hdr = TelemetryHeader(
             "STEM BAY // STANDBY",
-            "① 选中片段 → ② AI 2-Stem 分轨",
+            "① 选中片段 → ② 选最近 30 s 并 2-Stem 分轨",
             badge_text="2-STEM / 4-STEM",
         )
         self._empty_tracks_hint_lbl = QtWidgets.QLabel(
-            "在下方 120s 历史缓冲选定 A/B 区间后，点击「AI 2-Stem 分轨」或「AI 4-Stem 分轨」；"
+            "点击「选最近 30 s 并 2-Stem 分轨」，或在下方 120s 历史缓冲选定 A/B 区间后分轨；"
             "分离后的人声 / 伴奏 / 贝斯 / 鼓组独立波形轨、M/S 独听与单轨转 MIDI 按钮将在此处就位。"
         )
         self._empty_tracks_hint_lbl.setObjectName("mutedCaption")
@@ -517,7 +517,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         empty_btn_row.addWidget(self._empty_quick_2stem_btn)
         empty_btn_row.addWidget(self._empty_open_midi_btn)
         empty_btn_row.addStretch(1)
-        empty_l.addWidget(empty_hdr)
+        empty_l.addWidget(self._empty_tracks_hdr)
         empty_l.addWidget(self._empty_tracks_hint_lbl)
         empty_l.addLayout(empty_btn_row)
         self._tracks_layout.addWidget(self._empty_tracks_card)
@@ -528,7 +528,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self.analysis_tabs = QtWidgets.QTabWidget()
         self._analysis_tab_bar = AcidTabBar(self.analysis_tabs)
         self.analysis_tabs.setTabBar(self._analysis_tab_bar)
-        self.analysis_tabs.setMinimumHeight(210)
+        self.analysis_tabs.setMinimumHeight(96)
 
         # Sub-tab 1: Deep Stem Arrangement & Chord Progression Timeline (non-destructive CPU analysis)
         deep_tab = QtWidgets.QWidget()
@@ -585,7 +585,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._deep_summary_scroll.setWidget(self.deep_summary_lbl)
 
         self.chord_timeline_table = QtWidgets.QTableWidget(0, 7)
-        self.chord_timeline_table.setMinimumHeight(130)
+        self.chord_timeline_table.setMinimumHeight(64)
         self.chord_timeline_table.setHorizontalHeaderLabels(
             ["开始 (s)", "结束 (s)", "和弦候选", "第二候选", "相关度", "稳定度", "约拍数"]
         )
@@ -629,7 +629,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         pr_l.addLayout(pr_actions)
 
         self.piano_roll_plot = pg.PlotWidget(title="PIANO ROLL // MIDI 钢琴卷帘预览 (单击可跳转播放)")
-        self.piano_roll_plot.setMinimumHeight(140)
+        self.piano_roll_plot.setMinimumHeight(72)
         try:
             self.piano_roll_plot.hideButtons()
         except Exception:
@@ -1713,4 +1713,17 @@ class StemMixerWidget(QtWidgets.QWidget):
             self.piano_roll_plot.setYRange(0.0, 1.0, padding=0.0)
 
         self.save_midi_btn.setEnabled(result.output_midi_path is not None and Path(result.output_midi_path).exists())
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        compact = self.height() < 340
+        if hasattr(self, "_empty_tracks_hdr"):
+            self._empty_tracks_hdr.setVisible(not compact)
+        if not self._rows and hasattr(self, "_workspace_splitter"):
+            if compact:
+                top_h = max(120, min(155, self.height() - 120))
+                self._workspace_splitter.setSizes([top_h, max(80, self.height() - top_h - 80)])
+            else:
+                self._workspace_splitter.setSizes([185, max(160, self.height() - 280)])
+
 

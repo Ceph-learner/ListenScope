@@ -669,7 +669,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         splitter.addWidget(self.chroma_bar_plot)
 
         self.chroma_hist_plot = pg.PlotWidget(title="CHROMA HEATMAP // 有界时序热图 (30s)")
-        self.chroma_hist_plot.setMinimumHeight(60)
+        self.chroma_hist_plot.setMinimumHeight(96)
         try:
             self.chroma_hist_plot.hideButtons()
         except Exception:
@@ -699,15 +699,20 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chroma_hist_plot.addItem(self._chroma_img)
         splitter.addWidget(self.chroma_hist_plot)
 
-        splitter.setSizes([210, 240])
+        splitter.setSizes([180, 270])
         root.addWidget(splitter, 1)
 
     def refresh_chroma_note_ticks(self) -> None:
         axis = self.chroma_hist_plot.getAxis("left")
         font = axis.style["tickFont"] or self.font()
-        label_height = QtGui.QFontMetrics(font).height() + 1
+        label_height = QtGui.QFontMetrics(font).height() + 2
         available = max(1.0, axis.height())
-        stride = 1 if available >= len(PITCH_CLASSES) * label_height else 2
+        if available >= len(PITCH_CLASSES) * label_height:
+            stride = 1
+        elif available >= 6 * label_height:
+            stride = 2
+        else:
+            stride = 3
         if stride != getattr(self, "_chroma_tick_stride", None):
             self._chroma_tick_stride = stride
             axis.setTicks([[(i + 0.5, PITCH_CLASSES[i]) for i in range(0, len(PITCH_CLASSES), stride)]])

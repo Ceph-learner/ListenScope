@@ -256,6 +256,112 @@ def capture_screenshots(
     return saved
 
 
+def capture_p2f_screenshots(
+    out_dir: Path,
+    *,
+    prefix: str = "p2f_after_",
+    suffix: str = "",
+    max_kb: int = 200,
+) -> list[Path]:
+    """Capture Phase 2F verification screenshots (125% narrow spectrum/mixer + EN light chord)."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    snap, spec_mat = _build_synthetic_snapshot()
+    if spec_mat is None or spec_mat.size == 0:
+        n_frames, n_bins = 450, 96
+        t_idx = np.linspace(0.0, 1.0, n_frames, dtype=np.float32)[:, None]
+        spec_mat = np.full((n_frames, n_bins), -78.0, dtype=np.float32)
+        spec_mat[:, 20:24] = -18.0 + 6.0 * np.sin(2.0 * np.pi * 2.0 * t_idx)
+        spec_mat[:, 44:47] = -12.0 + 4.0 * np.cos(2.0 * np.pi * 1.5 * t_idx)
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    saved: list[Path] = []
+    try:
+        res_snap = ResourceSnapshot(
+            timestamp=1.0,
+            main_ram_mb=320.0,
+            ai_worker_ram_mb=0.0,
+            system_ram_total_mb=16384.0,
+            system_ram_available_mb=2875.0,
+            gpu_name="Synthetic RTX GPU",
+            vram_total_mb=8192.0,
+            vram_used_mb=1024.0,
+            vram_free_mb=7168.0,
+            gpu_utilization_pct=4.0,
+            active_ai_jobs=0,
+            loaded_models=0,
+            current_model=None,
+            current_task=None,
+            audio_queue_size=1,
+            audio_queue_maxsize=64,
+            ai_buffer_seconds=3.0,
+            status=ResourceStatus.CRITICAL,
+        )
+        cap_stats = CaptureStats(
+            mode=CaptureMode.SYNTHETIC_SIMULATION,
+            pid=None,
+            process_name="Simulated",
+            is_running=True,
+            sample_rate=48000,
+            channels=2,
+            dtype="float32",
+            rms_dbfs=-18.0,
+            peak_dbfs=-6.2,
+            is_silent=False,
+        )
+        chroma_hist = np.full((450, 12), 0.12, dtype=np.float32)
+        chroma_hist[:, 4] = 0.92
+        chroma_hist[:, 1] = 0.85
+        chroma_hist[:, 8] = 0.80
+
+        def _feed() -> None:
+            win.update_analysis_snapshot(snap, spec_mat, chroma_hist)
+            win.update_capture_stats(cap_stats, ring_available_sec=3.0)
+            win.update_resource_snapshot(res_snap, [], [])
+            win._acid_footer.set_telemetry(cpu_pct=4.2)
+            for _ in range(4):
+                app.processEvents()
+
+        dpr = max(1.0, float(app.primaryScreen().devicePixelRatio() if app.primaryScreen() else 1.0))
+        narrow_w = int(round(1093 / dpr)) if dpr > 1.05 else 874
+        narrow_h = int(round(566 / dpr)) if dpr > 1.05 else 453
+
+        # 1. Narrow 125% (874x453 logical -> 1093x566 physical) Spectrum tab
+        win.apply_appearance(Appearance(theme_mode="light", language="zh"))
+        win.tabs.setCurrentIndex(0)
+        win.resize(narrow_w, narrow_h)
+        win.show()
+        _feed()
+        p1 = out_dir / f"{prefix}narrow_125_spectrum_1093x566{suffix}.png"
+        _save_png_under_limit(win.grab(), p1, max_kb=max_kb)
+        saved.append(p1)
+
+        # 2. Narrow 125% (874x453 logical -> 1093x566 physical) Mixer empty state tab
+        win.tabs.setCurrentIndex(2)
+        win.resize(narrow_w, narrow_h)
+        _feed()
+        p2 = out_dir / f"{prefix}narrow_125_mixer_1093x566{suffix}.png"
+        _save_png_under_limit(win.grab(), p2, max_kb=max_kb)
+        saved.append(p2)
+
+        # 3. English Light Chord tab (1366x768 logical)
+        win.apply_appearance(Appearance(theme_mode="light", language="en"))
+        win.tabs.setCurrentIndex(1)
+        win.resize(1366, 768)
+        _feed()
+        p3 = out_dir / f"{prefix}light_en_chord_1366x768{suffix}.png"
+        _save_png_under_limit(win.grab(), p3, max_kb=max_kb)
+        saved.append(p3)
+    finally:
+        win.close()
+        mixer.close()
+    return saved
+
+
 def render_design_sheet(out_dir: Path, *, max_kb: int = 200) -> Path:
     """Render a compact visual design token & component state sheet PNG."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -530,9 +636,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--suffix", type=str, default="")
     parser.add_argument("--max-kb", type=int, default=200)
     parser.add_argument("--design-sheet", action="store_true", help="Generate design token & component state sheet")
+    parser.add_argument("--p2f", action="store_true", help="Generate Phase 2F verification screenshots")
     parser.add_argument("--settings-ai", type=Path, default=None, help="Output path for Settings AI & MIDI PNG")
     parser.add_argument("--demo-gif", type=Path, default=None, help="Output path for ~10s 860px light demo GIF")
     args = parser.parse_args(argv)
+    if args.p2f:
+        pfx = "p2f_after_" if args.prefix == "p2e_before_" else args.prefix
+        paths = capture_p2f_screenshots(args.out_dir, prefix=pfx, suffix=args.suffix, max_kb=args.max_kb)
+        for p in paths:
+            print(f"{p} ({p.stat().st_size / 1024.0:.1f} KB)")
+        return 0
     if args.settings_ai is not None:
         out = capture_settings_ai(args.settings_ai)
         print(f"{out} ({out.stat().st_size / 1024.0:.1f} KB)")

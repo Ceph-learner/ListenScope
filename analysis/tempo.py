@@ -79,14 +79,14 @@ class TempoEstimator:
             env = np.asarray(self._onsets, dtype=np.float32)
 
         min_samples = max(24, int(4.0 * self._rate_hz))
-        if env.shape[0] < min_samples or float(np.max(env)) < 1e-4:
+        if env.shape[0] < min_samples or float(np.max(env)) < 1e-4 or float(np.std(env)) < 1e-3:
             est = TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0, alt_bpm=None)
             with self._lock:
                 self._cached_estimate = est
                 self._frames_since_est = 0
             return est
         peakiness = float(np.percentile(env, 95)) / (float(np.median(env)) + 1e-9)
-        if peakiness < 2.5:
+        if peakiness < 1.2:
             est = TempoEstimate(bpm=None, stability="Unknown", confidence_score=0.0, alt_bpm=None)
             with self._lock:
                 self._cached_estimate = est

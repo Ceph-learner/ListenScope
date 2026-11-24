@@ -7,6 +7,7 @@ from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from core.i18n import translate_text
 from core.logging import PerformanceRecord, active_log_dir
 from core.models import ResourceSnapshot, ResourceStatus
 from core.paths import default_export_dir
@@ -45,6 +46,7 @@ class ResourceMonitorBar(QtWidgets.QFrame):
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 6, 2)
         layout.setSpacing(5)
+        layout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetFixedSize)
 
         self.ram_label = QtWidgets.QLabel("RAM -")
         self.ram_label.setObjectName("monoTelemetry")
@@ -125,21 +127,32 @@ class ResourceMonitorBar(QtWidgets.QFrame):
         crit_vram = self._critical_vram_free_mb if critical_vram_free_mb is None else float(critical_vram_free_mb)
         ai_idle = snap.ai_worker_ram_mb < 1.0
         vram_critical = snap.vram_free_mb is not None and snap.vram_free_mb < crit_vram
-        if (
-            not self._compact_mode
-            and ai_idle
+        low_ram_idle = (
+            ai_idle
             and snap.status in (ResourceStatus.WARNING, ResourceStatus.CRITICAL)
             and snap.system_ram_available_mb >= crit_ram
             and not vram_critical
-        ):
-            self._set_text_if_changed("status", self.status_badge, "内存偏低")
+        )
+        if low_ram_idle:
+            raw_lbl = "低内存" if self._compact_mode else "内存偏低"
+            self._set_text_if_changed("status", self.status_badge, translate_text(raw_lbl, self._lang))
             set_widget_tone(self.status_badge, "warn")
-            self.status_badge.setToolTip(
+            tip_raw = (
                 f"当前可用内存 {snap.system_ram_available_mb:.0f} MB：实时分析与 A/B 练习正常，"
                 "启动新 AI 分轨前建议关闭占用内存的程序，或在设置中调整 pause_ram_before_ai_mb。"
             )
+            self.status_badge.setToolTip(translate_text(tip_raw, self._lang))
         else:
-            self._set_text_if_changed("status", self.status_badge, snap.status.value)
+            if self._compact_mode:
+                short_map = {
+                    ResourceStatus.NORMAL: ResourceStatus.NORMAL.value,
+                    ResourceStatus.WARNING: "Warn",
+                    ResourceStatus.CRITICAL: "Crit",
+                }
+                badge_txt = short_map.get(snap.status, snap.status.value)
+            else:
+                badge_txt = translate_text(snap.status.value, self._lang)
+            self._set_text_if_changed("status", self.status_badge, badge_txt)
             set_widget_tone(self.status_badge, _status_to_tone(snap.status))
             self.status_badge.setToolTip(f"{snap.status.value} — {detail_tip}")
 

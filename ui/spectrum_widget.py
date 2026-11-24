@@ -289,6 +289,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         )
         self._spec_empty_item.setPos(-15.0, float(n_bins) * 0.5)
         self.spec_plot.addItem(self._spec_empty_item)
+        self._has_spec_data: bool = False
         self._plots = (self.wave_plot, self.fft_plot, self.log_plot, self.spec_plot)
         for p in self._plots:
             try:
@@ -354,6 +355,9 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         system_is_dark: Optional[bool] = None,
         acid_variant: Optional[str] = None,
     ) -> None:
+        if hasattr(self, "_spec_empty_item"):
+            self._spec_empty_item.setText(translate_text("开始捕获后显示", appearance.language))
+            self._spec_empty_item.setVisible(not self._has_spec_data)
         if acid_variant in ("light", "dark"):
             p = get_acid_palette(acid_variant)
             self._pulse_strip.set_theme_color(p.accent)
@@ -723,11 +727,12 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._log_curve.setData(snap.log_freqs_hz, snap.log_spectrum_db, skipFiniteCheck=True)
 
         if spectrogram is not None and spectrogram.size > 0:
+            self._has_spec_data = True
             self._spec_empty_item.setVisible(False)
             self._spec_img.setImage(spectrogram, autoLevels=False, levels=(-90.0, -5.0))
             frames = int(spectrogram.shape[0])
             bins = int(spectrogram.shape[1]) if spectrogram.ndim > 1 else 96
             dur_s = max(1.0 / 15.0, frames / 15.0)
             self._spec_img.setRect(QtCore.QRectF(-dur_s, 0.0, dur_s, float(bins)))
-        else:
+        elif not self._has_spec_data:
             self._spec_empty_item.setVisible(True)

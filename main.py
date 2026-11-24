@@ -1302,7 +1302,7 @@ class ListenScopeController:
             snap = self.ai_job_manager.emergency_stop("用户点击 紧急停止 AI")
             try:
                 self._ui_banner_q.put_nowait(
-                    f"🛑 已执行紧急停止 AI：子进程与临时输出已清理，当前可用 RAM={snap.system_ram_available_mb:.0f} MB，"
+                    f"🛑 用户手动紧急停止 AI：子进程与临时输出已清理，当前可用 RAM={snap.system_ram_available_mb:.0f} MB，"
                     "音频捕获与实时频谱继续正常运行。"
                 )
             except queue.Full:
@@ -2252,8 +2252,37 @@ class ListenScopeController:
         if getattr(self, "_shutdown_done", False):
             return
         self._shutdown_done = True
+        t_shutdown_start = time.monotonic()
+        s_logger = logging.getLogger("listenscope.shutdown")
+
+        def _run_bounded(stage: str, fn, timeout_s: float = 0.35) -> None:
+            t0 = time.monotonic()
+            done = threading.Event()
+            err_box: list[BaseException] = []
+
+            def _target() -> None:
+                try:
+                    fn()
+                except BaseException as exc:
+                    err_box.append(exc)
+                finally:
+                    done.set()
+
+            th = threading.Thread(target=_target, name=f"ListenScope-Shutdown-{stage}", daemon=True)
+            th.start()
+            finished = done.wait(timeout=max(0.05, float(timeout_s)))
+            dt_ms = (time.monotonic() - t0) * 1000.0
+            if not finished:
+                s_logger.warning("shutdown stage=%s timed out after %.1f ms", stage, dt_ms)
+            elif err_box:
+                s_logger.warning("shutdown stage=%s error after %.1f ms: %s", stage, dt_ms, err_box[0])
+            else:
+                s_logger.info("shutdown stage=%s elapsed_ms=%.1f", stage, dt_ms)
+
         if hasattr(self, "_res_stop_event"):
             self._res_stop_event.set()
+        if hasattr(self, "_track_monitor_stop") and self._track_monitor_stop is not None:
+            self._track_monitor_stop.set()
         self._probe_seq += 1
         try:
             get_bootstrap_manager().completed.disconnect(self._on_bootstrap_completed)
@@ -2271,18 +2300,16 @@ class ListenScopeController:
                 pass
         if hasattr(self, "_timer"):
             self._timer.stop()
-        self._stop_drum_preview()
-        self._stop_chord_preview()
-        self.stop_capture()
-        self.metronome.stop_standalone()
-        self.ab_player.stop()
-        self.mixer_engine.clear()
-        self.analysis_worker.stop()
+        _run_bounded("previews", lambda: (self._stop_drum_preview(), self._stop_chord_preview()), timeout_s=0.15)
+        _run_bounded("capture", self.stop_capture, timeout_s=0.35)
+        _run_bounded("playback", lambda: (self.metronome.stop_standalone(), self.ab_player.stop(), self.mixer_engine.clear()), timeout_s=0.25)
+        _run_bounded("analysis_worker", self.analysis_worker.stop, timeout_s=0.25)
         if self.live_separator.is_active or self.live_separator.is_starting:
-            self.live_separator.stop()
-        self.ai_job_manager.shutdown()
-        terminate_all_active_subprocesses(timeout=1.0)
-        self.resource_manager.close()
+            _run_bounded("live_separator", self.live_separator.stop, timeout_s=0.25)
+        _run_bounded("ai_job_manager", self.ai_job_manager.shutdown, timeout_s=0.25)
+        _run_bounded("subprocesses", lambda: terminate_all_active_subprocesses(timeout=0.25), timeout_s=0.40)
+        _run_bounded("resource_manager", self.resource_manager.close, timeout_s=0.20)
+        s_logger.info("shutdown total elapsed_ms=%.1f", (time.monotonic() - t_shutdown_start) * 1000.0)
         logging.getLogger().removeHandler(self.log_handler)
         teardown_application_file_logging()
         if hasattr(self, "window") and self.window is not None:
@@ -2331,7 +2358,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     shutdown_done = threading.Event()
 
     def _exit_watchdog() -> None:
-        if not shutdown_done.wait(timeout=5.0):
+        if not shutdown_done.wait(timeout=2.0):
             os._exit(0)
 
     threading.Thread(
