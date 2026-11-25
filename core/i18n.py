@@ -924,7 +924,7 @@ def translate_widget_tree(root: QtWidgets.QWidget, lang: str) -> None:
             continue
         if w.accessibleName():
             _translate_cached(w, w.accessibleName(), "_ls_orig_an", code, apply_fn=w.setAccessibleName)
-        if w.toolTip():
+        if w.toolTip() and not w.property("_ls_dynamic_tip"):
             _translate_cached(w, w.toolTip(), "_ls_orig_tip", code, apply_fn=w.setToolTip)
         if isinstance(w, (QtWidgets.QLabel, QtWidgets.QAbstractButton)):
             _translate_cached(w, w.text(), "_ls_orig_text", code, apply_fn=w.setText)

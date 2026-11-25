@@ -35,6 +35,7 @@
 2. **托盘图标与退出耗时**：确认托盘溢出区显示 3 竖条单色图标并随系统明暗切换；点击 `Quit ListenScope` 后 2 s 内主进程与子进程全部退出，日志可见各阶段 `shutdown stage=... elapsed_ms=...`。另在启动一次 2-Stem 分轨、AI 子进程运行中用 `taskkill /F /PID <主进程>` 强制结束主进程，5 秒内 AI/MIDI 子进程也应全部退出。
 3. **真实音频持续播放 BPM**：确认 15 s 内稳定出 BPM（不再等到 100+ s）。
 9. **重启与外部程序脱离 Job（Round 4 / Round 5）**：分别在 **Cursor 终端里启动** 和 **双击 `.bat` / 资源管理器里启动** 两种方式下，各在设置里点一次「立即重启 ListenScope 生效」，确认新窗口均能正常起来并保持运行；另在打开导出文件夹后关闭 ListenScope，资源管理器窗口不能被一起关掉。
+10. **图表悬停提示（Round 7）**：鼠标悬停在 Chroma 柱状图、FFT 频谱、实时波形上，中文和英文下都能看到对应说明。
 
 ---
 
@@ -126,6 +127,17 @@ INFO     listenscope.shutdown:main.py:2320 shutdown total elapsed_ms=543.7
 - **不留残留子进程**：即使重启回退时放宽了 `KILL_ON_JOB_CLOSE`，旧进程的 `shutdown()` 仍会显式调用 `terminate_all_active_subprocesses()`（并在看门狗兜底中调用 `kill_all_active_subprocesses()`）终止所有已注册的 AI/MIDI/探针子进程，因此不会留下孤儿进程。
 - **一键配置 PowerShell 保持 `allow_job_relax=False`**：在回退分支中不会放宽 Job，退出 ListenScope 时配置脚本会随 Job 结束（与 `stdout` 管道断开的已知边界一致，下次重新运行一键配置即可恢复）。
 - **实机第 9 项日志提示**：在 Cursor 终端启动后点「立即重启」，若外层终端 Job 禁止 breakaway，日志应依次出现 `winerror=5` 回退警告与 `Relaxed JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE on current Job Object for restart`（若外层 Job 允许 breakaway 则直接成功且无回退日志，同样算通过）。
+
+---
+
+## Round 7（图表峰值保持与波形包络四语悬停提示）
+
+| 项 | 修改内容与文件 | 测试名 | Linux/offscreen 验证结果 |
+|---|---|---|---|
+| **1. `chroma_bar_plot` 悬停提示** | [`ui/chroma_widget.py`](../../ui/chroma_widget.py) `_refresh_plot_tooltips()`：从 `self._chroma_ballistics.hold_sec` 读取保持时长，设置 `zh/en/ko/ja` 四语 tooltip；在 `__init__` 与 `apply_theme` 中刷新，不改绘制逻辑。 | `tests/test_review_phase2f.py::test_round7_chart_tooltips_4_langs_and_ballistics_params`<br>`tests/test_review_phase2f.py::test_f6_no_chinese_leak_in_en_ja_ko` | **PASSED** |
+| **2. `fft_plot` 与 `wave_plot` 悬停提示** | [`ui/spectrum_widget.py`](../../ui/spectrum_widget.py) `_refresh_plot_tooltips()`：`fft_plot` 从 `_fft_ballistics` / `_FFT_HOLD_SEC` & `_FFT_PEAK_FALL_RATE` 读取 `{hold}`/`{fall}`，`wave_plot` 从 `_waveform_window_seconds` 读取时间窗；在 `__init__` 与 `apply_theme` 中刷新，不改绘制逻辑。 | 同上 | **PASSED** |
+| **3. 动态 tooltip 语言切换保护** | [`core/i18n.py`](../../core/i18n.py) `translate_widget_tree()`：对标记 `_ls_dynamic_tip` 的控件跳过 `_ls_orig_tip` 缓存覆盖，避免切换语言时被旧中文覆盖；未新增 `HelpBadge` 或 `QGraphicsEffect`。全仓 `rg "Ballistics\("` 仅命中上述两处（`chroma_bar_plot` 与 `fft_plot`）。 | 同上 | **PASSED** |
+
 
 
 

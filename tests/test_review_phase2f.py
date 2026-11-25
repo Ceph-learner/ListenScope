@@ -842,4 +842,36 @@ def test_round6_relax_kill_on_close_for_restart_sets_breakaway_only_and_logs_on_
     assert any("relax_kill_on_close_for_restart" in r.message for r in caplog.records)
 
 
+def test_round7_chart_tooltips_4_langs_and_ballistics_params() -> None:
+    from core.appearance import Appearance
+
+    app, win, mixer = _make_window()
+    try:
+        chroma_hold = f"{win.chroma_widget._chroma_ballistics.hold_sec:g}"
+        fft_hold = f"{win.spectrum_widget._FFT_HOLD_SEC:g}"
+        fft_fall = f"{win.spectrum_widget._FFT_PEAK_FALL_RATE:g}"
+        wave_secs = f"{win.spectrum_widget._waveform_window_seconds:g}"
+
+        seen: dict[str, tuple[str, str, str]] = {}
+        for lang in ("zh", "en", "ko", "ja"):
+            win.apply_appearance(Appearance(theme_mode="light", language=lang))
+            app.processEvents()
+            c_tip = win.chroma_widget.chroma_bar_plot.toolTip().strip()
+            f_tip = win.spectrum_widget.fft_plot.toolTip().strip()
+            w_tip = win.spectrum_widget.wave_plot.toolTip().strip()
+            assert c_tip and f_tip and w_tip
+            assert chroma_hold in c_tip
+            assert fft_hold in f_tip and fft_fall in f_tip
+            assert wave_secs in w_tip
+            seen[lang] = (c_tip, f_tip, w_tip)
+
+        # Switching languages must update all 3 tooltips
+        for idx in range(3):
+            assert len({seen[lang][idx] for lang in ("zh", "en", "ko", "ja")}) == 4
+    finally:
+        win.close()
+        mixer.close()
+
+
+
 
