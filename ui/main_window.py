@@ -1504,12 +1504,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 elif wdg is self._skin_switcher:
                     sm = self._skin_switcher.layout().contentsMargins()
                     sp = max(0, self._skin_switcher.layout().spacing())
-                    d_w = self._pill_dark.fontMetrics().horizontalAdvance(translate_text("黑夜", lang)) + 34
-                    l_w = self._pill_light.fontMetrics().horizontalAdvance(translate_text("白天", lang)) + 34
+                    d_w = self._pill_dark.fontMetrics().horizontalAdvance(translate_text("黑夜", lang)) + 28
+                    l_w = self._pill_light.fontMetrics().horizontalAdvance(translate_text("白天", lang)) + 28
                     req += sm.left() + sm.right() + sp + d_w + l_w
                 elif wdg in wide_btn_texts:
-                    txt_w = wdg.fontMetrics().horizontalAdvance(wide_btn_texts[wdg]) + 34
-                    req += max(wdg.sizeHint().width(), txt_w)
+                    req += wdg.fontMetrics().horizontalAdvance(wide_btn_texts[wdg]) + 32
                 else:
                     req += max(wdg.minimumWidth(), wdg.sizeHint().width())
             req += max(0, self._topbar_cmd_row.spacing()) * max(0, vis_items - 1)
