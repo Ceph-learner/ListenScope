@@ -1060,6 +1060,102 @@ DYNAMIC_REGEX_RULES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
             "ja": r"\1接続: ",
         },
     ),
+    (
+        re.compile(r"有效音频帧不足 \((\d+)/(\d+)\)"),
+        {
+            "en": r"Insufficient active audio frames (\1/\2)",
+            "ko": r"유효 오디오 프레임 부족 (\1/\2)",
+            "ja": r"有効音声フレーム不足 (\1/\2)",
+        },
+    ),
+    (
+        re.compile(r"资源安全阈值、AI 与 MIDI 环境配置已保存至 (.+)$"),
+        {
+            "en": r"Resource guardrails, AI & MIDI settings saved to \1",
+            "ko": r"리소스 안전 임계값 및 AI·MIDI 설정이 \1에 저장되었습니다",
+            "ja": r"リソース安全閾値と AI・MIDI 設定を \1 に保存しました",
+        },
+    ),
+    (
+        re.compile(r"可用 RAM 跌破紧急阈值 \((\d+) MB < (\d+) MB\)；建议关闭浏览器等占用内存的程序后重试"),
+        {
+            "en": r"Available RAM dropped below critical threshold (\1 MB < \2 MB); close browser or memory-heavy apps and retry",
+            "ko": r"사용 가능한 RAM이 긴급 임계값 미만입니다 (\1 MB < \2 MB). 브라우저 등 메모리를 많이 쓰는 앱을 닫고 다시 시도하세요",
+            "ja": r"空き RAM が緊急閾値を下回りました (\1 MB < \2 MB)。ブラウザ等のメモリ使用アプリを閉じて再試行してください",
+        },
+    ),
+    (
+        re.compile(r"空闲 VRAM 跌破桌面保护余量 \((\d+) MB < (\d+) MB\)；建议关闭占用显存的程序后重试"),
+        {
+            "en": r"Free VRAM dropped below desktop safety margin (\1 MB < \2 MB); close GPU-heavy apps and retry",
+            "ko": r"여유 VRAM이 데스크톱 보호 여분 미만입니다 (\1 MB < \2 MB). GPU 사용 앱을 닫고 다시 시도하세요",
+            "ja": r"空き VRAM がデスクトップ保護余量を下回りました (\1 MB < \2 MB)。GPU 使用アプリを閉じて再試行してください",
+        },
+    ),
+    (
+        re.compile(r"系统可用 RAM 极低 \((\d+) MB < (\d+) MB\)，应立即紧急停止 AI 任务"),
+        {
+            "en": r"System available RAM critically low (\1 MB < \2 MB); emergency-stop AI tasks immediately",
+            "ko": r"시스템 가용 RAM이 매우 낮음 (\1 MB < \2 MB), 즉시 AI 작업을 긴급 정지해야 합니다",
+            "ja": r"システム空き RAM が極めて不足 (\1 MB < \2 MB)、直ちに AI タスクを緊急停止してください",
+        },
+    ),
+    (
+        re.compile(r"系统可用 RAM 偏紧 \((\d+) MB < (\d+) MB\)"),
+        {
+            "en": r"System available RAM is tight (\1 MB < \2 MB)",
+            "ko": r"시스템 가용 RAM 부족 (\1 MB < \2 MB)",
+            "ja": r"システム空き RAM が逼迫しています (\1 MB < \2 MB)",
+        },
+    ),
+    (
+        re.compile(r"用户手动紧急停止 AI：子进程与临时输出已清理，当前可用 RAM=(\d+) MB，音频捕获与实时频谱继续正常运行。"),
+        {
+            "en": r"User manual E-Stop AI executed: subprocesses & temp files cleared (free RAM=\1 MB); live audio & spectrum continue running.",
+            "ko": r"사용자 수동 AI 긴급 정지 실행: 하위 프로세스 및 임시 파일 정리됨 (가용 RAM=\1 MB), 실시간 캡처와 스펙트럼은 계속 실행됩니다.",
+            "ja": r"ユーザー手動による AI 緊急停止を実行: サブプロセスと一時ファイルを削除 (空き RAM=\1 MB)、音声キャプチャとスペクトルは継続します。",
+        },
+    ),
+    (
+        re.compile(r"内存护栏自动紧急停止 AI（(.+?)）：子进程与临时输出已清理，关闭浏览器等占用内存的程序后重试。"),
+        {
+            "en": r"Memory guardrail auto E-Stop AI (\1): subprocesses & temp files cleared; close browser or memory-heavy apps and retry.",
+            "ko": r"메모리 보호 가드레일 자동 AI 긴급 정지 (\1): 하위 프로세스 및 임시 파일 정리됨. 브라우저 등 앱을 닫고 다시 시도하세요.",
+            "ja": r"メモリ保護ガードレールによる AI 自動緊急停止 (\1): サブプロセスと一時ファイルを削除しました。ブラウザ等を閉じて再試行してください。",
+        },
+    ),
+    (
+        re.compile(r"未检测到 winrt-Windows\.Media\.Control，仅保留手动「换歌重置」（可用 scripts\\setup_windows\.ps1 重装 \.venv-core）"),
+        {
+            "en": r"winrt-Windows.Media.Control not detected; manual 'Reset on Track' remains available (reinstall .venv-core via scripts\\setup_windows.ps1)",
+            "ko": r"winrt-Windows.Media.Control이 감지되지 않아 수동 '곡 변경 초기화'만 유지됩니다 (scripts\\setup_windows.ps1로 .venv-core 재설치 가능)",
+            "ja": r"winrt-Windows.Media.Control が未検出のため手動「曲切替リセット」のみ有効です (scripts\\setup_windows.ps1 で .venv-core 再構築可)",
+        },
+    ),
+    (
+        re.compile(r"非 Windows 环境未启用 WinRT（可手动「换歌重置」）"),
+        {
+            "en": "WinRT disabled on non-Windows platform (manual 'Reset on Track' remains available)",
+            "ko": "비-Windows 환경에서는 WinRT가 비활성화됩니다 (수동 '곡 변경 초기화' 사용 가능)",
+            "ja": "非 Windows 環境では WinRT 無効 (手動「曲切替リセット」は利用可能)",
+        },
+    ),
+    (
+        re.compile(r"相关度 ([\d.]+) · 差值 ([\d.]+) \((.+?)\)"),
+        {
+            "en": r"Corr \1 · Margin \2 (\3)",
+            "ko": r"상관도 \1 · 차이 \2 (\3)",
+            "ja": r"相関 \1 · 差 \2 (\3)",
+        },
+    ),
+    (
+        re.compile(r"\|\s*候选:\s*([\d.]+)"),
+        {
+            "en": r"| Alt: \1",
+            "ko": r"| 대안: \1",
+            "ja": r"| 候補: \1",
+        },
+    ),
 )
 
 # Full 4-language translations for all HelpBadge(title, explanation) items across the app.

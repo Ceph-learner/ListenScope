@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -11,10 +12,164 @@ import tempfile
 from threading import Lock
 from typing import Any, Optional
 
+_logger = logging.getLogger(__name__)
 
 _external_launch_lock = Lock()
 _active_subprocs_lock = Lock()
 _ACTIVE_SUBPROCS: set[subprocess.Popen[Any]] = set()
+_win_job_handle: Optional[int] = None
+_win_self_job_attempted: bool = False
+
+
+def _configure_win32_job_api():
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
+def _make_job_extended_limit_info(limit_flags: int):
+    import ctypes
+    from ctypes import wintypes
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", _IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = int(limit_flags)
+    return info
+
+
+def _ensure_windows_kill_job() -> Optional[int]:
+    """Create a Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so child processes never outlive parent."""
+    global _win_job_handle
+    if sys.platform != "win32":
+        return None
+    if _win_job_handle is not None:
+        return _win_job_handle
+    try:
+        import ctypes
+
+        kernel32 = _configure_win32_job_api()
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            _logger.warning("CreateJobObjectW failed (winerror=%s)", ctypes.get_last_error())
+            return None
+        # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000) | JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x0800)
+        info = _make_job_extended_limit_info(0x2000 | 0x0800)
+        ok = kernel32.SetInformationJobObject(
+            job,
+            9,  # JobObjectExtendedLimitInformation
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        )
+        if not ok:
+            _logger.warning("SetInformationJobObject failed (winerror=%s)", ctypes.get_last_error())
+            kernel32.CloseHandle(job)
+            return None
+        _win_job_handle = int(job)
+        return _win_job_handle
+    except Exception as exc:
+        _logger.warning("Failed to initialize Windows Job Object: %s", exc)
+        return None
+
+
+def relax_kill_on_close_for_restart() -> bool:
+    """Drop JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (keeping BREAKAWAY_OK) so a non-breakaway restarted child survives parent exit."""
+    if sys.platform != "win32" or _win_job_handle is None:
+        return False
+    try:
+        import ctypes
+
+        kernel32 = _configure_win32_job_api()
+        # Keep only JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x0800), removing KILL_ON_JOB_CLOSE (0x2000).
+        info = _make_job_extended_limit_info(0x0800)
+        ok = kernel32.SetInformationJobObject(
+            _win_job_handle,
+            9,  # JobObjectExtendedLimitInformation
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        )
+        if not ok:
+            _logger.warning(
+                "relax_kill_on_close_for_restart SetInformationJobObject failed (winerror=%s)",
+                ctypes.get_last_error(),
+            )
+            return False
+        _logger.info("Relaxed JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE on current Job Object for restart")
+        return True
+    except Exception as exc:
+        _logger.warning("Failed to relax Windows Job Object for restart: %s", exc)
+        return False
+
+
+def ensure_current_process_in_kill_job() -> bool:
+    """Assign the current process to the kill-on-close Job Object so all descendants inherit it."""
+    global _win_self_job_attempted
+    if sys.platform != "win32":
+        return False
+    job = _ensure_windows_kill_job()
+    if not job:
+        return False
+    if _win_self_job_attempted:
+        return True
+    _win_self_job_attempted = True
+    try:
+        import ctypes
+
+        kernel32 = _configure_win32_job_api()
+        ok = kernel32.AssignProcessToJobObject(job, kernel32.GetCurrentProcess())
+        if not ok:
+            _logger.warning(
+                "AssignProcessToJobObject(self) failed (winerror=%s); per-subprocess fallback remains active",
+                ctypes.get_last_error(),
+            )
+            return False
+        return True
+    except Exception as exc:
+        _logger.warning("AssignProcessToJobObject(self) error: %s", exc)
+        return False
 
 
 def register_active_subprocess(proc: subprocess.Popen[Any]) -> subprocess.Popen[Any]:
@@ -23,12 +178,42 @@ def register_active_subprocess(proc: subprocess.Popen[Any]) -> subprocess.Popen[
         for p in exited:
             _ACTIVE_SUBPROCS.discard(p)
         _ACTIVE_SUBPROCS.add(proc)
+    if sys.platform == "win32":
+        job = _ensure_windows_kill_job()
+        handle = getattr(proc, "_handle", None)
+        if job and handle:
+            try:
+                import ctypes
+
+                kernel32 = _configure_win32_job_api()
+                ok = kernel32.AssignProcessToJobObject(job, int(handle))
+                if not ok:
+                    _logger.warning(
+                        "AssignProcessToJobObject(pid=%s) failed (winerror=%s)",
+                        getattr(proc, "pid", None),
+                        ctypes.get_last_error(),
+                    )
+            except Exception as exc:
+                _logger.warning("AssignProcessToJobObject(pid=%s) error: %s", getattr(proc, "pid", None), exc)
     return proc
 
 
 def unregister_active_subprocess(proc: subprocess.Popen[Any]) -> None:
     with _active_subprocs_lock:
         _ACTIVE_SUBPROCS.discard(proc)
+
+
+def kill_all_active_subprocesses() -> None:
+    """Immediately kill all tracked external subprocesses (watchdog last-resort cleanup)."""
+    with _active_subprocs_lock:
+        procs = list(_ACTIVE_SUBPROCS)
+        _ACTIVE_SUBPROCS.clear()
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except Exception:
+            pass
 
 
 def terminate_all_active_subprocesses(timeout: float = 1.0) -> None:
@@ -45,13 +230,50 @@ def terminate_all_active_subprocesses(timeout: float = 1.0) -> None:
     for proc in procs:
         try:
             if proc.poll() is None:
-                proc.wait(timeout=max(0.1, float(timeout)))
+                proc.wait(timeout=max(0.05, float(timeout)))
         except Exception:
             try:
                 if proc.poll() is None:
                     proc.kill()
+                    proc.wait(timeout=0.1)
             except Exception:
                 pass
+
+
+def launch_detached(cmd: Any, *, allow_job_relax: bool = False, **kwargs: Any) -> subprocess.Popen[Any]:
+    """Launch a detached subprocess (e.g. app restart, external tools) that survives parent exit.
+
+    On Windows, breaks away from the parent's KILL_ON_JOB_CLOSE Job Object via
+    CREATE_BREAKAWAY_FROM_JOB and never registers into _ACTIVE_SUBPROCS.
+    """
+    spawn_kw = dict(kwargs)
+    if sys.platform == "win32":
+        create_breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+        detached_process = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        caller_flags = int(spawn_kw.pop("creationflags", 0) or 0)
+        flags = caller_flags | create_breakaway | new_group
+        if not (caller_flags & create_no_window):
+            flags |= detached_process
+        spawn_kw["creationflags"] = flags
+        try:
+            return subprocess.Popen(cmd, **spawn_kw)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 5 and (flags & create_breakaway):
+                _logger.warning(
+                    "launch_detached with CREATE_BREAKAWAY_FROM_JOB failed (winerror=5, likely nested in a non-breakaway outer Job); "
+                    "retrying without breakaway (allow_job_relax=%s): %s",
+                    allow_job_relax,
+                    exc,
+                )
+                if allow_job_relax:
+                    relax_kill_on_close_for_restart()
+                spawn_kw["creationflags"] = flags & ~create_breakaway
+                return subprocess.Popen(cmd, **spawn_kw)
+            raise
+    spawn_kw.setdefault("start_new_session", True)
+    return subprocess.Popen(cmd, **spawn_kw)
 
 
 def _strip_bundle_from_path_var(raw_val: str, bundle_paths: tuple[Path, ...]) -> str:

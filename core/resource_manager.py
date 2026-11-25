@@ -357,11 +357,13 @@ class ResourceManager:
         snap = snapshot or self.sample()
         if snap.system_ram_available_mb < self.limits.critical_ram_mb:
             return True, (
-                f"可用 RAM 跌破紧急阈值 ({snap.system_ram_available_mb:.0f} MB < {self.limits.critical_ram_mb:.0f} MB)"
+                f"可用 RAM 跌破紧急阈值 ({snap.system_ram_available_mb:.0f} MB < {self.limits.critical_ram_mb:.0f} MB)；"
+                "建议关闭浏览器等占用内存的程序后重试"
             )
         if snap.vram_free_mb is not None and snap.vram_free_mb < self.limits.critical_vram_free_mb:
             return True, (
-                f"空闲 VRAM 跌破桌面保护余量 ({snap.vram_free_mb:.0f} MB < {self.limits.critical_vram_free_mb:.0f} MB)"
+                f"空闲 VRAM 跌破桌面保护余量 ({snap.vram_free_mb:.0f} MB < {self.limits.critical_vram_free_mb:.0f} MB)；"
+                "建议关闭占用显存的程序后重试"
             )
         return False, "OK"
 

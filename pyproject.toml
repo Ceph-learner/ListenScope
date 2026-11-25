@@ -45,3 +45,6 @@ include = ["core*", "audio*", "analysis*", "ai*", "separation*", "streaming*", "
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "perf: performance/timing tests sensitive to shared CI runner load",
+]
