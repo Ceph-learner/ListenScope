@@ -873,5 +873,38 @@ def test_round7_chart_tooltips_4_langs_and_ballistics_params() -> None:
         mixer.close()
 
 
+@pytest.mark.parametrize("font_family", ["DejaVu Sans", "Segoe UI", "Noto Sans"])
+def test_topbar_progressive_collapse_1360_1366_keeps_capture_text(font_family: str) -> None:
+    """At 1360x860 and 1366x768, Stage-1 compacting resource_bar must keep capture_btn text visible across zh/en/ja/ko."""
+    from core.appearance import Appearance
 
+    app = _get_app()
+    available_families = set(QtGui.QFontDatabase.families())
+    if font_family not in available_families:
+        pytest.skip(f"Font family {font_family!r} not available on this runner")
 
+    orig_app_font = app.font()
+    app, win, mixer = _make_window()
+    try:
+        test_font = QtGui.QFont(font_family, orig_app_font.pointSize() if orig_app_font.pointSize() > 0 else 9)
+        app.setFont(test_font)
+        win.setFont(test_font)
+        win.show()
+        for w, h in ((1360, 860), (1366, 768)):
+            win.resize(w, h)
+            app.processEvents()
+            for lang in ("zh", "en", "ja", "ko"):
+                win.apply_appearance(Appearance(theme_mode="light", language=lang))
+                app.processEvents()
+                cap_txt = win.capture_btn.text().strip()
+                assert cap_txt, (
+                    f"[{font_family} {w}x{h} {lang}] capture_btn collapsed to icon-only despite progressive collapse"
+                )
+                assert win.capture_btn.width() >= win.capture_btn.sizeHint().width(), (
+                    f"[{font_family} {w}x{h} {lang}] capture_btn clipped: "
+                    f"w={win.capture_btn.width()} < hint={win.capture_btn.sizeHint().width()}"
+                )
+    finally:
+        app.setFont(orig_app_font)
+        win.close()
+        mixer.close()

@@ -1477,12 +1477,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._shortcut_pill.setVisible(False)
         self._skin_badge.setVisible(False)
         lang = get_current_language()
-        if hasattr(self, "resource_bar"):
-            self.resource_bar.set_compact_mode(w < 1200, lang=lang)
-        # Compute required width for wide topbar from actual layout margins, spacing, and visible widget sizeHints
         top_m = self._topbar_v.contentsMargins()
         cmd_m = self._topbar_cmd_row.contentsMargins()
-        wide_req = top_m.left() + top_m.right() + cmd_m.left() + cmd_m.right() + 8
         src_min = max(116, self.source_combo.fontMetrics().horizontalAdvance("0123456789AB") + 32)
         self.source_combo.setMinimumWidth(src_min)
         wide_btn_texts = {
@@ -1492,28 +1488,47 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.capture_btn: tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang),
             self.emergency_stop_btn: tr("btn_estop", lang),
         }
-        vis_items = 0
-        for i in range(self._topbar_cmd_row.count()):
-            wdg = self._topbar_cmd_row.itemAt(i).widget()
-            if wdg is None:
-                continue
-            if wdg in (self.ai_status_badge, self._hazard_bar) and not wdg.isVisible():
-                continue
-            vis_items += 1
-            if wdg is self.source_combo:
-                wide_req += src_min
-            elif wdg is self._skin_switcher:
-                sm = self._skin_switcher.layout().contentsMargins()
-                sp = max(0, self._skin_switcher.layout().spacing())
-                d_w = self._pill_dark.fontMetrics().horizontalAdvance(translate_text("黑夜", lang)) + 34
-                l_w = self._pill_light.fontMetrics().horizontalAdvance(translate_text("白天", lang)) + 34
-                wide_req += sm.left() + sm.right() + sp + d_w + l_w
-            elif wdg in wide_btn_texts:
-                txt_w = wdg.fontMetrics().horizontalAdvance(wide_btn_texts[wdg]) + 34
-                wide_req += max(wdg.sizeHint().width(), txt_w)
-            else:
-                wide_req += max(wdg.minimumWidth(), wdg.sizeHint().width())
-        wide_req += max(0, self._topbar_cmd_row.spacing()) * max(0, vis_items - 1)
+
+        def _compute_wide_req() -> int:
+            req = top_m.left() + top_m.right() + cmd_m.left() + cmd_m.right() + 8
+            vis_items = 0
+            for i in range(self._topbar_cmd_row.count()):
+                wdg = self._topbar_cmd_row.itemAt(i).widget()
+                if wdg is None:
+                    continue
+                if wdg in (self.ai_status_badge, self._hazard_bar) and not wdg.isVisible():
+                    continue
+                vis_items += 1
+                if wdg is self.source_combo:
+                    req += src_min
+                elif wdg is self._skin_switcher:
+                    sm = self._skin_switcher.layout().contentsMargins()
+                    sp = max(0, self._skin_switcher.layout().spacing())
+                    d_w = self._pill_dark.fontMetrics().horizontalAdvance(translate_text("黑夜", lang)) + 34
+                    l_w = self._pill_light.fontMetrics().horizontalAdvance(translate_text("白天", lang)) + 34
+                    req += sm.left() + sm.right() + sp + d_w + l_w
+                elif wdg in wide_btn_texts:
+                    txt_w = wdg.fontMetrics().horizontalAdvance(wide_btn_texts[wdg]) + 34
+                    req += max(wdg.sizeHint().width(), txt_w)
+                else:
+                    req += max(wdg.minimumWidth(), wdg.sizeHint().width())
+            req += max(0, self._topbar_cmd_row.spacing()) * max(0, vis_items - 1)
+            return req
+
+        # Stage 1: Prefer wide resource_bar when w >= 1200; if topbar doesn't fit, compact resource_bar first
+        if hasattr(self, "resource_bar"):
+            self.resource_bar.set_compact_mode(w < 1200, lang=lang)
+            if self.resource_bar.layout() is not None:
+                self.resource_bar.layout().activate()
+            self.resource_bar.updateGeometry()
+        wide_req = _compute_wide_req()
+        if w < wide_req and hasattr(self, "resource_bar") and not self.resource_bar._compact_mode:
+            self.resource_bar.set_compact_mode(True, lang=lang)
+            if self.resource_bar.layout() is not None:
+                self.resource_bar.layout().activate()
+            self.resource_bar.updateGeometry()
+            wide_req = _compute_wide_req()
+        # Stage 2: Only collapse topbar buttons to icon-only if still wider than available width
         narrow_top = w < wide_req
         self._is_narrow_top = narrow_top
         if hasattr(self, "_pill_dark") and hasattr(self, "_pill_light") and hasattr(self, "_theme_icon_btn"):
