@@ -93,6 +93,12 @@ _NAMED_TR_KEYS: dict[str, dict[str, str]] = {
         "ko": "AI 긴급 정지",
         "ja": "AI 緊急停止",
     },
+    "btn_estop_short": {
+        "zh": "急停",
+        "en": "E-Stop",
+        "ko": "긴급 정지",
+        "ja": "緊急停止",
+    },
     "btn_start_capture": {
         "zh": "开始捕获",
         "en": "Start Capture",
@@ -400,8 +406,8 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "로컬 오디오 파일 불러오기 (분리 / MIDI 변환)",
         "ja": "音声ファイルを読み込んで分離 / MIDI変換",
     },
-    "导入音频并 2-Stem 分轨": {"en": "Import & 2-Stem Split", "ko": "불러오기 및 2-Stem 분리", "ja": "読み込んで 2-Stem 分離"},
-    "导入音频并 4-Stem 分轨": {"en": "Import & 4-Stem Split", "ko": "불러오기 및 4-Stem 분리", "ja": "読み込んで 4-Stem 分離"},
+    "导入音频并 2-Stem 分轨": {"en": "Import && 2-Stem Split", "ko": "불러오기 및 2-Stem 분리", "ja": "読み込んで 2-Stem 分離"},
+    "导入音频并 4-Stem 分轨": {"en": "Import && 4-Stem Split", "ko": "불러오기 및 4-Stem 분리", "ja": "読み込んで 4-Stem 分離"},
     "导入单轨音频直接转 MIDI": {"en": "Import Audio Directly to MIDI", "ko": "단일 트랙 바로 MIDI 변환", "ja": "単一音声を直接 MIDI 変換"},
     "导入音频直接深度分析": {"en": "Import Audio for Deep Analysis", "ko": "오디오 심층 분석 실행", "ja": "音声を読み込んで詳細解析"},
     "和弦时间轴 & 贝斯根音": {"en": "Chord Timeline & Bass Root", "ko": "코드 타임라인 & 베이스 근음", "ja": "コード進行＆ベースルート音"},
@@ -551,6 +557,11 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "지금 ListenScope 다시 시작",
         "ja": "今すぐ ListenScope を再起動",
     },
+    "重启失败，请手动重新打开": {
+        "en": "Restart failed. Please reopen ListenScope manually.",
+        "ko": "다시 시작하지 못했습니다. ListenScope를 수동으로 다시 열어 주세요.",
+        "ja": "再起動に失敗しました。手動で ListenScope を開き直してください。",
+    },
     "待命：支持多源下载，低速或断流时自动切换高速镜像": {
         "en": "Standby: multi-mirror download enabled with automatic slow-mirror failover",
         "ko": "대기 중: 다중 미러 및 저속/끊김 시 자동 미러 전환 지원",
@@ -587,8 +598,8 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
     "恢复画面": {"en": "Resume View", "ko": "화면 재개", "ja": "画面再開"},
     "⋯ 更多": {"en": "⋯ More", "ko": "⋯ 더보기", "ja": "⋯ その他"},
     "▴ 收起更多": {"en": "▴ Less", "ko": "▴ 접기", "ja": "▴ 閉じる"},
-    "波形与 FFT 频谱": {"en": "Waveform & FFT", "ko": "파형 및 FFT 스펙트럼", "ja": "波形と FFT スペクトル"},
-    "频带能量与声谱图": {"en": "Bands & Spectrogram", "ko": "대역 에너지 및 스펙트로그램", "ja": "帯域エネルギーとスペクトログラム"},
+    "波形与 FFT 频谱": {"en": "Waveform && FFT", "ko": "파형 및 FFT 스펙트럼", "ja": "波形と FFT スペクトル"},
+    "频带能量与声谱图": {"en": "Bands && Spectrogram", "ko": "대역 에너지 및 스펙트로그램", "ja": "帯域エネルギーとスペクトログラム"},
     "▾ 收起 A/B": {"en": "▾ Collapse A/B", "ko": "▾ A/B 접기", "ja": "▾ A/B を折りたたむ"},
     "▸ 展开 A/B": {"en": "▸ Expand A/B", "ko": "▸ A/B 펼치기", "ja": "▸ A/B を展開"},
     "时间 (秒)": {"en": "Time (s)", "ko": "시간 (초)", "ja": "時間 (秒)"},
@@ -604,9 +615,59 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ja": "キャプチャ開始後に表示",
     },
     "选最近 30 s 并 2-Stem 分轨": {
-        "en": "Select Last 30s & 2-Stem",
+        "en": "Select Last 30s && 2-Stem",
         "ko": "최근 30초 선택 후 2-Stem 분리",
         "ja": "直近30秒を選択して2-Stem分離",
+    },
+    "① 选中片段 → ② 选最近 30 s 并 2-Stem 分轨": {
+        "en": "① Select Clip → ② Select Last 30s & 2-Stem",
+        "ko": "① 구간 선택 → ② 최근 30초 선택 후 2-Stem 분리",
+        "ja": "① 区間選択 → ② 直近30秒を選択して2-Stem分離",
+    },
+    "点击「选最近 30 s 并 2-Stem 分轨」，或在下方 120s 历史缓冲选定 A/B 区间后分轨；分离后的人声 / 伴奏 / 贝斯 / 鼓组独立波形轨、M/S 独听与单轨转 MIDI 按钮将在此处就位。": {
+        "en": "Click 'Select Last 30s & 2-Stem' above, or select an A/B range in the 120s history buffer below; separated Vocals / Accompaniment / Bass / Drums waveforms, M/S soloing, and stem-to-MIDI buttons will appear here.",
+        "ko": "위의 '최근 30초 선택 후 2-Stem 분리'를 클릭하거나 아래 120초 버퍼에서 A/B 구간을 선택하세요. 분리된 보컬/반주/베이스/드럼 파형과 M/S 솔로·MIDI 변환 버튼이 여기에 표시됩니다.",
+        "ja": "上の「直近30秒を選択して2-Stem分離」をクリックするか、下の120秒履歴バッファでA/B区間を選択して分離してください。分離後の各トラック波形・M/S・MIDI変換ボタンがここに表示されます。",
+    },
+    "切换明暗主题": {"en": "Toggle Light/Dark Theme", "ko": "밝기/어두운 테마 전환", "ja": "ライト/ダーク切替"},
+    "内存偏低": {"en": "Low RAM", "ko": "메모리 부족", "ja": "RAM不足"},
+    "低内存": {"en": "Low RAM", "ko": "메모리 부족", "ja": "RAM少"},
+    "[混入警告] 静音": {"en": "[Loopback Warn] Silent", "ko": "[루프백 경고] 무음", "ja": "[ループバック警告] 無音"},
+    "[混入警告] 有信号": {"en": "[Loopback Warn] Signal", "ko": "[루프백 경고] 신호 있음", "ja": "[ループバック警告] 信号あり"},
+    "已锁定": {"en": "Locked", "ko": "잠금", "ja": "ロック"},
+    "已捕获": {"en": "Active", "ko": "활성", "ja": "稼働中"},
+    "Normal": {"en": "Normal", "ko": "정상", "ja": "正常"},
+    "Warning": {"en": "Warning", "ko": "경고", "ja": "警告"},
+    "Critical": {"en": "Critical", "ko": "위험", "ja": "危険"},
+    "Insufficient · 等待音频": {
+        "en": "Insufficient · Waiting for audio",
+        "ko": "데이터 부족 · 오디오 대기 중",
+        "ja": "不足 · 音声待機中",
+    },
+    "Insufficient · 已重置，等待新音频": {
+        "en": "Insufficient · Reset, waiting for new audio",
+        "ko": "데이터 부족 · 초기화됨, 새 오디오 대기 중",
+        "ja": "不足 · リセット済、新しい音声を待機中",
+    },
+    "显示与同步半速 BPM (÷2，不改分析器内部状态)": {
+        "en": "Display & sync half-time BPM (÷2, without altering analyzer state)",
+        "ko": "하프타임 BPM 표시 및 동기화 (÷2, 분석기 내부 상태 유지)",
+        "ja": "ハーフタイム BPM 表示と同期 (÷2、解析器内部状態は変更なし)",
+    },
+    "显示与同步倍速 BPM (×2，不改分析器内部状态)": {
+        "en": "Display & sync double-time BPM (×2, without altering analyzer state)",
+        "ko": "더블타임 BPM 표시 및 동기화 (×2, 분석기 내부 상태 유지)",
+        "ja": "ダブルタイム BPM 表示と同期 (×2、解析器内部状態は変更なし)",
+    },
+    "CHORD_PRACTICE · 练习和弦": {
+        "en": "CHORD_PRACTICE · Practice Chords",
+        "ko": "CHORD_PRACTICE · 코드 연습",
+        "ja": "CHORD_PRACTICE · コード練習",
+    },
+    "RESET // TRACK · 换歌重置": {
+        "en": "RESET // TRACK · Reset Harmony on Track Change",
+        "ko": "RESET // TRACK · 곡 변경 시 화성 초기화",
+        "ja": "RESET // TRACK · 曲切替で和声リセット",
     },
     "分轨后点击『分析和弦与节奏』": {
         "en": "Run stem separation, then click 'Analyze Chords & Rhythm'",
@@ -863,7 +924,7 @@ def translate_widget_tree(root: QtWidgets.QWidget, lang: str) -> None:
             continue
         if w.accessibleName():
             _translate_cached(w, w.accessibleName(), "_ls_orig_an", code, apply_fn=w.setAccessibleName)
-        if w.toolTip():
+        if w.toolTip() and not w.property("_ls_dynamic_tip"):
             _translate_cached(w, w.toolTip(), "_ls_orig_tip", code, apply_fn=w.setToolTip)
         if isinstance(w, (QtWidgets.QLabel, QtWidgets.QAbstractButton)):
             _translate_cached(w, w.text(), "_ls_orig_text", code, apply_fn=w.setText)

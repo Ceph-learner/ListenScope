@@ -289,6 +289,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         )
         self._spec_empty_item.setPos(-15.0, float(n_bins) * 0.5)
         self.spec_plot.addItem(self._spec_empty_item)
+        self._has_spec_data: bool = False
         self._plots = (self.wave_plot, self.fft_plot, self.log_plot, self.spec_plot)
         for p in self._plots:
             try:
@@ -296,6 +297,9 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             except Exception:
                 pass
             p.getAxis("left").setWidth(46)
+        self._FFT_HOLD_SEC = 1.5
+        self._FFT_PEAK_FALL_RATE = 12.0
+        self._refresh_plot_tooltips(get_current_language())
         from core.config import AnalysisConfig
 
         spec_hist_sec = int(AnalysisConfig().spectrum_history_seconds)
@@ -354,6 +358,10 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         system_is_dark: Optional[bool] = None,
         acid_variant: Optional[str] = None,
     ) -> None:
+        if hasattr(self, "_spec_empty_item"):
+            self._spec_empty_item.setText(translate_text("开始捕获后显示", appearance.language))
+            self._spec_empty_item.setVisible(not self._has_spec_data)
+        self._refresh_plot_tooltips(getattr(appearance, "language", get_current_language()))
         if acid_variant in ("light", "dark"):
             p = get_acid_palette(acid_variant)
             self._pulse_strip.set_theme_color(p.accent)
@@ -478,6 +486,35 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
         self._arrange_plots()
         self._refresh_axis_ticks()
 
+    def _refresh_plot_tooltips(self, lang: str) -> None:
+        from core.i18n import tr
+
+        ball = getattr(self, "_fft_ballistics", None)
+        hold = float(getattr(ball, "hold_sec", getattr(self, "_FFT_HOLD_SEC", 1.5)))
+        fall = float(getattr(ball, "peak_fall_rate", getattr(self, "_FFT_PEAK_FALL_RATE", 12.0)))
+        secs = float(getattr(self, "_waveform_window_seconds", 4.0))
+
+        self.fft_plot.setProperty("_ls_dynamic_tip", True)
+        self.fft_plot.setToolTip(
+            tr(
+                f"实线：当前频谱。黄色虚线：峰值保持，保留 {hold:g} 秒，之后每秒回落 {fall:g} dB。",
+                f"Solid line: current spectrum. Yellow dashed line: peak hold for {hold:g} s, then falling at {fall:g} dB/s.",
+                f"실선: 현재 스펙트럼. 노란색 점선: 피크 홀드({hold:g}초 유지 후 초당 {fall:g} dB 하강).",
+                f"実線: 現在のスペクトラム。黄色い破線: ピークホールド（{hold:g} 秒保持後、毎秒 {fall:g} dB 減衰）。",
+                lang=lang,
+            )
+        )
+        self.wave_plot.setProperty("_ls_dynamic_tip", True)
+        self.wave_plot.setToolTip(
+            tr(
+                f"最近 {secs:g} 秒的振幅包络：每一小段的最高点和最低点，中间填充。新的声音从右侧进入，向左移出。开启「自动增益」时，小信号会放大显示。",
+                f"Amplitude envelope over the last {secs:g} s: min/max range per slice with filled interior. New audio enters from the right and scrolls left. With Auto Gain enabled, quiet signals are scaled up.",
+                f"최근 {secs:g}초 진폭 포락선: 각 구간의 최댓값과 최솟값 사이를 채워 표시합니다. 새 소리는 오른쪽에서 들어와 왼쪽으로 이동하며, '자동 게인'을 켜면 작은 신호가 확대됩니다.",
+                f"直近 {secs:g} 秒の振幅エンベロープ: 各区間の最大値と最小値の間を塗りつぶして表示します。新しい音は右から入り左へ流れ、「オートゲイン」有効時は小信号が拡大表示されます。",
+                lang=lang,
+            )
+        )
+
     def _refresh_axis_ticks(self) -> None:
         """Adapt spectrogram and FFT Y-axis ticks to available pixel height (>= 1.6x font height)."""
         font_h = max(10.0, float(self.fontMetrics().height()))
@@ -497,8 +534,9 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                 lbl = f"{int(f // 1000)}k" if f >= 1000.0 else f"{f:g}"
                 kept_spec.append((y_val, lbl))
                 last_px = px_y
+        lang = get_current_language()
         self.spec_plot.getAxis("left").setTicks([kept_spec])
-        self.spec_plot.setLabel("left", "" if spec_h < 90.0 else "频率 (Hz)", **{"font-size": "9pt"})
+        self.spec_plot.setLabel("left", "" if spec_h < 90.0 else translate_text("频率 (Hz)", lang), **{"font-size": "9pt"})
 
         # 2. FFT & Log-band Y-axis (-95..5 dBFS) fixed ticks: 0 / -30 / -60 / -90 dB
         db_candidates = (-90.0, -60.0, -30.0, 0.0)
@@ -518,7 +556,7 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             (self.log_plot, "频率 (Hz)"),
             (self.spec_plot, "时间 (s)"),
         ):
-            plot.setLabel("bottom", "" if plot.height() < 150 else orig_bottom, **{"font-size": "9pt"})
+            plot.setLabel("bottom", "" if plot.height() < 150 else translate_text(orig_bottom, lang), **{"font-size": "9pt"})
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -702,8 +740,8 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
                     int(self._fft_x.shape[0]),
                     floor_val=-120.0,
                     release_rate=20.0,
-                    hold_sec=1.5,
-                    peak_fall_rate=12.0,
+                    hold_sec=self._FFT_HOLD_SEC,
+                    peak_fall_rate=self._FFT_PEAK_FALL_RATE,
                     mode="db",
                 )
             fft_y = np.asarray(snap.fft_db, dtype=np.float32)
@@ -723,11 +761,12 @@ class SpectrumAnalysisWidget(QtWidgets.QWidget):
             self._log_curve.setData(snap.log_freqs_hz, snap.log_spectrum_db, skipFiniteCheck=True)
 
         if spectrogram is not None and spectrogram.size > 0:
+            self._has_spec_data = True
             self._spec_empty_item.setVisible(False)
             self._spec_img.setImage(spectrogram, autoLevels=False, levels=(-90.0, -5.0))
             frames = int(spectrogram.shape[0])
             bins = int(spectrogram.shape[1]) if spectrogram.ndim > 1 else 96
             dur_s = max(1.0 / 15.0, frames / 15.0)
             self._spec_img.setRect(QtCore.QRectF(-dur_s, 0.0, dur_s, float(bins)))
-        else:
+        elif not self._has_spec_data:
             self._spec_empty_item.setVisible(True)

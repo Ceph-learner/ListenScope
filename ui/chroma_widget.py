@@ -667,9 +667,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         )
         self.chroma_bar_plot.addItem(self._chroma_peak_item)
         splitter.addWidget(self.chroma_bar_plot)
+        self._refresh_plot_tooltips(get_current_language())
 
         self.chroma_hist_plot = pg.PlotWidget(title="CHROMA HEATMAP // 有界时序热图 (30s)")
-        self.chroma_hist_plot.setMinimumHeight(60)
+        self.chroma_hist_plot.setMinimumHeight(96)
         try:
             self.chroma_hist_plot.hideButtons()
         except Exception:
@@ -699,15 +700,20 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.chroma_hist_plot.addItem(self._chroma_img)
         splitter.addWidget(self.chroma_hist_plot)
 
-        splitter.setSizes([210, 240])
+        splitter.setSizes([180, 270])
         root.addWidget(splitter, 1)
 
     def refresh_chroma_note_ticks(self) -> None:
         axis = self.chroma_hist_plot.getAxis("left")
         font = axis.style["tickFont"] or self.font()
-        label_height = QtGui.QFontMetrics(font).height() + 1
+        label_height = QtGui.QFontMetrics(font).height() + 2
         available = max(1.0, axis.height())
-        stride = 1 if available >= len(PITCH_CLASSES) * label_height else 2
+        if available >= len(PITCH_CLASSES) * label_height:
+            stride = 1
+        elif available >= 6 * label_height:
+            stride = 2
+        else:
+            stride = 3
         if stride != getattr(self, "_chroma_tick_stride", None):
             self._chroma_tick_stride = stride
             axis.setTicks([[(i + 0.5, PITCH_CLASSES[i]) for i in range(0, len(PITCH_CLASSES), stride)]])
@@ -944,6 +950,21 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 locked=locked,
             )
 
+    def _refresh_plot_tooltips(self, lang: str) -> None:
+        from core.i18n import tr
+
+        hold = float(getattr(self._chroma_ballistics, "hold_sec", 1.2))
+        self.chroma_bar_plot.setProperty("_ls_dynamic_tip", True)
+        self.chroma_bar_plot.setToolTip(
+            tr(
+                f"柱子：当前各音级的能量。黄色短条：峰值保持，保留最近 {hold:g} 秒内的最高值，之后缓慢回落。",
+                f"Bars: current energy per pitch class. Yellow ticks: peak hold, keeping the maximum over the last {hold:g} s before decaying slowly.",
+                f"막대: 현재 각 음계의 에너지. 노란색 막대: 피크 홀드, 최근 {hold:g}초 내 최고값을 유지한 뒤 서서히 감소합니다.",
+                f"バー: 現在の各音階のエネルギー。黄色いバー: ピークホールド（直近 {hold:g} 秒間の最大値を保持後、緩やかに減衰）。",
+                lang=lang,
+            )
+        )
+
     def apply_theme(
         self,
         appearance,
@@ -967,6 +988,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         )
         self.practice_chords_btn.setToolTip("CHORD_PRACTICE · " + self.practice_chords_btn.text())
         self.reset_harmony_btn.setToolTip("RESET // TRACK · " + self.reset_harmony_btn.text())
+        self._refresh_plot_tooltips(lang)
 
         if self._acid_variant in ("light", "dark"):
             variant = self._acid_variant or "dark"

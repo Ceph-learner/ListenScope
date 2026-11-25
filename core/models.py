@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 
 class ResourceStatus(str, Enum):
@@ -282,6 +282,7 @@ class AIJobResult:
     peak_vram_mb: Optional[float] = None
     end_vram_mb: Optional[float] = None
     error: Optional[str] = None
+    stop_reason: Optional[Literal["user", "ram_guard", "vram_guard"]] = None
 
 
 @dataclass
