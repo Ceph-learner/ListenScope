@@ -699,7 +699,7 @@ def test_round4_launch_detached_not_in_active_subprocs_and_job_breakaway() -> No
     paths_src = (REPO_ROOT / "core" / "paths.py").read_text("utf-8")
     assert "0x2000 | 0x0800" in paths_src
     main_src = (REPO_ROOT / "main.py").read_text("utf-8")
-    assert "launch_detached(cmd, cwd=restart_cwd)" in main_src
+    assert "launch_detached(cmd, cwd=restart_cwd, allow_job_relax=True)" in main_src
 
 
 def test_round5_launch_detached_retries_without_breakaway_on_winerror_5(monkeypatch, caplog) -> None:
@@ -771,5 +771,75 @@ def test_round5_restart_application_keeps_window_and_skips_shutdown_on_failure(m
     assert called["shutdown"] == 0
     assert called["force_quit"] == 0
     assert called["banners"] == [("重启失败，请手动重新打开", "warn")]
+
+
+def test_round6_launch_detached_relaxes_job_only_when_allow_job_relax_true(monkeypatch) -> None:
+    import core.paths as paths_mod
+
+    monkeypatch.setattr(paths_mod.sys, "platform", "win32")
+
+    class _DummyProc:
+        pass
+
+    for allow_relax, expected_relax_count in ((True, 1), (False, 0)):
+        events: list[tuple[str, Any]] = []
+        attempt = {"n": 0}
+
+        def _fake_popen(cmd, **kwargs):
+            attempt["n"] += 1
+            flags = int(kwargs.get("creationflags", 0))
+            has_breakaway = bool(flags & 0x01000000)
+            events.append(("popen", has_breakaway))
+            if attempt["n"] == 1:
+                err = OSError("Access is denied")
+                err.winerror = 5
+                raise err
+            return _DummyProc()
+
+        def _fake_relax() -> bool:
+            events.append(("relax", None))
+            return True
+
+        monkeypatch.setattr(paths_mod.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(paths_mod, "relax_kill_on_close_for_restart", _fake_relax)
+
+        proc = paths_mod.launch_detached(["ListenScope.exe"], allow_job_relax=allow_relax)
+        assert isinstance(proc, _DummyProc)
+        if allow_relax:
+            assert events == [("popen", True), ("relax", None), ("popen", False)]
+        else:
+            assert events == [("popen", True), ("popen", False)]
+        assert sum(1 for k, _ in events if k == "relax") == expected_relax_count
+
+
+def test_round6_relax_kill_on_close_for_restart_sets_breakaway_only_and_logs_on_failure(monkeypatch, caplog) -> None:
+    import ctypes
+    import logging
+    import core.paths as paths_mod
+
+    captured_flags: list[int] = []
+    ret_val = {"ok": 1}
+
+    class _FakeKernel32:
+        def SetInformationJobObject(self, job, info_class, info_ptr, info_size):
+            # BasicLimitInformation.LimitFlags is at offset 16 (two int64s) in _JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+            raw = ctypes.string_at(info_ptr, info_size)
+            flags = int.from_bytes(raw[16:20], "little")
+            captured_flags.append(flags)
+            return ret_val["ok"]
+
+    monkeypatch.setattr(paths_mod.sys, "platform", "win32")
+    monkeypatch.setattr(paths_mod, "_win_job_handle", 1234)
+    monkeypatch.setattr(paths_mod, "_configure_win32_job_api", lambda: _FakeKernel32())
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+
+    assert paths_mod.relax_kill_on_close_for_restart() is True
+    assert captured_flags[-1] == 0x0800  # BREAKAWAY_OK only, KILL_ON_JOB_CLOSE (0x2000) cleared
+
+    ret_val["ok"] = 0
+    with caplog.at_level(logging.WARNING):
+        assert paths_mod.relax_kill_on_close_for_restart() is False
+    assert any("relax_kill_on_close_for_restart" in r.message for r in caplog.records)
+
 
 

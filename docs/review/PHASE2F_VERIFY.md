@@ -113,6 +113,21 @@ INFO     listenscope.shutdown:main.py:2320 shutdown total elapsed_ms=543.7
 ### 已知边界（本轮不改）
 - 如果在一键配置（`BootstrapCoordinator`）运行过程中退出 ListenScope，配置脚本的 `stdout` 管道会断开，可能导致安装中断；下次打开时重新运行一键配置即可恢复。
 
+---
+
+## Round 6（`relax_kill_on_close_for_restart()` + `allow_job_relax` 仅用于重启）
+
+| 项 | 修改内容与文件 | 测试名 | Linux/offscreen 验证结果 |
+|---|---|---|---|
+| **1. `relax_kill_on_close_for_restart()`** | [`core/paths.py`](../../core/paths.py)：对当前 `_win_job_handle` 调用 `SetInformationJobObject`，将 `LimitFlags` 改为仅保留 `JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x0800)`（移除 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000)`），避免回退到不带 breakaway 启动的新实例在旧进程退出关闭 Job 句柄时被一起杀掉；失败时记录 `warning` 日志并返回 `False`。 | `tests/test_review_phase2f.py::test_round6_relax_kill_on_close_for_restart_sets_breakaway_only_and_logs_on_failure` | **PASSED** |
+| **2. `launch_detached(..., allow_job_relax=False)`** | [`core/paths.py`](../../core/paths.py) & [`main.py`](../../main.py)：`launch_detached` 新增 `allow_job_relax: bool = False`，在 `winerror == 5` 回退分支里仅当 `allow_job_relax=True` 时先调用 `relax_kill_on_close_for_restart()` 再重试；全仓仅 `restart_application()` 传入 `allow_job_relax=True`。 | `tests/test_review_phase2f.py::test_round6_launch_detached_relaxes_job_only_when_allow_job_relax_true` | **PASSED** |
+
+### 说明与已知边界
+- **不留残留子进程**：即使重启回退时放宽了 `KILL_ON_JOB_CLOSE`，旧进程的 `shutdown()` 仍会显式调用 `terminate_all_active_subprocesses()`（并在看门狗兜底中调用 `kill_all_active_subprocesses()`）终止所有已注册的 AI/MIDI/探针子进程，因此不会留下孤儿进程。
+- **一键配置 PowerShell 保持 `allow_job_relax=False`**：在回退分支中不会放宽 Job，退出 ListenScope 时配置脚本会随 Job 结束（与 `stdout` 管道断开的已知边界一致，下次重新运行一键配置即可恢复）。
+- **实机第 9 项日志提示**：在 Cursor 终端启动后点「立即重启」，若外层终端 Job 禁止 breakaway，日志应依次出现 `winerror=5` 回退警告与 `Relaxed JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE on current Job Object for restart`（若外层 Job 允许 breakaway 则直接成功且无回退日志，同样算通过）。
+
+
 
 
 

@@ -1953,7 +1953,7 @@ class ListenScopeController:
         cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, *sys.argv]
         restart_cwd = str(self.work_dir.parent if self.work_dir.name == "workspace_outputs" else os.getcwd())
         try:
-            launch_detached(cmd, cwd=restart_cwd)
+            launch_detached(cmd, cwd=restart_cwd, allow_job_relax=True)
         except Exception as exc:
             logging.getLogger(__name__).exception("Failed to relaunch ListenScope: %s", exc)
             if hasattr(self, "window") and self.window is not None:

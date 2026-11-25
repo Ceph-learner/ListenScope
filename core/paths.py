@@ -39,6 +39,48 @@ def _configure_win32_job_api():
     return kernel32
 
 
+def _make_job_extended_limit_info(limit_flags: int):
+    import ctypes
+    from ctypes import wintypes
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", _IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = int(limit_flags)
+    return info
+
+
 def _ensure_windows_kill_job() -> Optional[int]:
     """Create a Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so child processes never outlive parent."""
     global _win_job_handle
@@ -48,49 +90,14 @@ def _ensure_windows_kill_job() -> Optional[int]:
         return _win_job_handle
     try:
         import ctypes
-        from ctypes import wintypes
-
-        class _IO_COUNTERS(ctypes.Structure):
-            _fields_ = [
-                ("ReadOperationCount", ctypes.c_uint64),
-                ("WriteOperationCount", ctypes.c_uint64),
-                ("OtherOperationCount", ctypes.c_uint64),
-                ("ReadTransferCount", ctypes.c_uint64),
-                ("WriteTransferCount", ctypes.c_uint64),
-                ("OtherTransferCount", ctypes.c_uint64),
-            ]
-
-        class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
-            _fields_ = [
-                ("PerProcessUserTimeLimit", ctypes.c_int64),
-                ("PerJobUserTimeLimit", ctypes.c_int64),
-                ("LimitFlags", wintypes.DWORD),
-                ("MinimumWorkingSetSize", ctypes.c_size_t),
-                ("MaximumWorkingSetSize", ctypes.c_size_t),
-                ("ActiveProcessLimit", wintypes.DWORD),
-                ("Affinity", ctypes.c_size_t),
-                ("PriorityClass", wintypes.DWORD),
-                ("SchedulingClass", wintypes.DWORD),
-            ]
-
-        class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
-            _fields_ = [
-                ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
-                ("IoInfo", _IO_COUNTERS),
-                ("ProcessMemoryLimit", ctypes.c_size_t),
-                ("JobMemoryLimit", ctypes.c_size_t),
-                ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                ("PeakJobMemoryUsed", ctypes.c_size_t),
-            ]
 
         kernel32 = _configure_win32_job_api()
         job = kernel32.CreateJobObjectW(None, None)
         if not job:
             _logger.warning("CreateJobObjectW failed (winerror=%s)", ctypes.get_last_error())
             return None
-        info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000) | JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x0800)
-        info.BasicLimitInformation.LimitFlags = 0x2000 | 0x0800
+        info = _make_job_extended_limit_info(0x2000 | 0x0800)
         ok = kernel32.SetInformationJobObject(
             job,
             9,  # JobObjectExtendedLimitInformation
@@ -106,6 +113,35 @@ def _ensure_windows_kill_job() -> Optional[int]:
     except Exception as exc:
         _logger.warning("Failed to initialize Windows Job Object: %s", exc)
         return None
+
+
+def relax_kill_on_close_for_restart() -> bool:
+    """Drop JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (keeping BREAKAWAY_OK) so a non-breakaway restarted child survives parent exit."""
+    if sys.platform != "win32" or _win_job_handle is None:
+        return False
+    try:
+        import ctypes
+
+        kernel32 = _configure_win32_job_api()
+        # Keep only JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x0800), removing KILL_ON_JOB_CLOSE (0x2000).
+        info = _make_job_extended_limit_info(0x0800)
+        ok = kernel32.SetInformationJobObject(
+            _win_job_handle,
+            9,  # JobObjectExtendedLimitInformation
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        )
+        if not ok:
+            _logger.warning(
+                "relax_kill_on_close_for_restart SetInformationJobObject failed (winerror=%s)",
+                ctypes.get_last_error(),
+            )
+            return False
+        _logger.info("Relaxed JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE on current Job Object for restart")
+        return True
+    except Exception as exc:
+        _logger.warning("Failed to relax Windows Job Object for restart: %s", exc)
+        return False
 
 
 def ensure_current_process_in_kill_job() -> bool:
@@ -204,7 +240,7 @@ def terminate_all_active_subprocesses(timeout: float = 1.0) -> None:
                 pass
 
 
-def launch_detached(cmd: Any, **kwargs: Any) -> subprocess.Popen[Any]:
+def launch_detached(cmd: Any, *, allow_job_relax: bool = False, **kwargs: Any) -> subprocess.Popen[Any]:
     """Launch a detached subprocess (e.g. app restart, external tools) that survives parent exit.
 
     On Windows, breaks away from the parent's KILL_ON_JOB_CLOSE Job Object via
@@ -227,9 +263,12 @@ def launch_detached(cmd: Any, **kwargs: Any) -> subprocess.Popen[Any]:
             if getattr(exc, "winerror", None) == 5 and (flags & create_breakaway):
                 _logger.warning(
                     "launch_detached with CREATE_BREAKAWAY_FROM_JOB failed (winerror=5, likely nested in a non-breakaway outer Job); "
-                    "retrying without breakaway (child will remain in parent Job): %s",
+                    "retrying without breakaway (allow_job_relax=%s): %s",
+                    allow_job_relax,
                     exc,
                 )
+                if allow_job_relax:
+                    relax_kill_on_close_for_restart()
                 spawn_kw["creationflags"] = flags & ~create_breakaway
                 return subprocess.Popen(cmd, **spawn_kw)
             raise
