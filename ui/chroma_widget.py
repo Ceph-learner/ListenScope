@@ -1000,13 +1000,17 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             )
             self._key_box.setToolTip(f"{self.key_secondary_lbl.text()}\n{self.key_relation_lbl.text()}\n{self.key_sig_note_lbl.text()}")
             self.chroma_bar_plot.setMinimumHeight(30)
+            self.chroma_hist_plot.setTitle(None)
             self.chroma_hist_plot.setMinimumHeight(96)
             self._chroma_splitter.setSizes([32, 96])
+            self.refresh_chroma_note_ticks()
         else:
             self._chord_box.setToolTip("")
             self._key_box.setToolTip("")
             self.chroma_bar_plot.setMinimumHeight(56)
+            self.chroma_hist_plot.setTitle(translate_text("CHROMA HEATMAP // 有界时序热图 (30s)", get_current_language()))
             self.chroma_hist_plot.setMinimumHeight(96)
+            self.refresh_chroma_note_ticks()
 
     def _refresh_plot_tooltips(self, lang: str) -> None:
         from core.i18n import tr
