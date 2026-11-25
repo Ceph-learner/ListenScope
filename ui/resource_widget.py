@@ -77,8 +77,14 @@ class ResourceMonitorBar(QtWidgets.QFrame):
         self.ram_label.setVisible(not compact_b)
         self._sep_lbl.setVisible(not compact_b)
         self.vram_label.setVisible(not compact_b)
+        self.setMinimumWidth(0)
         if self._last_snap is not None:
             self.update_snapshot(self._last_snap)
+        lay = self.layout()
+        if lay is not None:
+            lay.activate()
+        self.setMinimumWidth(self.sizeHint().width())
+        self.updateGeometry()
 
     def _set_text_if_changed(self, key: str, lbl: QtWidgets.QLabel, text: str) -> None:
         if self._cached_texts.get(key) != text:

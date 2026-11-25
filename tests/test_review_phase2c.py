@@ -375,6 +375,7 @@ def test_ub32_fixed_width_controls_elide_with_ellipsis_and_full_tooltip() -> Non
         mixer.close()
 
 
+@pytest.mark.perf
 def test_p2c_perf_analyze_latest_once_cpu_within_5ms_median() -> None:
     """A-H1 CPU regression (+3.69ms median over e4c49e8 3.11ms): steady-state analyze_latest_once median must be <= 5.0 ms."""
     import time
@@ -394,6 +395,7 @@ def test_p2c_perf_analyze_latest_once_cpu_within_5ms_median() -> None:
         w.analyze_latest_once()
         times.append((time.perf_counter() - t0) * 1000.0)
     med_ms = float(np.median(times[20:]))
+    print(f"PERF_MEDIAN_MS={med_ms:.2f}")
     assert med_ms <= 5.0, f"analyze_latest_once steady median CPU is {med_ms:.2f} ms (must be <= 5.0 ms)"
 
 
