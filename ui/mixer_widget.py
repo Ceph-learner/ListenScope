@@ -38,6 +38,7 @@ from ui.acid_style import (
     AcidGraphicOverlay,
     AcidSplitter,
     AcidTabBar,
+    FlowLayout,
     SegmentedBatteryProgressBar,
     TelemetryHeader,
     TelemetryPulseStrip,
@@ -478,6 +479,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._track_scroll = scroll = QtWidgets.QScrollArea()
         scroll.setObjectName("stemTrackScroll")
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setMinimumHeight(110)
         self._tracks_container = QtWidgets.QWidget()
         self._tracks_layout = QtWidgets.QVBoxLayout(self._tracks_container)
@@ -487,7 +489,7 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._empty_tracks_card = QtWidgets.QFrame()
         self._empty_tracks_card.setObjectName("emptyStemBay")
         self._empty_tracks_card.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         empty_l = QtWidgets.QVBoxLayout(self._empty_tracks_card)
@@ -504,7 +506,11 @@ class StemMixerWidget(QtWidgets.QWidget):
         )
         self._empty_tracks_hint_lbl.setObjectName("mutedCaption")
         self._empty_tracks_hint_lbl.setWordWrap(True)
-        empty_btn_row = QtWidgets.QHBoxLayout()
+        self._empty_tracks_hint_lbl.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
+        empty_btn_row = FlowLayout(margin=0, h_spacing=6, v_spacing=4)
         self._empty_quick_2stem_btn = QtWidgets.QPushButton("选最近 30 s 并 2-Stem 分轨")
         self._empty_quick_2stem_btn.setObjectName("acidPrimaryBtn")
         self._empty_quick_2stem_btn.clicked.connect(self.quick_2stem_requested.emit)
@@ -516,7 +522,6 @@ class StemMixerWidget(QtWidgets.QWidget):
         self._empty_open_midi_btn.clicked.connect(self._on_open_single_stem_clicked)
         empty_btn_row.addWidget(self._empty_quick_2stem_btn)
         empty_btn_row.addWidget(self._empty_open_midi_btn)
-        empty_btn_row.addStretch(1)
         empty_l.addWidget(self._empty_tracks_hdr)
         empty_l.addWidget(self._empty_tracks_hint_lbl)
         empty_l.addLayout(empty_btn_row)

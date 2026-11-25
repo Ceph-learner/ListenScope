@@ -43,6 +43,8 @@ ROOT = get_bundle_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+_DEBUG_RESTART_ENV = "LISTENSCOPE_DEBUG_RESTART_AFTER_S"
+
 from ai.job_manager import AIJobManager
 from analysis.midi_transcription import transcribe_stem_to_midi
 from analysis.stem_analyzer import analyze_stems_offline, export_transcription_sheet
@@ -1223,17 +1225,28 @@ class ListenScopeController:
         )
 
     def _on_start_ai_separation(self, stem_mode: str, model_id: str, segment: int, use_gpu: bool) -> None:
+        ai_logger = logging.getLogger(__name__)
         if self.live_separator.is_active or self.live_separator.is_starting:
-            self.window.show_banner_message("请先停止实验性近实时分轨，系统禁止并行运行多个人工智能分轨任务。")
+            ai_logger.warning("ai launch rejected reason=live_separator_active stem_mode=%s", stem_mode)
+            self.window.show_banner_message("请先停止实验性近实时分轨，系统禁止并行运行多个人工智能分轨任务。", tone="warn")
             return
         if self.ring_buffer.available_seconds < 0.5:
-            self.window.show_banner_message("当前历史环形缓冲尚不足 0.5s，请先捕获一段音频后再分离。")
+            ai_logger.warning(
+                "ai launch rejected reason=insufficient_buffer stem_mode=%s avail_s=%.2f",
+                stem_mode,
+                float(self.ring_buffer.available_seconds),
+            )
+            self.window.show_banner_message("当前历史环形缓冲尚不足 0.5s，请先捕获一段音频后再分离。", tone="warn")
             return
 
         if self.ab_player.loop_range[1] <= self.ab_player.loop_range[0]:
             self.ab_player.select_recent_seconds(min(30.0, self.ring_buffer.available_seconds))
 
         a_frame, b_frame = self.ab_player.loop_range
+        if b_frame <= a_frame:
+            ai_logger.warning("ai launch rejected reason=invalid_ab_range stem_mode=%s", stem_mode)
+            self.window.show_banner_message("当前没有有效的 A/B 选区，请先在下方时间轴选择片段后再分轨。", tone="warn")
+            return
         task_id = f"job_{uuid.uuid4().hex[:8]}"
         task_dir = self._prepare_stem_work_dir(task_id)
         in_wav = task_dir / "excerpt_input.wav"
@@ -1241,7 +1254,8 @@ class ListenScopeController:
             _, dur = self.ring_buffer.export_wav_streaming(in_wav, a_frame, b_frame)
         except Exception as exc:
             shutil.rmtree(task_dir, ignore_errors=True)
-            self.window.show_banner_message(f"导出待分轨片段失败: {exc}")
+            ai_logger.warning("ai launch rejected reason=export_failed stem_mode=%s detail=%s", stem_mode, exc)
+            self.window.show_banner_message(f"导出待分轨片段失败: {exc}", tone="warn")
             return
 
         if dur > self.ai_config.default_max_history_ai_seconds:
@@ -1264,12 +1278,13 @@ class ListenScopeController:
         ok, msg = self.ai_job_manager.submit_job(req)
         if not ok:
             shutil.rmtree(task_dir, ignore_errors=True)
+            ai_logger.warning("ai launch rejected reason=submit_rejected stem_mode=%s detail=%s", stem_mode, msg)
             self.window.ai_status_badge.setText("AI: Blocked")
             self.window.mixer_widget.job_progress.setValue(0)
             from core.i18n import set_i18n_text
             set_i18n_text(self.window.mixer_widget.job_status_lbl, f"❌ 拒绝启动 AI 分轨: {msg}")
             self._refresh_resource_ui_now()
-            self.window.show_banner_message(f"拒绝启动 AI 分轨: {msg}")
+            self.window.show_banner_message(f"拒绝启动 AI 分轨: {msg}", tone="warn")
         else:
             self._last_ai_request = req
             self.window.tabs.setCurrentWidget(self.window.mixer_widget)
@@ -1441,8 +1456,10 @@ class ListenScopeController:
                         self.window.start_ago_spin.setValue(round(sel, 2))
                         self.window.end_ago_spin.setValue(0.0)
                         self.window._set_ab_region_from_ago(sel, 0.0)
-                    self.window.history_coverage_lbl.setText(
-                        f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s"
+                    from core.i18n import set_i18n_text
+                    set_i18n_text(
+                        self.window.history_coverage_lbl,
+                        f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s",
                     )
                     self._refresh_history_overview()
                     if truncated:
@@ -1500,8 +1517,10 @@ class ListenScopeController:
                 self.window.start_ago_spin.setValue(round(sel, 2))
                 self.window.end_ago_spin.setValue(0.0)
                 self.window._set_ab_region_from_ago(sel, 0.0)
-            self.window.history_coverage_lbl.setText(
-                f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s"
+            from core.i18n import set_i18n_text
+            set_i18n_text(
+                self.window.history_coverage_lbl,
+                f"已缓冲: {avail:.1f} / {self.audio_config.ring_buffer_seconds:.0f}.0 s",
             )
             self._refresh_history_overview()
             self.window.tabs.setCurrentWidget(self.window.chroma_widget)
@@ -1952,8 +1971,10 @@ class ListenScopeController:
             pass
         cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, *sys.argv]
         restart_cwd = str(self.work_dir.parent if self.work_dir.name == "workspace_outputs" else os.getcwd())
+        child_env = os.environ.copy()
+        child_env.pop(_DEBUG_RESTART_ENV, None)
         try:
-            launch_detached(cmd, cwd=restart_cwd, allow_job_relax=True)
+            launch_detached(cmd, cwd=restart_cwd, env=child_env, allow_job_relax=True)
         except Exception as exc:
             logging.getLogger(__name__).exception("Failed to relaunch ListenScope: %s", exc)
             if hasattr(self, "window") and self.window is not None:
@@ -2232,8 +2253,9 @@ class ListenScopeController:
                 self.window.update_capture_stats(cstats, self.ring_buffer.available_seconds)
             else:
                 cov_txt = f"已缓冲: {self.ring_buffer.available_seconds:.1f} / 120.0 s"
-                if self.window.history_coverage_lbl.text() != cov_txt:
-                    self.window.history_coverage_lbl.setText(cov_txt)
+                if self.window.history_coverage_lbl.property("_ls_orig_text") != cov_txt:
+                    from core.i18n import set_i18n_text
+                    set_i18n_text(self.window.history_coverage_lbl, cov_txt)
 
             self._refresh_history_overview()
             self._sync_ab_bookmarks()
@@ -2362,6 +2384,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         ctrl.start_capture({"kind": "synthetic", "pattern": "switching"})
 
     ctrl.window.show()
+    raw_restart_s = os.environ.get(_DEBUG_RESTART_ENV, "").strip()
+    if raw_restart_s:
+        try:
+            delay_s = float(raw_restart_s)
+            if delay_s >= 0.0:
+                logging.getLogger(__name__).warning(
+                    "Debug restart hook armed (%s=%.3f s); will call restart_application() once.",
+                    _DEBUG_RESTART_ENV,
+                    delay_s,
+                )
+                QtCore.QTimer.singleShot(max(0, int(round(delay_s * 1000.0))), ctrl.restart_application)
+            else:
+                logging.getLogger(__name__).warning("Ignoring negative %s=%r", _DEBUG_RESTART_ENV, raw_restart_s)
+        except ValueError:
+            logging.getLogger(__name__).warning("Ignoring invalid %s=%r", _DEBUG_RESTART_ENV, raw_restart_s)
     if args.headless_smoke:
         QtCore.QTimer.singleShot(300, ctrl.window.force_quit)
     ret = app.exec()

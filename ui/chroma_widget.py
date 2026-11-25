@@ -307,22 +307,27 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         outer.addWidget(scroll)
 
         root = QtWidgets.QVBoxLayout(content)
+        self._root_layout = root
         root.setContentsMargins(10, 6, 10, 6)
         root.setSpacing(5)
 
         # Harmonic summary cards (top)
         cards = QtWidgets.QHBoxLayout()
+        self._cards_layout = cards
         cards.setSpacing(8)
 
         # Chord card
         chord_box = QtWidgets.QFrame()
+        self._chord_box = chord_box
         chord_box.setProperty("acidCard", True)
         chord_box.setProperty("accentRail", "primary")
         chord_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         chord_l = QtWidgets.QVBoxLayout(chord_box)
+        self._chord_l = chord_l
         chord_l.setContentsMargins(10, 6, 10, 6)
         chord_l.setSpacing(3)
         chord_hdr = TelemetryHeader("CHORD // 01", "和弦推测", badge_text="MAJ / MIN")
+        self._chord_hdr = chord_hdr
         chord_hdr.add_right_widget(
             HelpBadge(
                 "实时和弦推测与稳定度",
@@ -373,13 +378,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         # Key card
         key_box = QtWidgets.QFrame()
+        self._key_box = key_box
         key_box.setProperty("acidCard", True)
         key_box.setProperty("accentRail", "secondary")
         key_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         key_l = QtWidgets.QVBoxLayout(key_box)
+        self._key_l = key_l
         key_l.setContentsMargins(10, 6, 10, 6)
         key_l.setSpacing(3)
         key_hdr = TelemetryHeader("TONALITY // 02", "调性推测", badge_text="K-S WINDOW")
+        self._key_hdr = key_hdr
         key_hdr.add_right_widget(
             HelpBadge(
                 "K-S 滑动窗口调性推测与转调预警",
@@ -422,13 +430,16 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         # BPM + Pitch + CPU Practice Metronome card
         rhythm_box = QtWidgets.QFrame()
+        self._rhythm_box = rhythm_box
         rhythm_box.setProperty("acidCard", True)
         rhythm_box.setProperty("accentRail", "obsidian")
         rhythm_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Minimum)
         rhythm_l = QtWidgets.QVBoxLayout(rhythm_box)
+        self._rhythm_l = rhythm_l
         rhythm_l.setContentsMargins(10, 6, 10, 6)
         rhythm_l.setSpacing(5)
         rhythm_hdr = TelemetryHeader("TEMPO & PITCH // 03", "节拍 · 音高 · CPU 节拍器", badge_text="SYNTH CLICK")
+        self._rhythm_hdr = rhythm_hdr
         rhythm_hdr.add_right_widget(
             HelpBadge(
                 "BPM 节拍、主音高与音分偏差条",
@@ -521,12 +532,11 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         met_row.addWidget(self.adopt_bpm_btn)
         met_row.addWidget(self.metronome_bpm_spin)
         met_row.addWidget(self.metronome_sig_combo)
-        met_row.addWidget(
-            HelpBadge(
-                "Tap 定速与纯 CPU 节拍器",
-                "连续点击「Tap 定速」两次以上即可估算速度；「随播节拍器」与「预备拍」均纯 CPU 混音合成，支持 0.5×–1.25× 变速同速跟随。",
-            )
+        self._met_help_badge = HelpBadge(
+            "Tap 定速与纯 CPU 节拍器",
+            "连续点击「Tap 定速」两次以上即可估算速度；「随播节拍器」与「预备拍」均纯 CPU 混音合成，支持 0.5×–1.25× 变速同速跟随。",
         )
+        met_row.addWidget(self._met_help_badge)
 
         met_row2 = QtWidgets.QHBoxLayout()
         met_row2.setSpacing(10)
@@ -949,6 +959,54 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 phase=phase,
                 locked=locked,
             )
+
+    def set_compact_mode(self, compact: bool) -> None:
+        compact = bool(compact)
+        self._root_layout.setContentsMargins(6 if compact else 10, 2 if compact else 6, 6 if compact else 10, 2 if compact else 6)
+        self._root_layout.setSpacing(2 if compact else 5)
+        self._cards_layout.setSpacing(5 if compact else 8)
+        for hdr in (self._chord_hdr, self._key_hdr, self._rhythm_hdr):
+            hdr.set_compact_mode(compact)
+        for lay in (self._chord_l, self._key_l, self._rhythm_l):
+            lay.setContentsMargins(7 if compact else 10, 3 if compact else 6, 7 if compact else 10, 3 if compact else 6)
+            lay.setSpacing(1 if compact else 3)
+        for w in (
+            self.chord_tones_lbl,
+            self.chord_degree_lbl,
+            self.chord_secondary_lbl,
+            self.chord_stability_lbl,
+            self.key_secondary_lbl,
+            self.key_relation_lbl,
+            self.key_sig_note_lbl,
+            self.pitch_lbl,
+            self.tuning_bar,
+            self.tap_tempo_btn,
+            self.adopt_bpm_btn,
+            self.metronome_bpm_spin,
+            self.metronome_sig_combo,
+            self._met_help_badge,
+            self.metronome_overlay_chk,
+            self.metronome_count_in_chk,
+            self.metronome_standalone_btn,
+            self.metronome_vol_slider,
+            self.metronome_vol_lbl,
+            self.tap_status_lbl,
+        ):
+            w.setVisible(not compact)
+        if compact:
+            self._chord_box.setToolTip(
+                f"{self.chord_tones_lbl.text()} · {self.chord_degree_lbl.text()}\n"
+                f"{self.chord_secondary_lbl.text()}\n{self.chord_stability_lbl.text()}"
+            )
+            self._key_box.setToolTip(f"{self.key_secondary_lbl.text()}\n{self.key_relation_lbl.text()}\n{self.key_sig_note_lbl.text()}")
+            self.chroma_bar_plot.setMinimumHeight(30)
+            self.chroma_hist_plot.setMinimumHeight(96)
+            self._chroma_splitter.setSizes([32, 96])
+        else:
+            self._chord_box.setToolTip("")
+            self._key_box.setToolTip("")
+            self.chroma_bar_plot.setMinimumHeight(56)
+            self.chroma_hist_plot.setMinimumHeight(96)
 
     def _refresh_plot_tooltips(self, lang: str) -> None:
         from core.i18n import tr

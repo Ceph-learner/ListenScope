@@ -29,3 +29,8 @@
 - UI 测试须兼容 `QT_QPA_PLATFORM=offscreen`，避免依赖真实音频设备或系统弹窗阻塞。
 - 涉及 `settings` 的测试须使用临时目录（`tmp_path`），不读写仓库根目录配置。
 - 涉及 AI/MIDI 子进程的测试可使用 `tests/conftest.py` 中的轻量模拟环境或 mock，不依赖下载外部模型权重。
+
+## 三、调试环境变量
+
+- `LISTENSCOPE_DEBUG_RESTART_AFTER_S=<秒>`：仅在显式设置时生效（默认未启用）。主窗口显示后在指定秒数后调用一次 `restart_application()` 并记录 warning 日志，用于真机验证无需先完成一键配置即可触发「立即重启」；启动新实例前会自动从子进程环境中移除该变量，避免无限重启。
+

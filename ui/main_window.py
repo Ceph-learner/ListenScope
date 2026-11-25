@@ -683,6 +683,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.source_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
+        self.source_combo.currentIndexChanged.connect(self._sync_source_combo_tooltip)
         self.refresh_btn = QtWidgets.QPushButton("刷新")
         self.refresh_btn.setToolTip("刷新音频进程列表")
         self.refresh_btn.clicked.connect(self.refresh_sources_requested.emit)
@@ -874,6 +875,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._main_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         self._main_splitter.setChildrenCollapsible(False)
         self._main_splitter.setHandleWidth(4)
+        self.tabs.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Ignored,
+        )
+        self.tabs.setMinimumHeight(110)
         self._main_splitter.addWidget(self.tabs)
 
         self._bottom_dock = QtWidgets.QWidget()
@@ -1437,8 +1443,20 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _on_ab_more_toggled(self, checked: bool) -> None:
         self._ab_more_user_override = bool(checked)
         self._ab_more_panel.setVisible(bool(checked))
-        self._bottom_dock.setMaximumHeight(16777215 if checked else 118)
         set_i18n_text(self.ab_more_btn, "▴ 收起更多" if checked else "⋯ 更多")
+        self._apply_ab_more_splitter_fit()
+
+    def _apply_ab_more_splitter_fit(self) -> None:
+        expanded = self._ab_more_panel.isVisible()
+        avail_h = max(240, self._main_splitter.height() or (self.height() - 72))
+        if not expanded:
+            self._bottom_dock.setMaximumHeight(118)
+            dock_h = min(118, max(72, self._bottom_dock.sizeHint().height()))
+            self._main_splitter.setSizes([max(110, avail_h - dock_h), dock_h])
+            return
+        dock_h = min(max(130, self._bottom_dock.sizeHint().height()), max(150, avail_h - 110))
+        self._bottom_dock.setMaximumHeight(dock_h)
+        self._main_splitter.setSizes([max(110, avail_h - dock_h), dock_h])
 
     def set_bottom_panel_collapsed(self, collapsed: bool) -> None:
         collapsed = bool(collapsed)
@@ -1603,6 +1621,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             compact_tabs = compact_h or (self.isVisible() and sw_h < 360)
             cards_compact = compact_tabs or (self.isVisible() and sw_h < 460)
             self.spectrum_widget.set_compact_mode(compact_tabs, compact_cards=cards_compact)
+        if hasattr(self, "chroma_widget"):
+            self.chroma_widget.set_compact_mode(h < 600 or w < 1050)
+        if self._ab_more_panel.isVisible():
+            self._apply_ab_more_splitter_fit()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if (
@@ -2742,28 +2764,44 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if file_path:
             self.import_audio_requested.emit(file_path)
 
+    def _sync_source_combo_tooltip(self, *_args: object) -> None:
+        if not hasattr(self, "source_combo"):
+            return
+        cur = self.source_combo.currentText().strip()
+        if cur:
+            self.source_combo.setToolTip(cur)
+        else:
+            self.source_combo.setToolTip(translate_text("AUDIO_IN // 选择要捕获的音频进程或系统环回", get_current_language()))
+
     def populate_audio_sources(self, processes: list[AudioProcessInfo], *, include_synthetic: bool = True) -> None:
         prev = self.source_combo.currentData()
         self.source_combo.clear()
         for p in processes:
+            label = f"[进程] {p.name} (PID {p.pid}, RSS {p.rss_mb:.0f}MB)"
             self.source_combo.addItem(
-                f"[进程] {p.name} (PID {p.pid}, RSS {p.rss_mb:.0f}MB)",
+                label,
                 {"kind": "process", "pid": p.pid, "name": p.name},
             )
+            self.source_combo.setItemData(self.source_combo.count() - 1, label, QtCore.Qt.ItemDataRole.ToolTipRole)
+        loop_label = "[兜底] 系统 WASAPI Loopback (会混入其他应用声音)"
         self.source_combo.addItem(
-            "[兜底] 系统 WASAPI Loopback (会混入其他应用声音)",
+            loop_label,
             {"kind": "system_loopback"},
         )
+        self.source_combo.setItemData(self.source_combo.count() - 1, loop_label, QtCore.Qt.ItemDataRole.ToolTipRole)
         if include_synthetic:
+            syn_label = "[测试信号] Synthetic Switching (440Hz/静音/659Hz)"
             self.source_combo.addItem(
-                "[测试信号] Synthetic Switching (440Hz/静音/659Hz)",
+                syn_label,
                 {"kind": "synthetic", "pattern": "switching"},
             )
+            self.source_combo.setItemData(self.source_combo.count() - 1, syn_label, QtCore.Qt.ItemDataRole.ToolTipRole)
         if prev is not None:
             for idx in range(self.source_combo.count()):
                 if self.source_combo.itemData(idx) == prev:
                     self.source_combo.setCurrentIndex(idx)
                     break
+        self._sync_source_combo_tooltip()
 
     def set_capture_active_ui(self, active: bool) -> None:
         lang = get_current_language()

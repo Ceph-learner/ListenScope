@@ -2001,3 +2001,7 @@ HELP_TRANSLATIONS: dict[str, dict[str, tuple[str, str]]] = {
         ),
     },
 }
+
+from .i18n_catalog_p2g import P2G_PHRASE_MAP
+
+EXTRA_PHRASE_MAP.update(P2G_PHRASE_MAP)

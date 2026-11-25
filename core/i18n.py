@@ -773,6 +773,31 @@ UI_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "• 우측 카드의 맥동 점, 대역 스트립 및 배터리 분할 바는 오디오 에너지에 반응하는 장식용 텔레메트리 미세 애니메이션입니다.\n• [STATIC_DECOR]를 클릭하면 실시간 스펙트럼/코드 갱신에 영향을 주지 않고 장식 애니메이션만 즉시 고정할 수 있습니다.",
         "ja": "• 右側カードのパルス点・帯域ストリップ・バッテリーバーはオーディオに連動する装飾マイクロアニメーションです。\n• [STATIC_DECOR] を押すとリアルタイムスペクトル/コード更新を止めずに装飾アニメーションのみ固定できます。",
     },
+    "⚠️ 当前使用系统 WASAPI Loopback 模式：其他应用声音可能被混入。": {
+        "en": "⚠️ System WASAPI Loopback active: audio from other apps may be mixed in.",
+        "ko": "⚠️ 시스템 WASAPI 루프백 모드 사용 중: 다른 앱의 소리가 섞일 수 있습니다.",
+        "ja": "⚠️ システム WASAPI ループバック使用中: 他アプリの音声が混入する可能性があります。",
+    },
+    "当前使用系统 WASAPI Loopback 模式：其他应用声音可能被混入。": {
+        "en": "System WASAPI Loopback active: audio from other apps may be mixed in.",
+        "ko": "시스템 WASAPI 루프백 모드 사용 중: 다른 앱의 소리가 섞일 수 있습니다.",
+        "ja": "システム WASAPI ループバック使用中: 他アプリの音声が混入する可能性があります。",
+    },
+    "曲目监测 (SMTC): 未检测到匹配会话，可继续使用右侧「换歌重置」": {
+        "en": "Track Monitor (SMTC): No matching session detected; you can still use Reset Harmony on the right.",
+        "ko": "트랙 모니터 (SMTC): 일치하는 세션이 감지되지 않았습니다. 오른쪽 '화성 리셋'을 계속 사용할 수 있습니다.",
+        "ja": "トラック監視 (SMTC): 一致するセッションが検出されません（右側の「和声リセット」は使用可能）。",
+    },
+    "曲目监测 (SMTC): 元数据过渡中，保留当前历史": {
+        "en": "Track Monitor (SMTC): Metadata transitioning; keeping current history.",
+        "ko": "트랙 모니터 (SMTC): 메타데이터 전환 중, 현재 기록 유지.",
+        "ja": "トラック監視 (SMTC): メタデータ移行中、現在の履歴を保持します。",
+    },
+    "曲目会话监测 (SMTC): 当前为合成测试信号源（可手动点「换歌重置」或注入 SMTC 模拟测试）": {
+        "en": "SMTC Track Monitor: Synthetic test source active (click Reset Harmony or inject SMTC mock).",
+        "ko": "트랙 세션 모니터 (SMTC): 합성 테스트 신호 소스 활성('화성 리셋' 또는 SMTC 모의 테스트 가능).",
+        "ja": "曲目セッション監視 (SMTC): 合成テスト信号ソース稼働中（「和声リセット」または SMTC モック注入可）。",
+    },
 }
 
 _PREFIX_REPLACEMENTS: tuple[tuple[str, dict[str, str]], ...] = (
@@ -780,11 +805,14 @@ _PREFIX_REPLACEMENTS: tuple[tuple[str, dict[str, str]], ...] = (
     ("相对级数:", {"en": "Roman Degree:", "ko": "상대 도수:", "ja": "相対度数:"}),
     ("第二候选:", {"en": "2nd Candidate:", "ko": "2순위 후보:", "ja": "第2候補:"}),
     ("稳定度:", {"en": "Stability:", "ko": "안정도:", "ja": "安定度:"}),
-    ("节拍稳定度:", {"en": "Tempo Stability:", "ko": "템포 안정도:", "ja": "テンポ安定度:"}),
+    ("节拍稳定度:", {"en": "Tempo Stability:", "ko": "템포 안정도:", "ja": "템ポ安定度:"}),
     ("主音高:", {"en": "Pitch:", "ko": "기본 음고:", "ja": "基本ピッチ:"}),
+    ("低音 ", {"en": "Bass ", "ko": "베이스 ", "ja": "ベース "}),
+    ("多声部 · 显示低音", {"en": "Polyphonic · Bass Pitch", "ko": "다성부 · 베이스 음고", "ja": "ポリフォニック · ベース音高"}),
     ("音量:", {"en": "Vol:", "ko": "볼륨:", "ja": "音量:"}),
     ("最近和弦进行 (最多 12 步):", {"en": "Recent Progression (<=12 steps):", "ko": "최근 코드 진행 (최대 12스텝):", "ja": "直近コード進行 (最大12ステップ):"}),
     ("曲目会话监测 (SMTC):", {"en": "SMTC Track Monitor:", "ko": "트랙 세션 모니터 (SMTC):", "ja": "曲目セッション監視 (SMTC):"}),
+    ("曲目监测 (SMTC):", {"en": "Track Monitor (SMTC):", "ko": "트랙 모니터 (SMTC):", "ja": "トラック監視 (SMTC):"}),
     ("已缓冲:", {"en": "Buffered:", "ko": "버퍼링됨:", "ja": "バッファ済:"}),
     ("贝斯独听 +", {"en": "Bass Solo +", "ko": "베이스 솔로 +", "ja": "ベース独聴 +"}),
     ("循环范围:", {"en": "Loop Scope:", "ko": "루프 범위:", "ja": "ループ範囲:"}),
