@@ -137,6 +137,7 @@ class CaptureStatsTracker:
         self._warning_message: Optional[str] = None
         self._last_error: Optional[str] = None
         self._device_switch_message: Optional[str] = None
+        self._device_switch_expires_at: float = 0.0
 
     def set_running(self, running: bool) -> None:
         with self._lock:
@@ -151,9 +152,12 @@ class CaptureStatsTracker:
         with self._lock:
             self._last_error = error_message
 
-    def set_device_switch_message(self, message: Optional[str]) -> None:
+    def set_device_switch_message(self, message: Optional[str], *, ttl_sec: float = 5.0) -> None:
         with self._lock:
             self._device_switch_message = message
+            self._device_switch_expires_at = (
+                time.monotonic() + max(0.05, float(ttl_sec)) if message else 0.0
+            )
 
     def set_process_name(self, process_name: str) -> None:
         with self._lock:
@@ -201,6 +205,10 @@ class CaptureStatsTracker:
                 fps = window_frames / self._fps_window_sec
             else:
                 fps = 0.0
+
+            if self._device_switch_message is not None and self._device_switch_expires_at > 0.0 and now >= self._device_switch_expires_at:
+                self._device_switch_message = None
+                self._device_switch_expires_at = 0.0
 
             return CaptureStats(
                 mode=self._mode,

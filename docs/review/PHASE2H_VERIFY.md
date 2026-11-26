@@ -62,3 +62,16 @@
    - Verify top info banner shows `"已切换到 <device B>"` (or localized equivalent), log contains `loopback default device changed old=... new=...`, and both `source_combo` and status bar display device B's actual name (with ellipsis + full tooltip if long).
 3. Set Windows display scaling to `125%` (`QT_SCALE_FACTOR=1.25`), resize window to `1093×566` (or `874×453` logical), open **Chroma** tab with top warning banner visible and bottom A/B dock expanded:
    - Verify cards collapse to single-line, `chroma_bar_plot` is fully visible, `chroma_hist_plot` is reachable via scroll, and `÷2`/`×2` buttons are not clipped.
+
+## Round 2 (PR #67 Quick 复审修复：H1-a / H1-b / H1-c)
+
+- **H1-a（阻塞项：独立 watcher 线程 + 主动中断阻塞 read）**：
+  - `audio/system_loopback.py`：新增 `_device_watcher_loop()`（`ListenScope-DefaultDeviceWatcher` 线程，默认每 `0.5s` 独立轮询 `IMMDeviceEnumerator::GetDefaultAudioEndpoint`），不再依赖 `stream.read()` 返回。
+  - 检测到默认设备变化后，watcher 置位 `_device_switch_requested` 并调用 `_interrupt_stream()`（`stop_stream()` / `close()`）主动中断可能永久阻塞在静音旧设备上的 `stream.read()`，由 capture 线程重建流并更新 `_active_dev_index` / `_active_dev_name`。
+  - 新增测试：`tests/test_review_phase2h.py::test_h1a_blocked_read_switches_within_1_5s_and_preserves_buffer`（模拟切换后旧流 `read()` 永久阻塞 `Event.wait()`，验证 1.5s 内完成切换且保留 `ring_buffer` 与 `ab.loop_range`）。
+- **H1-b（COM 生命周期与 ole32 签名）**：
+  - `audio/system_loopback.py`：`_make_ole32_and_guid()` 为 `CoInitializeEx`、`CoUninitialize`、`CoCreateInstance`、`CoTaskMemFree` 显式配置 `argtypes`/`restype`；`_com_initialize_thread()` 兼容 `RPC_E_CHANGED_MODE`（`-2147417850`，不调用 `CoUninitialize` 并继续执行）；watcher 线程仅在入口初始化 COM 一次、退出 `finally` 调用 `CoUninitialize()` 一次。
+  - 新增测试：`tests/test_review_phase2h.py::test_h1b_com_init_uninit_once_per_watcher_and_rpc_e_changed_mode`。
+- **H1-c（切换提示 TTL 自动清除与 A→B→A 往返切换）**：
+  - `audio/capture_base.py`：`CaptureStatsTracker.set_device_switch_message(..., ttl_sec=5.0)` 与 `snapshot()` 支持 5s 自动过期清除，避免长期遮挡 `SYSTEM_LOOPBACK_WARNING` 并确保 A→B→A 切回原设备时仍能重新弹出切换横幅。
+  - 新增测试：`tests/test_review_phase2h.py::test_h1c_device_switch_message_clears_and_aba_round_trip`。

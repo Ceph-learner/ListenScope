@@ -144,6 +144,282 @@ def test_h1_system_loopback_follows_default_device_change_preserves_buffer_and_l
             backend.stop()
 
 
+def test_h1a_blocked_read_switches_within_1_5s_and_preserves_buffer() -> None:
+    import threading
+    import numpy as np
+    from audio.playback import HistoryABPlayer
+    from audio.ring_buffer import FixedRingBuffer
+    from audio.system_loopback import WasapiSystemLoopbackBackend
+
+    state = {"dev_idx": 1, "dev_id": "dev-xiberia", "dev_name": "XIBERIA", "reads": 0}
+    pcm_chunk = (np.ones((960, 2), dtype=np.float32) * 0.1).tobytes()
+    block_forever_after_switch = threading.Event()
+
+    class _BlockingStream:
+        def __init__(self, dev_id: str) -> None:
+            self._dev_id = dev_id
+            self._unblock = threading.Event()
+            self._reads = 0
+
+        def read(self, frames: int, exception_on_overflow: bool = False) -> bytes:
+            self._reads += 1
+            if self._dev_id == "dev-xiberia" and self._reads >= 4:
+                # Simulate WASAPI loopback blocking forever once old endpoint goes silent
+                block_forever_after_switch.set()
+                self._unblock.wait()
+                raise RuntimeError("stream interrupted")
+            time.sleep(0.02)
+            return pcm_chunk
+
+        def stop_stream(self) -> None:
+            self._unblock.set()
+
+        def close(self) -> None:
+            self._unblock.set()
+
+    class _FakePyAudio:
+        paFloat32 = 1
+        paInt16 = 8
+
+        def __init__(self) -> None:
+            self._idx = state["dev_idx"]
+            self._id = state["dev_id"]
+            self._name = state["dev_name"]
+
+        def get_default_wasapi_loopback(self) -> dict[str, Any]:
+            return {
+                "index": self._idx,
+                "name": self._name,
+                "defaultSampleRate": 48000.0,
+                "maxInputChannels": 2,
+            }
+
+        def open(self, **kwargs) -> _BlockingStream:
+            return _BlockingStream(self._id)
+
+        def terminate(self) -> None:
+            pass
+
+    ring = FixedRingBuffer()
+    ab = HistoryABPlayer(ring_buffer=ring)
+    backend = WasapiSystemLoopbackBackend(
+        pyaudio_factory=_FakePyAudio,
+        allow_non_windows=True,
+        follow_default_device=True,
+        default_device_probe=lambda: (state["dev_id"], state["dev_name"]),
+        device_poll_interval_sec=0.1,
+    )
+    backend.start()
+    try:
+        deadline = time.monotonic() + 1.5
+        while (ring.available_seconds < 0.05 or not block_forever_after_switch.is_set()) and time.monotonic() < deadline:
+            ch = backend.read_chunk(timeout=0.05)
+            if ch is not None:
+                ring.write(ch)
+        assert ring.available_seconds >= 0.04
+        assert block_forever_after_switch.is_set(), "Old stream did not enter blocked read()"
+        ab.select_recent_seconds(0.04)
+        prev_frames = ring.total_written_frames
+        prev_loop = ab.loop_range
+
+        # Switch device while read() is permanently blocked
+        state["dev_idx"] = 2
+        state["dev_id"] = "dev-realtek"
+        state["dev_name"] = "Realtek Digital Output"
+
+        switch_deadline = time.monotonic() + 1.5
+        switched = False
+        while time.monotonic() < switch_deadline:
+            ch = backend.read_chunk(timeout=0.05)
+            if ch is not None:
+                ring.write(ch)
+            if backend.get_stats().process_name == "Realtek Digital Output":
+                switched = True
+                break
+        assert switched, f"Blocked read() did not switch within 1.5s; stats={backend.get_stats()}"
+        assert ring.total_written_frames >= prev_frames
+        assert ab.loop_range == prev_loop
+    finally:
+        backend.stop()
+
+
+def test_h1b_com_init_uninit_once_per_watcher_and_rpc_e_changed_mode(monkeypatch) -> None:
+    import audio.system_loopback as sl
+
+    calls: list[str] = []
+
+    class _FakeOle32:
+        def __init__(self, hr: int) -> None:
+            self._hr = hr
+            self.CoInitializeEx = self._CoInit(self)
+            self.CoUninitialize = self._CoUninit(self)
+            self.CoCreateInstance = self._DummyFn()
+            self.CoTaskMemFree = self._DummyFn()
+
+        class _DummyFn:
+            argtypes = []
+            restype = None
+
+        class _CoInit:
+            argtypes = []
+            restype = None
+
+            def __init__(self, parent) -> None:
+                self._p = parent
+
+            def __call__(self, _reserved, _flags):
+                calls.append(f"CoInitializeEx:{self._p._hr}")
+                return self._p._hr
+
+        class _CoUninit:
+            argtypes = []
+            restype = None
+
+            def __init__(self, parent) -> None:
+                self._p = parent
+
+            def __call__(self):
+                calls.append("CoUninitialize")
+
+    monkeypatch.setattr(sl.platform, "system", lambda: "Windows")
+
+    # Case 1: S_OK -> should_uninit=True
+    fake_ok = _FakeOle32(0)
+    monkeypatch.setattr(sl, "_make_ole32_and_guid", lambda: (fake_ok, object))
+    ole, uninit = sl._com_initialize_thread()
+    assert ole is fake_ok and uninit is True
+
+    # Case 2: RPC_E_CHANGED_MODE -> should_uninit=False, continues normally
+    fake_changed = _FakeOle32(sl._RPC_E_CHANGED_MODE)
+    monkeypatch.setattr(sl, "_make_ole32_and_guid", lambda: (fake_changed, object))
+    ole2, uninit2 = sl._com_initialize_thread()
+    assert ole2 is fake_changed and uninit2 is False
+
+    # Case 3: Watcher loop initializes once and uninitializes once on exit
+    calls.clear()
+    monkeypatch.setattr(sl, "_make_ole32_and_guid", lambda: (fake_ok, object))
+
+    class _FakePyAudio:
+        paFloat32 = 1
+        paInt16 = 8
+
+        def get_default_wasapi_loopback(self):
+            return {"index": 1, "name": "DevA", "defaultSampleRate": 48000.0, "maxInputChannels": 2}
+
+        def open(self, **kwargs):
+            class _S:
+                def read(self, frames, exception_on_overflow=False):
+                    time.sleep(0.02)
+                    return b"\x00" * (frames * 8)
+
+                def stop_stream(self):
+                    pass
+
+                def close(self):
+                    pass
+
+            return _S()
+
+        def terminate(self):
+            pass
+
+    backend = sl.WasapiSystemLoopbackBackend(
+        pyaudio_factory=_FakePyAudio,
+        allow_non_windows=True,
+        follow_default_device=True,
+        default_device_probe=None,
+        device_poll_interval_sec=0.05,
+    )
+    # Prevent actual COM CoCreateInstance in _query_windows_default_render_endpoint
+    monkeypatch.setattr(sl, "_query_windows_default_render_endpoint", lambda *, initialize_com=True: ("id-a", "DevA"))
+    backend.start()
+    time.sleep(0.2)
+    backend.stop()
+    # Watcher thread inits COM once at start and uninits once on exit (across multiple 50ms polls)
+    assert calls == ["CoInitializeEx:0", "CoUninitialize"]
+
+
+def test_h1c_device_switch_message_clears_and_aba_round_trip() -> None:
+    import numpy as np
+    from audio.system_loopback import SYSTEM_LOOPBACK_WARNING, WasapiSystemLoopbackBackend
+
+    state = {"dev_idx": 1, "dev_id": "dev-a", "dev_name": "DeviceA"}
+    pcm_chunk = (np.ones((960, 2), dtype=np.float32) * 0.1).tobytes()
+
+    class _FakeStream:
+        def read(self, frames: int, exception_on_overflow: bool = False) -> bytes:
+            time.sleep(0.02)
+            return pcm_chunk
+
+        def stop_stream(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class _FakePyAudio:
+        paFloat32 = 1
+        paInt16 = 8
+
+        def __init__(self) -> None:
+            self._idx = state["dev_idx"]
+            self._name = state["dev_name"]
+
+        def get_default_wasapi_loopback(self) -> dict[str, Any]:
+            return {"index": self._idx, "name": self._name, "defaultSampleRate": 48000.0, "maxInputChannels": 2}
+
+        def open(self, **kwargs) -> _FakeStream:
+            return _FakeStream()
+
+        def terminate(self) -> None:
+            pass
+
+    backend = WasapiSystemLoopbackBackend(
+        pyaudio_factory=_FakePyAudio,
+        allow_non_windows=True,
+        follow_default_device=True,
+        default_device_probe=lambda: (state["dev_id"], state["dev_name"]),
+        device_poll_interval_sec=0.08,
+        device_switch_ttl_sec=0.25,
+    )
+    app, win, mixer = _make_window()
+    try:
+        backend.start()
+        # A -> B
+        state["dev_idx"], state["dev_id"], state["dev_name"] = 2, "dev-b", "DeviceB"
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline and backend.get_stats().process_name != "DeviceB":
+            time.sleep(0.02)
+        st_b = backend.get_stats()
+        assert st_b.process_name == "DeviceB"
+        assert "DeviceB" in (st_b.device_switch_message or "")
+        win.update_capture_stats(st_b, 1.0)
+        assert "DeviceB" in win._last_capture_banner
+
+        # Wait for TTL expiry -> message clears and warning banner restores
+        time.sleep(0.3)
+        st_b_expired = backend.get_stats()
+        assert st_b_expired.device_switch_message is None
+        win.update_capture_stats(st_b_expired, 1.0)
+        assert win._last_capture_banner == SYSTEM_LOOPBACK_WARNING
+
+        # B -> A (round-trip back to A must show switch message again!)
+        state["dev_idx"], state["dev_id"], state["dev_name"] = 1, "dev-a", "DeviceA"
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline and backend.get_stats().process_name != "DeviceA":
+            time.sleep(0.02)
+        st_a = backend.get_stats()
+        assert st_a.process_name == "DeviceA"
+        assert "DeviceA" in (st_a.device_switch_message or "")
+        win.update_capture_stats(st_a, 1.0)
+        assert "DeviceA" in win._last_capture_banner
+    finally:
+        backend.stop()
+        win.close()
+        mixer.close()
+
+
+
 def test_h2_chroma_narrow_125_with_banner_and_ab_dock_shows_chroma_bars_and_tempo_buttons() -> None:
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
