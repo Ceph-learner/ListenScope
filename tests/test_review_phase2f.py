@@ -699,7 +699,7 @@ def test_round4_launch_detached_not_in_active_subprocs_and_job_breakaway() -> No
     paths_src = (REPO_ROOT / "core" / "paths.py").read_text("utf-8")
     assert "0x2000 | 0x0800" in paths_src
     main_src = (REPO_ROOT / "main.py").read_text("utf-8")
-    assert "launch_detached(cmd, cwd=restart_cwd, allow_job_relax=True)" in main_src
+    assert "launch_detached(cmd, cwd=restart_cwd, env=child_env, allow_job_relax=True)" in main_src
 
 
 def test_round5_launch_detached_retries_without_breakaway_on_winerror_5(monkeypatch, caplog) -> None:

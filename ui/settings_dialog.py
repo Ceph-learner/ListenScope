@@ -1380,7 +1380,7 @@ class SettingsDialog(QtWidgets.QDialog):
         set_widget_tone(self.bootstrap_status_lbl, tone)
         status_text = str(snap.get("status_text", "") or "")
         if status_text:
-            self.bootstrap_status_lbl.setText(status_text)
+            set_i18n_text(self.bootstrap_status_lbl, status_text)
         if hasattr(self, "bootstrap_log_view"):
             logs = snap.get("log_lines") or []
             joined = "\n".join(str(x) for x in logs[-120:])

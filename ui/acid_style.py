@@ -532,6 +532,14 @@ class TelemetryHeader(QtWidgets.QFrame):
     def add_right_widget(self, widget: QtWidgets.QWidget) -> None:
         self._right_layout.addWidget(widget)
 
+    def set_compact_mode(self, compact: bool) -> None:
+        if self.badge_lbl is not None:
+            self.badge_lbl.setVisible(not compact)
+            if compact and self.badge_lbl.text():
+                self.setToolTip(f"{self.eyebrow_lbl.text()} · {self.badge_lbl.text()}")
+        self.eyebrow_lbl.setMinimumHeight(11 if compact else 16)
+        self.title_lbl.setMinimumHeight(16 if compact else 28)
+
 
 class AcidGraphicOverlay(QtWidgets.QWidget):
     """Mouse-agnostic Graphic Realism card overlay painting registration +, 2x2 checkerboard & tall stencil."""
@@ -1332,6 +1340,30 @@ class MarqueeComboBox(QtWidgets.QComboBox):
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
         if not self._needs_scroll():
+            ph = self.placeholderText() if self.currentIndex() < 0 and not self.currentText() else ""
+            if ph:
+                tr_rect = self._text_rect()
+                if tr_rect.width() > 0 and self.fontMetrics().horizontalAdvance(ph) > tr_rect.width():
+                    opt = QtWidgets.QStyleOptionComboBox()
+                    self.initStyleOption(opt)
+                    opt.currentText = ""
+                    p = QtWidgets.QStylePainter(self)
+                    p.drawComplexControl(QtWidgets.QStyle.ComplexControl.CC_ComboBox, opt)
+                    p.setClipRect(tr_rect)
+                    p.setFont(self.font())
+                    color = self.palette().color(
+                        QtGui.QPalette.ColorGroup.Active if self.isEnabled() else QtGui.QPalette.ColorGroup.Disabled,
+                        QtGui.QPalette.ColorRole.PlaceholderText,
+                    )
+                    p.setPen(color)
+                    elided_ph = self.fontMetrics().elidedText(ph, QtCore.Qt.TextElideMode.ElideRight, tr_rect.width())
+                    p.drawText(
+                        tr_rect,
+                        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                        elided_ph,
+                    )
+                    p.end()
+                    return
             super().paintEvent(event)
             return
         opt = QtWidgets.QStyleOptionComboBox()
