@@ -12,7 +12,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from core.i18n import get_current_language, set_i18n_text, translate_text, translate_widget_tree
 from core.updater import (
     ReleaseInfo,
+    UpdateAssetNotFoundError,
     UpdateChecksumError,
+    UpdateChecksumFetchError,
     UpdateDownloadCancelled,
     detect_install_kind,
     download_and_verify_update,
@@ -165,6 +167,12 @@ class UpdateAvailableDialog(QtWidgets.QDialog):
                 self._finished_signal.emit(str(path))
             except UpdateDownloadCancelled:
                 self._cancelled_signal.emit()
+            except UpdateAssetNotFoundError as exc:
+                logger.warning("Matching release asset not found: %s", exc)
+                self._failed_signal.emit("未找到匹配当前版本的安装包，请前往 Releases 页面手动下载。")
+            except UpdateChecksumFetchError as exc:
+                logger.warning("Failed to fetch SHA256SUMS.txt directly from GitHub: %s", exc)
+                self._failed_signal.emit("无法获取校验信息，请稍后重试或手动下载")
             except UpdateChecksumError as exc:
                 logger.warning("Update checksum verification failed: %s", exc)
                 self._failed_signal.emit(f"更新包 SHA256 校验失败，已删除损坏文件: {exc}")

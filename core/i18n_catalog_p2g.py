@@ -635,6 +635,16 @@ P2G_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "다운로드가 취소되었습니다(다음 시도 시 이어받기 지원).",
         "ja": "ダウンロードをキャンセルしました（次回レジューム対応）。",
     },
+    "无法获取校验信息，请稍后重试或手动下载": {
+        "en": "Unable to fetch verification checksums. Please try again later or download manually.",
+        "ko": "체크섬 정보를 가져올 수 없습니다. 나중에 다시 시도하거나 수동으로 다운로드하세요.",
+        "ja": "チェックサム情報を取得できませんでした。しばらくしてから再試行するか手動でダウンロードしてください。",
+    },
+    "未找到匹配当前版本的安装包，请前往 Releases 页面手动下载。": {
+        "en": "No matching package found for this installation. Please download manually from the Releases page.",
+        "ko": "현재 설치 유형과 일치하는 패키지를 찾을 수 없습니다. Releases 페이지에서 수동으로 다운로드하세요.",
+        "ja": "現在のインストール形式に一致するパッケージが見つかりません。Releases ページから手動でダウンロードしてください。",
+    },
 }
 
 import re as _re

@@ -33,9 +33,21 @@ DEFAULT_TIMEOUT_SEC = 5.0
 DEFAULT_CHECK_INTERVAL_SEC = 24.0 * 3600.0
 MAX_RELEASE_NOTES_CHARS = 4000
 
+INSTALLER_ASSET_NAME = "ListenScope-Setup-Windows-x64.exe"
+PORTABLE_ASSET_NAME = "ListenScope-Core-Windows-x64-Portable.zip"
+CHECKSUM_ASSET_NAME = "SHA256SUMS.txt"
+
 ALLOWED_GITHUB_HOSTS: frozenset[str] = frozenset(
     {
         "api.github.com",
+        "github.com",
+        "objects.githubusercontent.com",
+    }
+)
+
+# SHA256SUMS.txt MUST only be fetched directly from GitHub, never via a mirror (U1).
+ALLOWED_CHECKSUM_HOSTS: frozenset[str] = frozenset(
+    {
         "github.com",
         "objects.githubusercontent.com",
     }
@@ -46,8 +58,16 @@ class UpdateSecurityError(ValueError):
     """Raised when a URL points outside the allowed GitHub / mirror host allowlist."""
 
 
+class UpdateChecksumFetchError(RuntimeError):
+    """Raised when SHA256SUMS.txt cannot be fetched directly from GitHub."""
+
+
 class UpdateChecksumError(RuntimeError):
     """Raised when a downloaded update fails SHA256SUMS.txt verification."""
+
+
+class UpdateAssetNotFoundError(FileNotFoundError):
+    """Raised when a release does not contain the exact expected Windows asset."""
 
 
 class UpdateDownloadCancelled(RuntimeError):
@@ -176,8 +196,10 @@ def _extract_host(url: str) -> tuple[str, str]:
 def build_allowed_hosts(
     mirror_prefix: str = "",
     extra_allowed_hosts: frozenset[str] = frozenset(),
+    *,
+    base_allowed_hosts: frozenset[str] = ALLOWED_GITHUB_HOSTS,
 ) -> frozenset[str]:
-    hosts = set(ALLOWED_GITHUB_HOSTS)
+    hosts = set(base_allowed_hosts)
     hosts.update(h.lower() for h in extra_allowed_hosts if h)
     if mirror_prefix.strip():
         scheme, host = _extract_host(mirror_prefix)
@@ -191,11 +213,16 @@ def validate_update_url(
     *,
     mirror_prefix: str = "",
     extra_allowed_hosts: frozenset[str] = frozenset(),
+    base_allowed_hosts: frozenset[str] = ALLOWED_GITHUB_HOSTS,
 ) -> str:
     """Validate that url uses https (or http for localhost/test) and an allowed host."""
     cleaned = str(url or "").strip()
     scheme, host = _extract_host(cleaned)
-    allowed = build_allowed_hosts(mirror_prefix=mirror_prefix, extra_allowed_hosts=extra_allowed_hosts)
+    allowed = build_allowed_hosts(
+        mirror_prefix=mirror_prefix,
+        extra_allowed_hosts=extra_allowed_hosts,
+        base_allowed_hosts=base_allowed_hosts,
+    )
     if not host or host not in allowed:
         raise UpdateSecurityError(f"Disallowed update URL host: {host!r} (url={cleaned!r})")
     if scheme == "https":
@@ -216,6 +243,7 @@ def _build_opener(
     *,
     mirror_prefix: str = "",
     extra_allowed_hosts: frozenset[str] = frozenset(),
+    base_allowed_hosts: frozenset[str] = ALLOWED_GITHUB_HOSTS,
 ) -> urllib.request.OpenerDirector:
     class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
@@ -223,6 +251,7 @@ def _build_opener(
                 newurl,
                 mirror_prefix=mirror_prefix,
                 extra_allowed_hosts=extra_allowed_hosts,
+                base_allowed_hosts=base_allowed_hosts,
             )
             return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -286,30 +315,17 @@ def select_release_asset(
     release: ReleaseInfo,
     install_kind: Literal["installer", "portable"] = "portable",
 ) -> Optional[ReleaseAsset]:
-    """Select the matching Windows release asset for installer or portable builds."""
-    if install_kind == "installer":
-        for a in release.assets:
-            low = a.name.lower()
-            if low.endswith(".exe") and ("setup" in low or "installer" in low):
-                return a
-        for a in release.assets:
-            if a.name.lower().endswith(".exe"):
-                return a
-        return None
-
+    """Strictly match the Windows release asset produced by release-windows.yml (no fallback guessing)."""
+    expected_name = INSTALLER_ASSET_NAME if install_kind == "installer" else PORTABLE_ASSET_NAME
     for a in release.assets:
-        low = a.name.lower()
-        if low.endswith(".zip") and "portable" in low:
-            return a
-    for a in release.assets:
-        if a.name.lower().endswith(".zip"):
+        if a.name == expected_name:
             return a
     return None
 
 
 def find_checksum_asset(release: ReleaseInfo) -> Optional[ReleaseAsset]:
     for a in release.assets:
-        if a.name.lower() == "sha256sums.txt":
+        if a.name == CHECKSUM_ASSET_NAME:
             return a
     return None
 
@@ -440,35 +456,36 @@ def verify_file_sha256(path: Path, expected_hex: str) -> bool:
     return compute_file_sha256(path) == exp
 
 
-def _fetch_text_with_mirror(
+def _fetch_checksums_direct(
     url: str,
     *,
     current_version: str,
-    mirror_prefix: str = "",
     timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     extra_allowed_hosts: frozenset[str] = frozenset(),
 ) -> str:
-    urls = [url]
-    if mirror_prefix.strip():
-        urls.append(apply_mirror_prefix(url, mirror_prefix))
-
-    last_exc: Optional[BaseException] = None
-    opener = _build_opener(mirror_prefix=mirror_prefix, extra_allowed_hosts=extra_allowed_hosts)
-    for candidate_url in urls:
-        validate_update_url(candidate_url, mirror_prefix=mirror_prefix, extra_allowed_hosts=extra_allowed_hosts)
-        try:
-            req = urllib.request.Request(
-                candidate_url,
-                headers=_make_headers(current_version),
-                method="GET",
-            )
-            with opener.open(req, timeout=float(timeout_sec)) as resp:
-                return resp.read().decode("utf-8", errors="replace")
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            last_exc = exc
-            logger.warning("Failed fetching %s (%s); trying fallback if available.", candidate_url, exc)
-    assert last_exc is not None
-    raise last_exc
+    """Fetch SHA256SUMS.txt ONLY from github.com / objects.githubusercontent.com — never via mirror (U1)."""
+    try:
+        validate_update_url(
+            url,
+            mirror_prefix="",
+            extra_allowed_hosts=extra_allowed_hosts,
+            base_allowed_hosts=ALLOWED_CHECKSUM_HOSTS,
+        )
+        opener = _build_opener(
+            mirror_prefix="",
+            extra_allowed_hosts=extra_allowed_hosts,
+            base_allowed_hosts=ALLOWED_CHECKSUM_HOSTS,
+        )
+        req = urllib.request.Request(
+            url,
+            headers=_make_headers(current_version),
+            method="GET",
+        )
+        with opener.open(req, timeout=float(timeout_sec)) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except (UpdateSecurityError, HTTPError, URLError, TimeoutError, OSError) as exc:
+        logger.warning("Failed fetching SHA256SUMS.txt directly from %s: %s", url, exc)
+        raise UpdateChecksumFetchError(f"Failed to fetch {CHECKSUM_ASSET_NAME} directly from GitHub: {exc}") from exc
 
 
 def _download_file_resumable(
@@ -568,27 +585,26 @@ def download_and_verify_update(
     ver = current_version or get_base_version()
     asset = select_release_asset(release, install_kind=install_kind)
     if asset is None:
-        raise FileNotFoundError(f"No {install_kind} release asset found in {release.tag_name}")
+        raise UpdateAssetNotFoundError(f"No matching {install_kind} release asset found in {release.tag_name}")
 
     sums_asset = find_checksum_asset(release)
     if sums_asset is None:
-        raise UpdateChecksumError(f"Release {release.tag_name} is missing SHA256SUMS.txt")
+        raise UpdateChecksumFetchError(f"Release {release.tag_name} is missing {CHECKSUM_ASSET_NAME}")
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     final_path = dest_dir / Path(asset.name).name
     part_path = dest_dir / f"{Path(asset.name).name}.part"
 
-    sums_text = _fetch_text_with_mirror(
+    sums_text = _fetch_checksums_direct(
         sums_asset.download_url,
         current_version=ver,
-        mirror_prefix=mirror_prefix,
         timeout_sec=timeout_sec,
         extra_allowed_hosts=extra_allowed_hosts,
     )
     checksums = parse_sha256sums(sums_text)
     expected_sha = checksums.get(Path(asset.name).name)
     if not expected_sha:
-        raise UpdateChecksumError(f"SHA256SUMS.txt does not contain an entry for {asset.name}")
+        raise UpdateChecksumFetchError(f"{CHECKSUM_ASSET_NAME} does not contain an entry for {asset.name}")
 
     # If a previously verified/downloaded final file already exists and matches, reuse it
     if final_path.exists() and verify_file_sha256(final_path, expected_sha):

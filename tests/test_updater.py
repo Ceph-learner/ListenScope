@@ -22,9 +22,14 @@ from PySide6 import QtWidgets
 from core.i18n import set_current_language, translate_text, translate_widget_tree
 from core.settings_store import load_settings, save_settings
 from core.updater import (
+    CHECKSUM_ASSET_NAME,
+    INSTALLER_ASSET_NAME,
+    PORTABLE_ASSET_NAME,
     ReleaseAsset,
     ReleaseInfo,
+    UpdateAssetNotFoundError,
     UpdateChecksumError,
+    UpdateChecksumFetchError,
     UpdateDownloadCancelled,
     UpdateSecurityError,
     check_for_updates,
@@ -238,18 +243,18 @@ def test_check_for_updates_stable_skip_prerelease_and_offline() -> None:
             "draft": False,
             "assets": [
                 {
-                    "name": "ListenScope-1.2.0-Setup.exe",
-                    "browser_download_url": f"{srv.base_url}/files/ListenScope-1.2.0-Setup.exe",
+                    "name": INSTALLER_ASSET_NAME,
+                    "browser_download_url": f"{srv.base_url}/files/{INSTALLER_ASSET_NAME}",
                     "size": 1024,
                 },
                 {
-                    "name": "ListenScope-1.2.0-Portable.zip",
-                    "browser_download_url": f"{srv.base_url}/files/ListenScope-1.2.0-Portable.zip",
+                    "name": PORTABLE_ASSET_NAME,
+                    "browser_download_url": f"{srv.base_url}/files/{PORTABLE_ASSET_NAME}",
                     "size": 2048,
                 },
                 {
-                    "name": "SHA256SUMS.txt",
-                    "browser_download_url": f"{srv.base_url}/files/SHA256SUMS.txt",
+                    "name": CHECKSUM_ASSET_NAME,
+                    "browser_download_url": f"{srv.base_url}/files/{CHECKSUM_ASSET_NAME}",
                     "size": 128,
                 },
             ],
@@ -286,8 +291,8 @@ def test_check_for_updates_stable_skip_prerelease_and_offline() -> None:
         assert res.status == "update_available"
         assert res.release is not None
         assert res.release.version == "1.2.0"
-        assert select_release_asset(res.release, install_kind="installer").name.endswith(".exe")  # type: ignore[union-attr]
-        assert select_release_asset(res.release, install_kind="portable").name.endswith(".zip")  # type: ignore[union-attr]
+        assert select_release_asset(res.release, install_kind="installer").name == INSTALLER_ASSET_NAME  # type: ignore[union-attr]
+        assert select_release_asset(res.release, install_kind="portable").name == PORTABLE_ASSET_NAME  # type: ignore[union-attr]
 
         # Skip this version
         res_skip = check_for_updates(
@@ -350,13 +355,13 @@ def test_check_for_updates_stable_skip_prerelease_and_offline() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Download, SHA256 mismatch deletion, Range resume, cancel, mirror fallback
+# 4. Download, SHA256 mismatch deletion, Range resume, cancel, U1/U2/U3
 # ---------------------------------------------------------------------------
 
 def _make_release(
     base_url: str,
     *,
-    asset_name: str = "ListenScope-1.2.0-Portable.zip",
+    asset_name: str = PORTABLE_ASSET_NAME,
     asset_path: str = "/dl/pkg.zip",
     sums_path: str = "/dl/SHA256SUMS.txt",
 ) -> ReleaseInfo:
@@ -370,7 +375,7 @@ def _make_release(
         prerelease=False,
         assets=(
             ReleaseAsset(name=asset_name, download_url=f"{base_url}{asset_path}", size=0),
-            ReleaseAsset(name="SHA256SUMS.txt", download_url=f"{base_url}{sums_path}", size=0),
+            ReleaseAsset(name=CHECKSUM_ASSET_NAME, download_url=f"{base_url}{sums_path}", size=0),
         ),
     )
 
@@ -378,7 +383,7 @@ def _make_release(
 def test_download_sha256_mismatch_deletes_file(tmp_path: Path) -> None:
     payload = b"ListenScope portable payload bytes " * 1024
     wrong_sha = "0" * 64
-    sums_text = f"{wrong_sha}  ListenScope-1.2.0-Portable.zip\n".encode("utf-8")
+    sums_text = f"{wrong_sha}  {PORTABLE_ASSET_NAME}\n".encode("utf-8")
 
     with _LocalReleaseServer() as srv:
         srv.routes["/dl/pkg.zip"] = {"body": payload}
@@ -394,17 +399,17 @@ def test_download_sha256_mismatch_deletes_file(tmp_path: Path) -> None:
                 extra_allowed_hosts=_LOCAL_HOST,
             )
 
-        assert not (tmp_path / "ListenScope-1.2.0-Portable.zip").exists()
-        assert not (tmp_path / "ListenScope-1.2.0-Portable.zip.part").exists()
+        assert not (tmp_path / PORTABLE_ASSET_NAME).exists()
+        assert not (tmp_path / f"{PORTABLE_ASSET_NAME}.part").exists()
 
 
 def test_download_resumes_from_partial_file_via_range(tmp_path: Path) -> None:
     payload = bytes(range(256)) * 512  # 131072 bytes
     good_sha = hashlib.sha256(payload).hexdigest()
-    sums_text = f"{good_sha}  ListenScope-1.2.0-Portable.zip\n".encode("utf-8")
+    sums_text = f"{good_sha}  {PORTABLE_ASSET_NAME}\n".encode("utf-8")
 
     # Pre-seed first 40000 bytes as an interrupted .part file
-    part_path = tmp_path / "ListenScope-1.2.0-Portable.zip.part"
+    part_path = tmp_path / f"{PORTABLE_ASSET_NAME}.part"
     part_path.write_bytes(payload[:40000])
 
     with _LocalReleaseServer() as srv:
@@ -422,7 +427,7 @@ def test_download_resumes_from_partial_file_via_range(tmp_path: Path) -> None:
             extra_allowed_hosts=_LOCAL_HOST,
         )
 
-        assert final_path == tmp_path / "ListenScope-1.2.0-Portable.zip"
+        assert final_path == tmp_path / PORTABLE_ASSET_NAME
         assert final_path.read_bytes() == payload
         assert not part_path.exists()
         assert compute_file_sha256(final_path) == good_sha
@@ -435,7 +440,7 @@ def test_download_resumes_from_partial_file_via_range(tmp_path: Path) -> None:
 def test_download_cancel_preserves_part_and_allows_resume(tmp_path: Path) -> None:
     payload = b"ABCD1234" * 32768  # 262144 bytes (4 x 64 KiB read chunks)
     good_sha = hashlib.sha256(payload).hexdigest()
-    sums_text = f"{good_sha}  ListenScope-1.2.0-Portable.zip\n".encode("utf-8")
+    sums_text = f"{good_sha}  {PORTABLE_ASSET_NAME}\n".encode("utf-8")
 
     with _LocalReleaseServer() as srv:
         srv.chunk_size = 16384
@@ -461,7 +466,7 @@ def test_download_cancel_preserves_part_and_allows_resume(tmp_path: Path) -> Non
                 extra_allowed_hosts=_LOCAL_HOST,
             )
 
-        part_path = tmp_path / "ListenScope-1.2.0-Portable.zip.part"
+        part_path = tmp_path / f"{PORTABLE_ASSET_NAME}.part"
         assert part_path.exists()
         partial_size = part_path.stat().st_size
         assert 0 < partial_size < len(payload)
@@ -479,21 +484,17 @@ def test_download_cancel_preserves_part_and_allows_resume(tmp_path: Path) -> Non
         assert not part_path.exists()
 
 
-def test_download_mirror_fallback(tmp_path: Path) -> None:
+def test_download_mirror_fallback_uses_github_checksum(tmp_path: Path) -> None:
+    """Binary may fall back to mirror while SHA256SUMS.txt is fetched directly from GitHub."""
     payload = b"Mirror fallback works!" * 512
     good_sha = hashlib.sha256(payload).hexdigest()
-    sums_text = f"{good_sha}  ListenScope-1.2.0-Portable.zip\n".encode("utf-8")
+    sums_text = f"{good_sha}  {PORTABLE_ASSET_NAME}\n".encode("utf-8")
 
     with _LocalReleaseServer() as primary, _LocalReleaseServer() as mirror:
+        # GitHub serves SHA256SUMS.txt directly, while binary download fails (502) and falls back to mirror
+        primary.routes["/dl/SHA256SUMS.txt"] = {"body": sums_text, "content_type": "text/plain"}
         primary.routes["/dl/pkg.zip"] = {"status": 502, "body": b"Bad Gateway"}
-        primary.routes["/dl/SHA256SUMS.txt"] = {"status": 502, "body": b"Bad Gateway"}
-
-        # Mirror prefix prepends mirror.base_url + "/" before primary URL
         mirror.routes[f"/{primary.base_url}/dl/pkg.zip"] = {"body": payload}
-        mirror.routes[f"/{primary.base_url}/dl/SHA256SUMS.txt"] = {
-            "body": sums_text,
-            "content_type": "text/plain",
-        }
         rel = _make_release(primary.base_url)
 
         final_path = download_and_verify_update(
@@ -505,13 +506,135 @@ def test_download_mirror_fallback(tmp_path: Path) -> None:
             extra_allowed_hosts=_LOCAL_HOST,
         )
         assert final_path.read_bytes() == payload
+        # Confirm mirror was never queried for SHA256SUMS.txt
+        assert not any("SHA256SUMS.txt" in path for path, _ in mirror.requests)
+
+
+def test_u1_mirror_cannot_supply_checksums_when_github_unavailable(tmp_path: Path) -> None:
+    """U1: When GitHub is unavailable, mirror returning tampered binary + fake SHA256SUMS.txt MUST be rejected."""
+    tampered = b"MALICIOUS_PAYLOAD" * 512
+    fake_sha = hashlib.sha256(tampered).hexdigest()
+    fake_sums = f"{fake_sha}  {PORTABLE_ASSET_NAME}\n".encode("utf-8")
+
+    with _LocalReleaseServer() as github_srv, _LocalReleaseServer() as mirror_srv:
+        github_srv.routes["/dl/SHA256SUMS.txt"] = {"status": 502, "body": b"GitHub Down"}
+        github_srv.routes["/dl/pkg.zip"] = {"status": 502, "body": b"GitHub Down"}
+
+        # Malicious mirror serves BOTH tampered binary and matching forged SHA256SUMS.txt
+        mirror_srv.routes[f"/{github_srv.base_url}/dl/SHA256SUMS.txt"] = {
+            "body": fake_sums,
+            "content_type": "text/plain",
+        }
+        mirror_srv.routes[f"/{github_srv.base_url}/dl/pkg.zip"] = {"body": tampered}
+
+        rel = _make_release(github_srv.base_url)
+        with pytest.raises(UpdateChecksumFetchError):
+            download_and_verify_update(
+                rel,
+                dest_dir=tmp_path,
+                install_kind="portable",
+                mirror_prefix=f"{mirror_srv.base_url}/",
+                timeout_sec=2.0,
+                extra_allowed_hosts=_LOCAL_HOST,
+            )
+
+        # Mirror must never have been contacted at all, and no file may exist on disk
+        assert mirror_srv.requests == []
+        assert not (tmp_path / PORTABLE_ASSET_NAME).exists()
+        assert not (tmp_path / f"{PORTABLE_ASSET_NAME}.part").exists()
+
+
+def test_u1_mirror_tampered_binary_rejected_against_github_checksum(tmp_path: Path) -> None:
+    """U1: When GitHub serves authentic SHA256SUMS.txt and mirror serves tampered binary, fail & delete file."""
+    authentic = b"AUTHENTIC_LISTENSCOPE_RELEASE" * 512
+    tampered = b"TAMPERED_LISTENSCOPE_RELEASE!" * 512
+    authentic_sha = hashlib.sha256(authentic).hexdigest()
+    authentic_sums = f"{authentic_sha}  {PORTABLE_ASSET_NAME}\n".encode("utf-8")
+
+    with _LocalReleaseServer() as github_srv, _LocalReleaseServer() as mirror_srv:
+        github_srv.routes["/dl/SHA256SUMS.txt"] = {"body": authentic_sums, "content_type": "text/plain"}
+        github_srv.routes["/dl/pkg.zip"] = {"status": 502, "body": b"Primary binary failed"}
+        mirror_srv.routes[f"/{github_srv.base_url}/dl/pkg.zip"] = {"body": tampered}
+
+        rel = _make_release(github_srv.base_url)
+        with pytest.raises(UpdateChecksumError):
+            download_and_verify_update(
+                rel,
+                dest_dir=tmp_path,
+                install_kind="portable",
+                mirror_prefix=f"{mirror_srv.base_url}/",
+                timeout_sec=2.0,
+                extra_allowed_hosts=_LOCAL_HOST,
+            )
+
+        assert not (tmp_path / PORTABLE_ASSET_NAME).exists()
+        assert not (tmp_path / f"{PORTABLE_ASSET_NAME}.part").exists()
+
+
+def test_u2_strict_asset_matching_no_fallback_guessing(tmp_path: Path) -> None:
+    """U2: Arbitrary .exe / .zip names must NOT be guessed; missing exact asset raises without downloading."""
+    with _LocalReleaseServer() as srv:
+        srv.routes["/dl/random.exe"] = {"body": b"not-official"}
+        srv.routes["/dl/random.zip"] = {"body": b"not-official"}
+        srv.routes["/dl/SHA256SUMS.txt"] = {"body": b"", "content_type": "text/plain"}
+        rel = ReleaseInfo(
+            tag_name="v1.2.0",
+            version="1.2.0",
+            name="v1.2.0",
+            body="Notes",
+            published_at="2026-11-26T00:00:00Z",
+            html_url="https://github.com/Ceph-learner/ListenScope/releases/tag/v1.2.0",
+            prerelease=False,
+            assets=(
+                ReleaseAsset(name="SomeOtherSetup.exe", download_url=f"{srv.base_url}/dl/random.exe"),
+                ReleaseAsset(name="SomeOtherPortable.zip", download_url=f"{srv.base_url}/dl/random.zip"),
+                ReleaseAsset(name=CHECKSUM_ASSET_NAME, download_url=f"{srv.base_url}/dl/SHA256SUMS.txt"),
+            ),
+        )
+
+        assert select_release_asset(rel, install_kind="installer") is None
+        assert select_release_asset(rel, install_kind="portable") is None
+
+        with pytest.raises(UpdateAssetNotFoundError):
+            download_and_verify_update(
+                rel,
+                dest_dir=tmp_path,
+                install_kind="portable",
+                timeout_sec=2.0,
+                extra_allowed_hosts=_LOCAL_HOST,
+            )
+
+        assert srv.requests == []
+
+
+def test_u3_release_workflow_generates_and_uploads_matching_assets_and_sha256sums() -> None:
+    """U3: Verify release-windows.yml produces & uploads the exact asset constants and SHA256SUMS.txt."""
+    wf_path = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "release-windows.yml"
+    wf_text = wf_path.read_text(encoding="utf-8")
+
+    # Asset filenames produced and uploaded match U2 constants
+    assert INSTALLER_ASSET_NAME in wf_text
+    assert PORTABLE_ASSET_NAME in wf_text
+    assert CHECKSUM_ASSET_NAME in wf_text
+
+    # SHA256SUMS.txt generation step covers both installer & portable in `<hash>  <name>` format
+    assert "Get-FileHash" in wf_text and "-Algorithm SHA256" in wf_text
+    assert '"$hash  $name"' in wf_text
+    assert f'dist\\release\\{CHECKSUM_ASSET_NAME}' in wf_text
+
+    # gh release create uploads installer, portable, and SHA256SUMS.txt
+    rel_idx = wf_text.index("gh release create")
+    rel_block = wf_text[rel_idx:]
+    assert f"dist\\release\\{INSTALLER_ASSET_NAME}" in rel_block
+    assert f"dist\\release\\{PORTABLE_ASSET_NAME}" in rel_block
+    assert f"dist\\release\\{CHECKSUM_ASSET_NAME}" in rel_block
 
 
 def test_parse_sha256sums_and_detect_install_kind(tmp_path: Path) -> None:
     parsed = parse_sha256sums(
-        "ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789  *ListenScope-1.0.0.zip\n"
+        f"ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789  *{PORTABLE_ASSET_NAME}\n"
     )
-    assert parsed["ListenScope-1.0.0.zip"] == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    assert parsed[PORTABLE_ASSET_NAME] == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 
     assert detect_install_kind(tmp_path) == "portable"
     (tmp_path / "unins000.exe").write_bytes(b"")
@@ -583,10 +706,15 @@ def test_update_dialog_ui_and_i18n(tmp_path: Path) -> None:
                 assert not cjk_re.search(dlg.later_btn.text())
                 assert not cjk_re.search(dlg.skip_btn.text())
 
-            # Test dynamic progress / status translation
-            prog = translate_text("正在下载更新包: 12.3 / 45.6 MB (27%)", lang)
-            if lang in ("en", "ko"):
-                assert not cjk_re.search(prog), f"{lang} progress leaked CJK: {prog}"
+            # Test dynamic progress / U1 / U2 status translations
+            for sample in (
+                "正在下载更新包: 12.3 / 45.6 MB (27%)",
+                "无法获取校验信息，请稍后重试或手动下载",
+                "未找到匹配当前版本的安装包，请前往 Releases 页面手动下载。",
+            ):
+                tr = translate_text(sample, lang)
+                if lang in ("en", "ko"):
+                    assert not cjk_re.search(tr), f"{lang} status leaked CJK: {tr}"
             dlg.close()
 
         set_current_language("zh")
