@@ -493,12 +493,7 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 except Exception:
                     pass
 
-    def _capture_loop(
-        self,
-        dev_info: Optional[dict[str, Any]] = None,
-        frames_per_buffer: int = 0,
-        src_dtype: str = "float32",
-    ) -> None:
+    def _capture_loop(self, dev_info: Optional[dict[str, Any]] = None, frames_per_buffer: int = 0, src_dtype: str = "float32") -> None:
         if dev_info is None:
             try:
                 pa, stream, dev_info, frames_per_buffer, src_dtype = self._open_default_loopback()
