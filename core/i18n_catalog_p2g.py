@@ -1012,6 +1012,11 @@ P2H_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "기본 WASAPI Loopback 출력 장치를 찾을 수 없습니다.",
         "ja": "既定の WASAPI Loopback 出力デバイスが見つかりません。",
     },
+    "系统 WASAPI Loopback 启动超时。": {
+        "en": "System WASAPI Loopback startup timed out.",
+        "ko": "시스템 WASAPI Loopback 시작 시간이 초과되었습니다.",
+        "ja": "システム WASAPI Loopback の起動がタイムアウトしました。",
+    },
     "检查期间所选历史音频已变化，请重新选择 A/B 区间。": {
         "en": "Selected history audio changed during check; please re-select the A/B range.",
         "ko": "검사 중 선택한 히스토리 오디오가 변경되었습니다. A/B 구간을 다시 선택하세요.",

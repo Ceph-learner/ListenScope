@@ -2774,11 +2774,26 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _sync_source_combo_tooltip(self, *_args: object) -> None:
         if not hasattr(self, "source_combo"):
             return
+        lang = get_current_language()
+        self.source_combo.setProperty("_ls_custom_tip", True)
+        self.source_combo.setProperty("_ls_dynamic_tip", True)
+        data = self.source_combo.currentData()
         cur = self.source_combo.currentText().strip()
-        if cur:
-            self.source_combo.setToolTip(cur)
+        if isinstance(data, dict) and data.get("kind") == "system_loopback":
+            generic = translate_text("[兜底] 系统 WASAPI Loopback (会混入其他应用声音)", lang)
+            dev_name = str(getattr(self, "_loopback_device_name", "") or "").strip()
+            if dev_name:
+                tip = f"{dev_name}\n{generic}"
+            elif cur:
+                tip = cur
+            else:
+                tip = generic
+        elif cur:
+            tip = cur
         else:
-            self.source_combo.setToolTip(translate_text("AUDIO_IN // 选择要捕获的音频进程或系统环回", get_current_language()))
+            tip = translate_text("AUDIO_IN // 选择要捕获的音频进程或系统环回", lang)
+        if self.source_combo.toolTip() != tip:
+            self.source_combo.setToolTip(tip)
 
     def populate_audio_sources(self, processes: list[AudioProcessInfo], *, include_synthetic: bool = True) -> None:
         prev = self.source_combo.currentData()
@@ -2920,6 +2935,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             src_txt = "Simulated"
         elif stats.mode == CaptureMode.SYSTEM_LOOPBACK and getattr(stats, "process_name", ""):
             src_txt = str(stats.process_name)
+            self._loopback_device_name = src_txt
+            generic_loop = translate_text("[兜底] 系统 WASAPI Loopback (会混入其他应用声音)", lang)
+            item_tip = f"{src_txt}\n{generic_loop}"
             for idx in range(self.source_combo.count()):
                 data = self.source_combo.itemData(idx)
                 if isinstance(data, dict) and data.get("kind") == "system_loopback":
@@ -2927,8 +2945,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                     disp_loop = translate_text(raw_loop, lang)
                     if self.source_combo.itemText(idx) != disp_loop:
                         self.source_combo.setItemText(idx, disp_loop)
-                        self.source_combo.setItemData(idx, disp_loop, QtCore.Qt.ItemDataRole.ToolTipRole)
-                        self._sync_source_combo_tooltip()
+                    if self.source_combo.itemData(idx, QtCore.Qt.ItemDataRole.ToolTipRole) != item_tip:
+                        self.source_combo.setItemData(idx, item_tip, QtCore.Qt.ItemDataRole.ToolTipRole)
+                    self._sync_source_combo_tooltip()
                     break
         else:
             src_txt = self.source_combo.currentText().strip() or "--"

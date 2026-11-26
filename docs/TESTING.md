@@ -30,7 +30,12 @@
 - 涉及 `settings` 的测试须使用临时目录（`tmp_path`），不读写仓库根目录配置。
 - 涉及 AI/MIDI 子进程的测试可使用 `tests/conftest.py` 中的轻量模拟环境或 mock，不依赖下载外部模型权重。
 
-## 三、调试环境变量
+## 三、调试环境变量与诊断命令
 
 - `LISTENSCOPE_DEBUG_RESTART_AFTER_S=<秒>`：仅在显式设置时生效（默认未启用）。主窗口显示后在指定秒数后调用一次 `restart_application()` 并记录 warning 日志，用于真机验证无需先完成一键配置即可触发「立即重启」；启动新实例前会自动从子进程环境中移除该变量，避免无限重启。
+- 默认播放设备热切换诊断（Windows）：
+  ```bash
+  python -m audio.system_loopback --probe-default [--seconds 15]
+  ```
+  每秒通过 `IMMDeviceEnumerator::GetDefaultAudioEndpoint` 打印一次当前时间、`HRESULT`、默认渲染端点 ID 与设备名，用于在目标机独立验证默认设备切换检测是否工作（不依赖捕获流）。
 

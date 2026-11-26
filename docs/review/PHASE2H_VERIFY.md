@@ -75,3 +75,23 @@
 - **H1-c（切换提示 TTL 自动清除与 A→B→A 往返切换）**：
   - `audio/capture_base.py`：`CaptureStatsTracker.set_device_switch_message(..., ttl_sec=5.0)` 与 `snapshot()` 支持 5s 自动过期清除，避免长期遮挡 `SYSTEM_LOOPBACK_WARNING` 并确保 A→B→A 切回原设备时仍能重新弹出切换横幅。
   - 新增测试：`tests/test_review_phase2h.py::test_h1c_device_switch_message_clears_and_aba_round_trip`。
+
+## Round 3 (retest5 实机问题修复：R3-1 ~ R3-4)
+
+- **R3-1（阻塞 / 崩溃根因：PortAudio 流单线程归属 + `get_read_available()` 非阻塞轮询）**：
+  - `audio/system_loopback.py`：移除跨线程 `_interrupt_stream()`，保证 `PyAudio` 与 `stream` 仅在 capture 线程（`_capture_loop`）中创建（`_open_default_loopback()`）、轮询读取和销毁（`_close_stream()` / `_close_pa_pair()`）。
+  - 读取循环改用 `stream.get_read_available()` 检查可用帧数（不足 `frames_per_buffer` 时 `wait(0.01)` 并立即检查 `_stop_event` / `_closing` / `_device_switch_requested`），消除静音挂起或跨线程 `stop_stream()`/`close()` 导致的 `0xC0000005` 访问冲突。
+  - `WasapiSystemLoopbackBackend.stop()` 只置位 `_closing` / `_stop_event` 并关闭队列，然后分别 `join(timeout=0.5)` watcher 与 capture 线程，不再触碰流对象。
+  - 重写 `tests/test_review_phase2h.py::test_h1a_capture_thread_only_stream_ownership_and_zero_read_available_switch`：断言所有 `pyaudio_init`/`open`/`get_read_available`/`read`/`stop_stream`/`close`/`terminate` 仅在 capture 线程调用；模拟 `get_read_available()` 持续返回 `0` 仍可在 1.5s 内完成切换并保留缓冲与 A/B 选区，`stop()` `< 0.5s` 返回。
+- **R3-2（默认设备基准获取、HRESULT 诊断日志、`--probe-default` 与 Windows CI 测试）**：
+  - `audio/system_loopback.py`：基准 `_current_endpoint_id` 由 watcher 线程在初始化 COM 后首次查询获取，仅比较端点 ID（并在支持时读取 `IPropertyStore` `PKEY_Device_FriendlyName` 作名称回退）。
+  - watcher 启动写 INFO 日志 `default endpoint watcher started id=<前40字符>`；查询失败按 HRESULT 去重限频每 60s 最多写一条 `WARNING` (`default endpoint probe failed hr=0x...`)。
+  - 新增诊断命令 `python -m audio.system_loopback --probe-default [--seconds 15]`（已记录至 `docs/TESTING.md`）。
+  - 新增 `tests/test_review_phase2h.py::test_r3_2_probe_cli_and_rate_limited_warning` 与 Windows CI 测试 `test_r3_2_windows_com_mmdevice_enumerator_in_worker_thread`（在 win32 runner 线程中创建 `IMMDeviceEnumerator` 并验证 `hr == S_OK`）。
+- **R3-3（Chroma 紧凑布局优先级与热图左轴）**：
+  - `ui/chroma_widget.py`：紧凑模式下将 `reset_harmony_btn` 合入 `_prog_bar`（与「最近和弦进行」「练习和弦」同一行），隐藏柱状图与热图标题以释放垂直空间，动态计算 `chroma_bar_min_height()` 优先保证柱状图高度使柱体与底部 12 音名完整位于 viewport 内不滚屏，紧凑模式下隐藏热图左轴音名避免半截裁切。
+- **R3-4（Qt `ToolTip` 实机显示修复）**：
+  - `ui/spectrum_widget.py`、`ui/chroma_widget.py`：图表说明同时设置到 `plot` 与 `plot.viewport()`（并设 `_ls_dynamic_tip = True`），避免被 `QGraphicsView` viewport 拦截。
+  - `ui/acid_style.py`：`AcidBarcodeFooter.status_lbl` 显式关闭 `WA_TransparentForMouseEvents`、加设 `_ls_dynamic_tip = True`，仅在文本变化时调用 `setToolTip()` 避免高频遥测刷掉原生悬停定时器；`MarqueeComboBox` 在 `_ls_custom_tip` 为真时不覆盖外部定制 tooltip。
+  - `ui/main_window.py`：系统环回激活时，`source_combo` 悬停 tooltip 第一行显示实际设备全名、第二行显示通用系统环回说明。
+  - `tests/test_review_phase2h.py::test_h4_status_bar_device_name_elided_with_tooltip_and_actual_device` 改用 `QHelpEvent(QEvent.Type.ToolTip)` 实际投递事件并断言 `QToolTip.text()`。
