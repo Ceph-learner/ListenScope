@@ -493,15 +493,24 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 except Exception:
                     pass
 
-    def _capture_loop(self) -> None:
-        try:
-            pa, stream, dev_info, frames_per_buffer, src_dtype = self._open_default_loopback()
-        except BaseException as exc:
-            self._startup_error = exc
-            self._startup_ready.set()
-            self.queue.close()
-            self._stats.set_running(False)
-            return
+    def _capture_loop(
+        self,
+        dev_info: Optional[dict[str, Any]] = None,
+        frames_per_buffer: int = 0,
+        src_dtype: str = "float32",
+    ) -> None:
+        if dev_info is None:
+            try:
+                pa, stream, dev_info, frames_per_buffer, src_dtype = self._open_default_loopback()
+            except BaseException as exc:
+                self._startup_error = exc
+                self._startup_ready.set()
+                self.queue.close()
+                self._stats.set_running(False)
+                return
+            with self._lock:
+                self._pa = pa
+                self._stream = stream
 
         src_rate = int(dev_info["defaultSampleRate"])
         raw_ch = int(dev_info.get("maxInputChannels") or 0) or int(dev_info.get("maxOutputChannels") or 0)
@@ -509,8 +518,6 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         current_dev_index: Optional[int] = int(dev_info["index"]) if "index" in dev_info and dev_info["index"] is not None else None
         current_dev_name: str = str(dev_info.get("name", self._device_name))
         with self._lock:
-            self._pa = pa
-            self._stream = stream
             self._active_dev_index = current_dev_index
             self._active_dev_name = current_dev_name
         self._device_name = current_dev_name
