@@ -24,3 +24,15 @@
 3. 第 10 项：鼠标悬停查看 Chroma/FFT/Waveform 提示；托盘图标放大截图。
 4. W1：切换默认输出设备后用普通应用（系统设置「测试」或 QQ 音乐）出声，验证 ListenScope 跟随到新设备且状态栏显示新设备名。
 5. 4-Stem 分轨中途执行 E-STOP（G3 已修复按钮可达性）。
+
+---
+
+## PR #64 补充提交（动态拼接文案规则 + 20 次稳定性复测）
+
+1. **动态拼接文案翻译规则**（[`core/i18n.py`](../../core/i18n.py)、[`core/i18n_catalog_p2g.py`](../../core/i18n_catalog_p2g.py)、[`core/i18n_catalog.py`](../../core/i18n_catalog.py)、[`ui/settings_dialog.py`](../../ui/settings_dialog.py)）：
+   - `translate_text()` 新增 ` | ` 分段递归翻译兜底，并补充 `P2G_DYNAMIC_REGEX_RULES`（覆盖「初始化完成，已自动写入配置 | 源/Mirror: `<URL>`」保留 Mirror URL 原样、`[ERR] 初始化失败...`、轻量转录提示、BPM/鼓点状态、AI 拒绝启动/RAM 阈值拼接提示等四语翻译）；`SettingsDialog` `bootstrap_status_lbl` 改用 `set_i18n_text()`。
+   - 新增 `tests/test_review_phase2g.py::test_g1_concatenated_status_strings_no_chinese_leak_en_ja_ko` 校验 `en/ja/ko` 无中文泄漏且 Mirror URL 原样保留（`tests/test_review_phase2g.py`：`9 passed`）。
+2. **`test_bootstrap_coordinator_persists_across_settings_close_reopen_and_cancels` 连续 20 次对比测试**（Linux/offscreen）：
+   - `main`（`ce71926`）：**20/20 passed，0/20 failed**
+   - `fix/p2g-retest3`：**20/20 passed，0/20 failed**
+

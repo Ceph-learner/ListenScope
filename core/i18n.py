@@ -871,6 +871,10 @@ def translate_text(text: str, lang: str) -> str:
         if code in repl_map and pat.search(out):
             out = pat.sub(repl_map[code], out)
 
+    if " | " in out and _ZH_CHAR_RE.search(out):
+        segs = [s if " | " in s else translate_text(s, code) for s in out.split(" | ")]
+        out = " | ".join(segs)
+
     # Final safety pass for "EN_TAG // 中文" strings when switching to English: strip Chinese suffix cleanly
     if code == "en" and " // " in out and _ZH_CHAR_RE.search(out):
         left, right = out.split(" // ", 1)

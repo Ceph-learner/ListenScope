@@ -116,6 +116,28 @@ def test_g1_runtime_states_no_chinese_leak_en_ja_ko() -> None:
         mixer.close()
 
 
+def test_g1_concatenated_status_strings_no_chinese_leak_en_ja_ko() -> None:
+    from core.i18n import translate_text
+
+    mirror_url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+    samples = [
+        f"初始化完成，已自动写入配置 | 源: {mirror_url}",
+        f"初始化完成，已自动写入配置 | Mirror: {mirror_url}",
+        f"正在启动独立环境初始化流程... | 1.2 MB/s | 源: {mirror_url}",
+        "[ERR] 初始化失败 (exit=1):\ntraceback",
+        "正在对 bass.wav 使用轻量转录。配置独立环境后可用 Basic Pitch。",
+        "BPM: 120.0 | 2-Stem 无独立鼓轨，切换 4-Stem 可提取 16 步鼓点",
+        "拒绝启动 AI 分轨: 已有 1 个 AI 分轨任务运行中（硬限制=1，当前可用 RAM=2500.0 MB），禁止并行。",
+        "系统可用 RAM 不足 (2500.0 MB < 3072.0 MB)，禁止启动新 AI 分轨",
+    ]
+    for lang in ("en", "ja", "ko"):
+        for s in samples:
+            out = translate_text(s, lang)
+            assert not _contains_chinese_for_lang(out, lang), f"[{lang}] Chinese leak in {s!r} -> {out!r}"
+            if mirror_url in s:
+                assert mirror_url in out, f"[{lang}] Mirror URL lost in {out!r}"
+
+
 def test_g1_ast_static_chinese_strings_covered_by_i18n() -> None:
     from core.i18n import translate_text
     from core.i18n_catalog import HELP_TRANSLATIONS

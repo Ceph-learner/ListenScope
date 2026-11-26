@@ -550,3 +550,161 @@ P2G_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ja": "既定はアシッドテレメトリ・ライトテーマです。他テーマへ切り替えると色・フォント・背景画像を自由に調整できます。",
     },
 }
+
+import re as _re
+
+P2G_DYNAMIC_REGEX_RULES: tuple[tuple[_re.Pattern[str], dict[str, str]], ...] = (
+    (
+        _re.compile(r"^初始化完成，已自动写入配置(?=\s*\|\s*(?:源|Mirror):)"),
+        {
+            "en": "Setup finished and configuration saved",
+            "ko": "초기화 완료, 설정 자동 저장됨",
+            "ja": "初期化完了・設定を自動保存しました",
+        },
+    ),
+    (
+        _re.compile(r"^源:\s*"),
+        {"en": "Mirror: ", "ko": "미러: ", "ja": "ミラー: "},
+    ),
+    (
+        _re.compile(r"\|\s*源:\s*"),
+        {"en": "| Mirror: ", "ko": "| 미러: ", "ja": "| ミラー: "},
+    ),
+    (
+        _re.compile(r"^\[ERR\] 找不到初始化脚本:\s*"),
+        {"en": "[ERR] Setup script not found: ", "ko": "[ERR] 초기화 스크립트를 찾을 수 없습니다: ", "ja": "[ERR] 初期化スクリプトが見つかりません: "},
+    ),
+    (
+        _re.compile(r"^\[ERR\] 检测失败:\s*"),
+        {"en": "[ERR] Probe failed: ", "ko": "[ERR] 점검 실패: ", "ja": "[ERR] 検証失敗: "},
+    ),
+    (
+        _re.compile(r"^\[ERR\] MIDI 环境不可用:\s*"),
+        {"en": "[ERR] MIDI environment unavailable: ", "ko": "[ERR] MIDI 환경 사용 불가: ", "ja": "[ERR] MIDI 環境が利用できません: "},
+    ),
+    (
+        _re.compile(r"^\[ERR\] 初始化失败 \(exit=([^)]+)\):"),
+        {"en": r"[ERR] Setup failed (exit=\1):", "ko": r"[ERR] 초기화 실패 (exit=\1):", "ja": r"[ERR] 初期化失敗 (exit=\1):"},
+    ),
+    (
+        _re.compile(r"^\[ERR\] 启动初始化脚本失败:\s*"),
+        {"en": "[ERR] Failed to launch setup script: ", "ko": "[ERR] 초기화 스크립트 실행 실패: ", "ja": "[ERR] 初期化スクリプトの起動に失敗: "},
+    ),
+    (
+        _re.compile(r"^\[WARN\] 当前在 (.+?) 运行：WASAPI Process Loopback 与 RTX 5060 Ti CUDA 未在 Windows 真机验证。$"),
+        {
+            "en": r"[WARN] Running on \1: WASAPI Process Loopback and RTX 5060 Ti CUDA are unverified on live Windows.",
+            "ko": r"[WARN] \1에서 실행 중: WASAPI Process Loopback 및 RTX 5060 Ti CUDA는 Windows 실기에서 검증되지 않았습니다.",
+            "ja": r"[WARN] \1 で実行中: WASAPI Process Loopback と RTX 5060 Ti CUDA は Windows 実機未検証です。",
+        },
+    ),
+    (
+        _re.compile(r"^\[OK\] 在本机扫描到 (\d+) 个包含 PyTorch 的 Python 环境（已自动填入最优路径）：$"),
+        {
+            "en": r"[OK] Found \1 local Python environment(s) with PyTorch (best path auto-filled):",
+            "ko": r"[OK] PyTorch가 설치된 로컬 Python 환경 \1개를 찾았습니다(최적 경로 자동 입력):",
+            "ja": r"[OK] PyTorch を含むローカル Python 環境を \1 件検出しました（最適パスを自動入力）:",
+        },
+    ),
+    (
+        _re.compile(r"^正在对 (.+?) 使用轻量转录。配置独立环境后可用 Basic Pitch。$"),
+        {
+            "en": r"Using lightweight transcription for \1. Configure the isolated env for Basic Pitch.",
+            "ko": r"\1에 경량 전사를 사용 중입니다. 독립 환경을 구성하면 Basic Pitch를 사용할 수 있습니다.",
+            "ja": r"\1 に軽量文字起こしを使用しています。独立環境を設定すると Basic Pitch が使えます。",
+        },
+    ),
+    (
+        _re.compile(r"^已用 ([\d.]+)s$"),
+        {"en": r"Elapsed \1s", "ko": r"경과 \1s", "ja": r"経過 \1秒"},
+    ),
+    (
+        _re.compile(r"^预计剩余 ([\d.]+)s$"),
+        {"en": r"ETA \1s", "ko": r"남은 시간 약 \1s", "ja": r"残り約 \1秒"},
+    ),
+    (
+        _re.compile(r"^导出鼓点 MIDI 失败："),
+        {"en": "Failed to export drum MIDI: ", "ko": "드럼 MIDI 내보내기 실패: ", "ja": "ドラム MIDI 書出失敗: "},
+    ),
+    (
+        _re.compile(r"^(\d+) 拍$"),
+        {"en": r"\1 beats", "ko": r"\1박", "ja": r"\1 拍"},
+    ),
+    (
+        _re.compile(r"^贝斯 · "),
+        {"en": "Bass · ", "ko": "베이스 · ", "ja": "ベース · "},
+    ),
+    (
+        _re.compile(r"^BPM:\s*([^|]+)\s*\|\s*2-Stem 无独立鼓轨，切换 4-Stem 可提取 16 步鼓点$"),
+        {
+            "en": r"BPM: \1 | No isolated drum stem in 2-Stem; switch to 4-Stem for 16-step drums",
+            "ko": r"BPM: \1 | 2-Stem에는 독립 드럼 트랙이 없습니다. 4-Stem으로 전환하세요",
+            "ja": r"BPM: \1 | 2-Stem には独立ドラムがありません（4-Stem で 16 ステップ抽出可）",
+        },
+    ),
+    (
+        _re.compile(r"^BPM:\s*([^|]+)\s*\|\s*鼓点 K=(\d+) / S=(\d+) / H=(\d+)$"),
+        {
+            "en": r"BPM: \1 | Drums K=\2 / S=\3 / H=\4",
+            "ko": r"BPM: \1 | 드럼 K=\2 / S=\3 / H=\4",
+            "ja": r"BPM: \1 | ドラム K=\2 / S=\3 / H=\4",
+        },
+    ),
+    (
+        _re.compile(r"^拒绝启动 AI 分轨:\s*"),
+        {"en": "AI separation rejected: ", "ko": "AI 분리 시작 거부됨: ", "ja": "AI 分離開始を拒否しました: "},
+    ),
+    (
+        _re.compile(r"^❌ 拒绝启动 AI 分轨:\s*"),
+        {"en": "❌ AI separation rejected: ", "ko": "❌ AI 분리 시작 거부됨: ", "ja": "❌ AI 分離開始を拒否しました: "},
+    ),
+    (
+        _re.compile(r"^导出待分轨片段失败:\s*"),
+        {"en": "Failed to export excerpt for separation: ", "ko": "분리용 구간 내보내기 실패: ", "ja": "分離用区間の書出に失敗: "},
+    ),
+    (
+        _re.compile(r"^导入本地音频失败:\s*"),
+        {"en": "Failed to import local audio: ", "ko": "로컬 오디오 가져오기 실패: ", "ja": "ローカル音声の読込に失敗: "},
+    ),
+    (
+        _re.compile(r"^送入分析失败:\s*"),
+        {"en": "Failed to send to analysis: ", "ko": "분석 전송 실패: ", "ja": "解析への送信に失敗: "},
+    ),
+    (
+        _re.compile(r"^启动音频捕获失败:\s*"),
+        {"en": "Failed to start audio capture: ", "ko": "오디오 캡처 시작 실패: ", "ja": "音声キャプチャの開始に失敗: "},
+    ),
+    (
+        _re.compile(r"系统可用 RAM 极低 \(([\d.]+) MB < ([\d.]+) MB\)，应立即紧急停止 AI 任务"),
+        {
+            "en": r"Critically low RAM (\1 MB < \2 MB); emergency-stopping AI job",
+            "ko": r"사용 가능 RAM 매우 부족(\1 MB < \2 MB); AI 작업 비상 중지 필요",
+            "ja": r"空き RAM 極めて不足 (\1 MB < \2 MB)。AI ジョブを緊急停止します",
+        },
+    ),
+    (
+        _re.compile(r"系统可用 RAM 不足 \(([\d.]+) MB < ([\d.]+) MB\)，禁止启动新 AI 分轨"),
+        {
+            "en": r"Insufficient RAM (\1 MB < \2 MB); new AI separation blocked",
+            "ko": r"사용 가능 RAM 부족(\1 MB < \2 MB); 새 AI 분리 차단됨",
+            "ja": r"空き RAM 不足 (\1 MB < \2 MB)。新規 AI 分離をブロックしました",
+        },
+    ),
+    (
+        _re.compile(r"系统可用 RAM 偏紧 \(([\d.]+) MB < ([\d.]+) MB\)"),
+        {
+            "en": r"RAM tight (\1 MB < \2 MB)",
+            "ko": r"사용 가능 RAM 부족 주의(\1 MB < \2 MB)",
+            "ja": r"空き RAM 逼迫 (\1 MB < \2 MB)",
+        },
+    ),
+    (
+        _re.compile(r"已有 (\d+) 个 AI 分轨任务运行中（硬限制=(\d+)，当前可用 RAM=([\d.]+) MB），禁止并行。"),
+        {
+            "en": r"\1 AI job already running (hard limit=\2, free RAM=\3 MB); parallel jobs blocked.",
+            "ko": r"이미 \1개의 AI 작업이 실행 중입니다(최대=\2, 여유 RAM=\3 MB). 병렬 실행 불가.",
+            "ja": r"すでに \1 件の AI ジョブが実行中です（上限=\2、空き RAM=\3 MB）。並列実行不可。",
+        },
+    ),
+)
+
