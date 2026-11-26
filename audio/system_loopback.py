@@ -443,12 +443,12 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
             if stream is None:
                 break
             try:
-                if self._device_switch_requested.is_set():
+                if self._follow_default_device and self._device_switch_requested.is_set():
                     raise RuntimeError("DEFAULT_DEVICE_CHANGED")
                 raw_bytes = stream.read(frames_per_buffer, exception_on_overflow=False)
                 if self._closing.is_set() or self._stop_event.is_set():
                     break
-                if self._device_switch_requested.is_set():
+                if self._follow_default_device and self._device_switch_requested.is_set():
                     raise RuntimeError("DEFAULT_DEVICE_CHANGED")
                 reconnects = 0
                 if has_transient_reconnect_notice:
