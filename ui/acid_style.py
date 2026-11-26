@@ -2305,9 +2305,15 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         cpu_txt = f"{self._cpu_pct:.0f}%" if self._cpu_pct is not None else "--"
         khz = self._sample_rate_hz / 1000.0
         rate_txt = f"{khz:g}kHz"
-        self.status_lbl.setText(
-            f"v{ver}  |  {self._source_name} · {rate_txt}  |  p50: {p50_txt}  |  Buf: {self._buffer_sec:.1f}s  |  CPU: {cpu_txt}"
+        full_src = str(self._source_name or "--")
+        elided_src = self.status_lbl.fontMetrics().elidedText(
+            full_src, QtCore.Qt.TextElideMode.ElideRight, 190
         )
+        self.status_lbl.setText(
+            f"v{ver}  |  {elided_src} · {rate_txt}  |  p50: {p50_txt}  |  Buf: {self._buffer_sec:.1f}s  |  CPU: {cpu_txt}"
+        )
+        self.status_lbl.setToolTip(full_src)
+        self.setToolTip(full_src)
 
     def set_telemetry(
         self,

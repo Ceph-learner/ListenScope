@@ -136,6 +136,7 @@ class CaptureStatsTracker:
         self._is_running = False
         self._warning_message: Optional[str] = None
         self._last_error: Optional[str] = None
+        self._device_switch_message: Optional[str] = None
 
     def set_running(self, running: bool) -> None:
         with self._lock:
@@ -149,6 +150,10 @@ class CaptureStatsTracker:
     def set_error(self, error_message: Optional[str]) -> None:
         with self._lock:
             self._last_error = error_message
+
+    def set_device_switch_message(self, message: Optional[str]) -> None:
+        with self._lock:
+            self._device_switch_message = message
 
     def set_process_name(self, process_name: str) -> None:
         with self._lock:
@@ -219,6 +224,7 @@ class CaptureStatsTracker:
                 is_running=self._is_running,
                 warning_message=self._warning_message,
                 last_error=self._last_error,
+                device_switch_message=self._device_switch_message,
             )
 
 

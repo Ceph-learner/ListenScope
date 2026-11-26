@@ -15,7 +15,7 @@ from analysis.chroma import PITCH_CLASSES
 from analysis.drum_midi import export_drum_midi
 from audio.playback import BASS_MONITOR_BOOST_DB, StemMixerEngine
 from core.appearance import Appearance
-from core.i18n import set_i18n_text
+from core.i18n import get_current_language, set_i18n_text, translate_text
 from core.models import (
     AIJobProgress,
     AIJobResult,
@@ -1399,12 +1399,15 @@ class StemMixerWidget(QtWidgets.QWidget):
             self.load_stem_paths(res.stem_paths)
         elif res.state == AIJobState.OOM_ERROR:
             self.job_progress.setValue(0)
-            set_i18n_text(self.job_status_lbl, f"[WARN] GPU OOM: {res.error}")
-            self.oom_msg_lbl.setText(res.error or "显存/内存不足，请选择安全恢复策略：")
+            err_txt = translate_text(res.error or "显存/内存不足，请选择安全恢复策略：", get_current_language()) if res.error else "显存/内存不足，请选择安全恢复策略："
+            set_i18n_text(self.job_status_lbl, f"[WARN] GPU OOM: {err_txt}")
+            set_i18n_text(self.oom_msg_lbl, res.error or "显存/内存不足，请选择安全恢复策略：")
             self.oom_banner.setVisible(True)
         else:
             self.job_progress.setValue(0)
-            set_i18n_text(self.job_status_lbl, f"[{res.state.value}] {res.error or '已停止'}")
+            raw_err = res.error or "已停止"
+            err_txt = translate_text(raw_err, get_current_language())
+            set_i18n_text(self.job_status_lbl, f"[{res.state.value}] {err_txt}")
 
     def clear_results(self) -> None:
         self.load_stem_paths({})

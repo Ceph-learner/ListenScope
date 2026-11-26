@@ -593,13 +593,12 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.reset_harmony_btn.clicked.connect(self._on_reset_clicked)
         prog_bar.addWidget(self.chord_progression_lbl, 1)
         prog_bar.addWidget(self.progression_mode_combo)
-        prog_bar.addWidget(
-            HelpBadge(
-                "最近和弦进行与练习和弦工作流",
-                "• <b>最近和弦进行</b>：记录最近 12 次稳定和弦切换轨迹。选择「和弦名与级数」时会以单行紧凑格式（如 <code>C[I] → G[V] → Am[vi]</code>）呈现，鼠标悬停可查看完整 12 步历史，绝不折行撑乱界面。<br/>"
-                "• <b>练习和弦</b>：点击右侧按钮可将当前识别到的和弦与调性快照带入和弦练习台，自动匹配常见套路（如卡农、4536251）、支持本地合成试听并导出 Cubase 标准 MIDI。",
-            )
+        self._prog_help_badge = HelpBadge(
+            "最近和弦进行与练习和弦工作流",
+            "• <b>最近和弦进行</b>：记录最近 12 次稳定和弦切换轨迹。选择「和弦名与级数」时会以单行紧凑格式（如 <code>C[I] → G[V] → Am[vi]</code>）呈现，鼠标悬停可查看完整 12 步历史，绝不折行撑乱界面。<br/>"
+            "• <b>练习和弦</b>：点击右侧按钮可将当前识别到的和弦与调性快照带入和弦练习台，自动匹配常见套路（如卡农、4536251）、支持本地合成试听并导出 Cubase 标准 MIDI。",
         )
+        prog_bar.addWidget(self._prog_help_badge)
         self.practice_chords_btn = QtWidgets.QPushButton("练习和弦")
         self.practice_chords_btn.setObjectName("analysisAction")
         self.practice_chords_btn.clicked.connect(self._open_chord_practice)
@@ -614,7 +613,8 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         )
         tools_bar = QtWidgets.QHBoxLayout()
         tools_bar.setSpacing(10)
-        tools_bar.addWidget(QtWidgets.QLabel("移调/Capo:"))
+        self._transpose_lbl = QtWidgets.QLabel("移调/Capo:")
+        tools_bar.addWidget(self._transpose_lbl)
         tools_bar.addWidget(self.transpose_combo)
         tools_bar.addSpacing(4)
         tools_bar.addWidget(self.auto_reset_chk)
@@ -960,6 +960,14 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 locked=locked,
             )
 
+    def full_mode_min_height(self) -> int:
+        cards_h = max(
+            self._chord_box.sizeHint().height(),
+            self._key_box.sizeHint().height(),
+            self._rhythm_box.sizeHint().height(),
+        )
+        return max(430, cards_h + 230)
+
     def set_compact_mode(self, compact: bool) -> None:
         compact = bool(compact)
         self._root_layout.setContentsMargins(6 if compact else 10, 2 if compact else 6, 6 if compact else 10, 2 if compact else 6)
@@ -967,8 +975,9 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self._cards_layout.setSpacing(5 if compact else 8)
         for hdr in (self._chord_hdr, self._key_hdr, self._rhythm_hdr):
             hdr.set_compact_mode(compact)
+            hdr.setVisible(not compact)
         for lay in (self._chord_l, self._key_l, self._rhythm_l):
-            lay.setContentsMargins(7 if compact else 10, 3 if compact else 6, 7 if compact else 10, 3 if compact else 6)
+            lay.setContentsMargins(7 if compact else 10, 2 if compact else 6, 7 if compact else 10, 2 if compact else 6)
             lay.setSpacing(1 if compact else 3)
         for w in (
             self.chord_tones_lbl,
@@ -978,6 +987,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.key_secondary_lbl,
             self.key_relation_lbl,
             self.key_sig_note_lbl,
+            self.bpm_stab_lbl,
             self.pitch_lbl,
             self.tuning_bar,
             self.tap_tempo_btn,
@@ -991,22 +1001,37 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.metronome_vol_slider,
             self.metronome_vol_lbl,
             self.tap_status_lbl,
+            self.progression_mode_combo,
+            self._prog_help_badge,
+            self._transpose_lbl,
+            self.transpose_combo,
+            self.auto_reset_chk,
+            self.track_status_lbl,
         ):
             w.setVisible(not compact)
         if compact:
             self._chord_box.setToolTip(
+                f"{self._chord_hdr.title_lbl.text()}\n"
                 f"{self.chord_tones_lbl.text()} · {self.chord_degree_lbl.text()}\n"
                 f"{self.chord_secondary_lbl.text()}\n{self.chord_stability_lbl.text()}"
             )
-            self._key_box.setToolTip(f"{self.key_secondary_lbl.text()}\n{self.key_relation_lbl.text()}\n{self.key_sig_note_lbl.text()}")
-            self.chroma_bar_plot.setMinimumHeight(30)
+            self._key_box.setToolTip(
+                f"{self._key_hdr.title_lbl.text()}\n"
+                f"{self.key_secondary_lbl.text()}\n{self.key_relation_lbl.text()}\n{self.key_sig_note_lbl.text()}"
+            )
+            self._rhythm_box.setToolTip(
+                f"{self._rhythm_hdr.title_lbl.text()}\n"
+                f"{self.bpm_stab_lbl.text()}\n{self.pitch_lbl.text()}"
+            )
+            self.chroma_bar_plot.setMinimumHeight(34)
             self.chroma_hist_plot.setTitle(None)
             self.chroma_hist_plot.setMinimumHeight(96)
-            self._chroma_splitter.setSizes([32, 96])
+            self._chroma_splitter.setSizes([36, 96])
             self.refresh_chroma_note_ticks()
         else:
             self._chord_box.setToolTip("")
             self._key_box.setToolTip("")
+            self._rhythm_box.setToolTip("")
             self.chroma_bar_plot.setMinimumHeight(56)
             self.chroma_hist_plot.setTitle(translate_text("CHROMA HEATMAP // 有界时序热图 (30s)", get_current_language()))
             self.chroma_hist_plot.setMinimumHeight(96)

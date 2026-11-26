@@ -21,6 +21,85 @@ logger = logging.getLogger(__name__)
 SYSTEM_LOOPBACK_WARNING = "⚠️ 当前使用系统 WASAPI Loopback 模式：其他应用声音可能被混入。"
 
 
+def _query_windows_default_render_endpoint() -> Optional[tuple[str, str]]:
+    """Query active Windows default render endpoint ID via IMMDeviceEnumerator (bypasses PortAudio cache)."""
+    if platform.system() != "Windows":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD),
+                ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        def _guid(s: str) -> _GUID:
+            import uuid
+
+            u = uuid.UUID(s)
+            b = u.bytes_le
+            g = _GUID()
+            ctypes.memmove(ctypes.byref(g), b, 16)
+            return g
+
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitializeEx(None, 0x0)  # COINIT_MULTITHREADED (ok if RPC_E_CHANGED_MODE)
+        clsid_enum = _guid("BCDE0395-E52F-467C-8E3D-C4579291692E")
+        iid_enum = _guid("A95664D2-9614-4F35-A746-DE8DB63617E6")
+        enum_ptr = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(
+            ctypes.byref(clsid_enum),
+            None,
+            1 | 4,  # CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER
+            ctypes.byref(iid_enum),
+            ctypes.byref(enum_ptr),
+        )
+        if hr != 0 or not enum_ptr.value:
+            return None
+
+        try:
+            vtbl_enum = ctypes.cast(enum_ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            # IMMDeviceEnumerator::GetDefaultAudioEndpoint (slot 4): (this, eRender=0, eConsole=0, ppDevice)
+            get_default_fn = ctypes.WINFUNCTYPE(
+                ctypes.c_long,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.c_void_p),
+            )(vtbl_enum[4])
+            dev_ptr = ctypes.c_void_p()
+            hr = get_default_fn(enum_ptr, 0, 0, ctypes.byref(dev_ptr))
+            if hr != 0 or not dev_ptr.value:
+                return None
+            try:
+                vtbl_dev = ctypes.cast(dev_ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+                # IMMDevice::GetId (slot 5): (this, ppstrId)
+                get_id_fn = ctypes.WINFUNCTYPE(
+                    ctypes.c_long,
+                    ctypes.c_void_p,
+                    ctypes.POINTER(ctypes.c_wchar_p),
+                )(vtbl_dev[5])
+                dev_id_ptr = ctypes.c_wchar_p()
+                hr = get_id_fn(dev_ptr, ctypes.byref(dev_id_ptr))
+                if hr == 0 and dev_id_ptr.value:
+                    dev_id = str(dev_id_ptr.value)
+                    ole32.CoTaskMemFree(dev_id_ptr)
+                    return (dev_id, "")
+            finally:
+                release_dev = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtbl_dev[2])
+                release_dev(dev_ptr)
+        finally:
+            release_enum = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtbl_enum[2])
+            release_enum(enum_ptr)
+    except Exception:
+        return None
+    return None
+
+
 class WasapiSystemLoopbackBackend(AudioCaptureBackend):
     """Fallback Windows system-wide WASAPI loopback using PyAudioWPatch.
 
@@ -36,12 +115,14 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         max_device_reconnects: int = 3,
         allow_non_windows: bool = False,
         follow_default_device: bool = True,
+        default_device_probe: Optional[Callable[[], Optional[tuple[str, str]]]] = None,
     ) -> None:
         super().__init__(audio_config=audio_config)
         self._pyaudio_factory = pyaudio_factory
         self._max_device_reconnects = max_device_reconnects
         self._allow_non_windows = allow_non_windows
         self._follow_default_device = bool(follow_default_device)
+        self._default_device_probe = default_device_probe
 
         self._stop_event = threading.Event()
         self._closing = threading.Event()
@@ -50,6 +131,7 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         self._pa: Any = None
         self._stream: Any = None
         self._device_name = "System Default WASAPI Loopback"
+        self._current_endpoint_id: Optional[str] = None
 
         self._stats = CaptureStatsTracker(
             mode=CaptureMode.SYSTEM_LOOPBACK,
@@ -163,6 +245,10 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
             self._pa = pa
             self._stream = stream
         self._device_name = str(dev_info.get("name", self._device_name))
+        self._stats.set_process_name(self._device_name)
+        self._stats.set_device_switch_message(None)
+        ep = self._probe_default_endpoint()
+        self._current_endpoint_id = ep[0] if ep is not None else None
         self._stats.set_error(None)
         self._stats.set_running(True)
 
@@ -182,9 +268,29 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
             self._pa = None
         self._close_pa_pair(pa, stream)
 
+    def _probe_default_endpoint(self) -> Optional[tuple[str, str]]:
+        if self._default_device_probe is not None:
+            try:
+                return self._default_device_probe()
+            except Exception:
+                return None
+        if platform.system() == "Windows":
+            ep = _query_windows_default_render_endpoint()
+            if ep is not None:
+                return ep
+        return None
+
     def _default_device_changed(self, current_index: Optional[int], current_name: str) -> bool:
         """Poll whether Windows default output loopback device changed while stream is open."""
         if not self._follow_default_device or self._closing.is_set() or self._stop_event.is_set():
+            return False
+        ep = self._probe_default_endpoint()
+        if ep is not None:
+            ep_id, ep_name = ep
+            if self._current_endpoint_id is not None and ep_id and ep_id != self._current_endpoint_id:
+                return True
+            if ep_name and current_name and ep_name != current_name:
+                return True
             return False
         try:
             with self._lock:
@@ -225,7 +331,7 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 break
             try:
                 poll_chunks += 1
-                if poll_chunks >= 25:
+                if poll_chunks >= 20:
                     poll_chunks = 0
                     if self._default_device_changed(current_dev_index, current_dev_name):
                         raise RuntimeError("DEFAULT_DEVICE_CHANGED")
@@ -268,6 +374,7 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 if self._stop_event.is_set() or self._closing.is_set():
                     break
                 is_device_switch = str(exc) == "DEFAULT_DEVICE_CHANGED"
+                old_dev_name = current_dev_name
                 if is_device_switch:
                     logger.info("检测到默认输出设备变更，正在无感切换 WASAPI Loopback 设备...")
                 else:
@@ -312,14 +419,21 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                             resampler = None
                         self._device_name = current_dev_name
                         self._stats.set_process_name(self._device_name)
+                        ep = self._probe_default_endpoint()
+                        if ep is not None:
+                            self._current_endpoint_id = ep[0]
                         if is_device_switch:
                             self._stats.set_error(None)
+                            self._stats.set_device_switch_message(f"已切换到 {self._device_name}")
                             has_transient_reconnect_notice = False
+                            logger.info("loopback default device changed old=%s new=%s", old_dev_name, self._device_name)
                         else:
                             self._stats.set_error(f"检测到播放设备切换，已重连至: {self._device_name}")
                             has_transient_reconnect_notice = True
+                            if current_dev_name != old_dev_name:
+                                self._stats.set_device_switch_message(f"已切换到 {self._device_name}")
+                                logger.info("loopback default device changed old=%s new=%s", old_dev_name, self._device_name)
                         clean_chunks_since_reconnect = 0
-                        logger.info("默认输出设备已切换，已无感重连至: %s", self._device_name)
                         poll_chunks = 0
                         reconnected = True
                         break
