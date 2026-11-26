@@ -549,6 +549,92 @@ P2G_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "기본값은 애시드 텔레메트리 라이트 테마이며, 다른 테마로 전환하면 색상·글꼴·배경 이미지를 자유롭게 설정할 수 있습니다.",
         "ja": "既定はアシッドテレメトリ・ライトテーマです。他テーマへ切り替えると色・フォント・背景画像を自由に調整できます。",
     },
+    # Issue #37 R2 updater UI strings
+    "当前已是最新版本。": {
+        "en": "You are already on the latest version.",
+        "ko": "이미 최신 버전입니다.",
+        "ja": "現在最新バージョンです。",
+    },
+    "检查更新失败，请检查网络或镜像设置后重试。": {
+        "en": "Update check failed. Check your network or mirror settings and try again.",
+        "ko": "업데이트 확인에 실패했습니다. 네트워크 또는 미러 설정을 확인 후 다시 시도하세요.",
+        "ja": "更新の確認に失敗しました。ネットワークまたはミラー設定を確認して再試行してください。",
+    },
+    "自动检查更新（每 24 小时最多一次）": {
+        "en": "Check for updates automatically (at most once every 24h)",
+        "ko": "자동 업데이트 확인 (24시간당 최대 1회)",
+        "ja": "自動で更新を確認（24 時間に最大 1 回）",
+    },
+    "包含预发布版本": {
+        "en": "Include prerelease versions",
+        "ko": "프리릴리스 버전 포함",
+        "ja": "プレリリース版を含める",
+    },
+    "立即检查": {
+        "en": "Check Now",
+        "ko": "지금 확인",
+        "ja": "今すぐ確認",
+    },
+    "在线更新:": {
+        "en": "Online Updates:",
+        "ko": "온라인 업데이트:",
+        "ja": "オンライン更新:",
+    },
+    "可选：GitHub 下载失败时使用的镜像前缀（如 https://gh-proxy.example.com/）": {
+        "en": "Optional: mirror prefix used if GitHub download fails (e.g. https://gh-proxy.example.com/)",
+        "ko": "선택 사항: GitHub 다운로드 실패 시 사용할 미러 접두사 (예: https://gh-proxy.example.com/)",
+        "ja": "任意: GitHub ダウンロード失敗時に使うミラー接頭辞（例: https://gh-proxy.example.com/）",
+    },
+    "更新下载镜像:": {
+        "en": "Update Mirror:",
+        "ko": "업데이트 미러:",
+        "ja": "更新ミラー:",
+    },
+    "发现新版本": {
+        "en": "New Version Available",
+        "ko": "새 버전 출시",
+        "ja": "新しいバージョン",
+    },
+    "暂无更新说明。": {
+        "en": "No release notes provided.",
+        "ko": "릴리스 노트가 없습니다.",
+        "ja": "リリースノートはありません。",
+    },
+    "跳过此版本": {
+        "en": "Skip This Version",
+        "ko": "이 버전 건너뛰기",
+        "ja": "このバージョンをスキップ",
+    },
+    "稍后": {
+        "en": "Later",
+        "ko": "나중에",
+        "ja": "あとで",
+    },
+    "取消下载": {
+        "en": "Cancel Download",
+        "ko": "다운로드 취소",
+        "ja": "ダウンロードをキャンセル",
+    },
+    "立即更新": {
+        "en": "Update Now",
+        "ko": "지금 업데이트",
+        "ja": "今すぐ更新",
+    },
+    "正在下载并校验更新包…": {
+        "en": "Downloading and verifying update package...",
+        "ko": "업데이트 패키지를 다운로드하고 검증하는 중...",
+        "ja": "更新パッケージをダウンロードして検証中…",
+    },
+    "关闭": {
+        "en": "Close",
+        "ko": "닫기",
+        "ja": "閉じる",
+    },
+    "已取消下载（支持下次断点续传）。": {
+        "en": "Download canceled (resumable on next attempt).",
+        "ko": "다운로드가 취소되었습니다(다음 시도 시 이어받기 지원).",
+        "ja": "ダウンロードをキャンセルしました（次回レジューム対応）。",
+    },
 }
 
 import re as _re
@@ -704,6 +790,55 @@ P2G_DYNAMIC_REGEX_RULES: tuple[tuple[_re.Pattern[str], dict[str, str]], ...] = (
             "en": r"\1 AI job already running (hard limit=\2, free RAM=\3 MB); parallel jobs blocked.",
             "ko": r"이미 \1개의 AI 작업이 실행 중입니다(최대=\2, 여유 RAM=\3 MB). 병렬 실행 불가.",
             "ja": r"すでに \1 件の AI ジョブが実行中です（上限=\2、空き RAM=\3 MB）。並列実行不可。",
+        },
+    ),
+    # Issue #37 R2 updater dialog dynamic strings
+    (
+        _re.compile(r"^发现新版本\s+(.+)$"),
+        {
+            "en": r"New Version Available: \1",
+            "ko": r"새 버전 출시: \1",
+            "ja": r"新しいバージョン: \1",
+        },
+    ),
+    (
+        _re.compile(r"^当前版本:\s*([^|]+?)\s*\|\s*最新版本:\s*([^|]+?)\s*\|\s*发布日期:\s*(.+)$"),
+        {
+            "en": r"Current: \1  |  Latest: \2  |  Released: \3",
+            "ko": r"현재 버전: \1  |  최신 버전: \2  |  배포일: \3",
+            "ja": r"現在: \1  |  最新: \2  |  公開日: \3",
+        },
+    ),
+    (
+        _re.compile(r"^正在下载更新包:\s*([\d.]+)\s*/\s*([\d.]+)\s*MB\s*\((\d+)%\)$"),
+        {
+            "en": r"Downloading update: \1 / \2 MB (\3%)",
+            "ko": r"업데이트 다운로드 중: \1 / \2 MB (\3%)",
+            "ja": r"更新をダウンロード中: \1 / \2 MB (\3%)",
+        },
+    ),
+    (
+        _re.compile(r"^下载完成并通过 SHA256 校验，已保存至:\s*(.+)$"),
+        {
+            "en": r"Download verified (SHA256 OK), saved to: \1",
+            "ko": r"다운로드 및 SHA256 검증 완료, 저장 위치: \1",
+            "ja": r"ダウンロード・SHA256 検証完了、保存先: \1",
+        },
+    ),
+    (
+        _re.compile(r"^更新包 SHA256 校验失败，已删除损坏文件:\s*(.+)$"),
+        {
+            "en": r"SHA256 verification failed; corrupted file deleted: \1",
+            "ko": r"SHA256 검증 실패, 손상된 파일을 삭제했습니다: \1",
+            "ja": r"SHA256 検証に失敗し、破損ファイルを削除しました: \1",
+        },
+    ),
+    (
+        _re.compile(r"^更新下载失败:\s*(.+)$"),
+        {
+            "en": r"Update download failed: \1",
+            "ko": r"업데이트 다운로드 실패: \1",
+            "ja": r"更新のダウンロードに失敗しました: \1",
         },
     ),
 )

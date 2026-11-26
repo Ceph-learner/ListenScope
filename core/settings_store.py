@@ -39,6 +39,11 @@ class PersistedSettings:
     bottom_panel_collapsed: bool = False
     follow_default_device: bool = True
     close_behavior: str = "ask"
+    auto_check_updates: bool = True
+    include_prerelease_updates: bool = False
+    update_mirror_prefix: str = ""
+    skipped_update_version: str = ""
+    last_update_check_ts: float = 0.0
 
 
 def default_settings_path() -> Path:
@@ -188,6 +193,20 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
     follow_default_device = bool(raw_follow) if isinstance(raw_follow, bool) else True
     raw_cb = str(payload.get("close_behavior", "ask") or "ask").strip().lower()
     close_behavior = raw_cb if raw_cb in ("ask", "tray", "quit") else "ask"
+    raw_auto_upd = payload.get("auto_check_updates", True)
+    auto_check_updates = bool(raw_auto_upd) if isinstance(raw_auto_upd, bool) else True
+    raw_pre_upd = payload.get("include_prerelease_updates", False)
+    include_prerelease_updates = bool(raw_pre_upd) if isinstance(raw_pre_upd, bool) else False
+    raw_mirror = payload.get("update_mirror_prefix", "")
+    update_mirror_prefix = str(raw_mirror).strip() if isinstance(raw_mirror, str) else ""
+    raw_skip = payload.get("skipped_update_version", "")
+    skipped_update_version = str(raw_skip).strip() if isinstance(raw_skip, str) else ""
+    try:
+        last_update_check_ts = float(payload.get("last_update_check_ts", 0.0) or 0.0)
+        if not math.isfinite(last_update_check_ts) or last_update_check_ts < 0.0:
+            last_update_check_ts = 0.0
+    except Exception:
+        last_update_check_ts = 0.0
     return PersistedSettings(
         resource_limits=limits,
         ai_config=ai_cfg,
@@ -199,6 +218,11 @@ def load_settings(path: Optional[Path | str] = None) -> PersistedSettings:
         bottom_panel_collapsed=bottom_collapsed,
         follow_default_device=follow_default_device,
         close_behavior=close_behavior,
+        auto_check_updates=auto_check_updates,
+        include_prerelease_updates=include_prerelease_updates,
+        update_mirror_prefix=update_mirror_prefix,
+        skipped_update_version=skipped_update_version,
+        last_update_check_ts=last_update_check_ts,
         **practice,
     )
 
@@ -233,6 +257,11 @@ def save_settings(settings: PersistedSettings, path: Optional[Path | str] = None
         "bottom_panel_collapsed": bool(getattr(settings, "bottom_panel_collapsed", False)),
         "follow_default_device": bool(getattr(settings, "follow_default_device", True)),
         "close_behavior": close_behavior,
+        "auto_check_updates": bool(getattr(settings, "auto_check_updates", True)),
+        "include_prerelease_updates": bool(getattr(settings, "include_prerelease_updates", False)),
+        "update_mirror_prefix": str(getattr(settings, "update_mirror_prefix", "") or "").strip(),
+        "skipped_update_version": str(getattr(settings, "skipped_update_version", "") or "").strip(),
+        "last_update_check_ts": float(getattr(settings, "last_update_check_ts", 0.0) or 0.0),
         **practice,
     }
     tmp_path: Optional[Path] = None

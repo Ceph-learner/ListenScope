@@ -393,6 +393,12 @@ class ListenScopeController:
             appearance=saved_settings.appearance,
         )
         self.window.close_behavior = str(getattr(saved_settings, "close_behavior", "ask") or "ask")
+        self.window.auto_check_updates = bool(getattr(saved_settings, "auto_check_updates", True))
+        self.window.include_prerelease_updates = bool(getattr(saved_settings, "include_prerelease_updates", False))
+        self.window.update_mirror_prefix = str(getattr(saved_settings, "update_mirror_prefix", "") or "").strip()
+        self.window.skipped_update_version = str(getattr(saved_settings, "skipped_update_version", "") or "").strip()
+        self.window.last_update_check_ts = float(getattr(saved_settings, "last_update_check_ts", 0.0) or 0.0)
+        self._update_result_q: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=4)
         if getattr(saved_settings, "window_geometry", ""):
             self.window.restore_saved_geometry(saved_settings.window_geometry)
         self.window.mixer_widget._open_audio_device = not self.use_mock_ai_for_demo
@@ -554,6 +560,7 @@ class ListenScopeController:
         w.settings_applied.connect(self._on_settings_applied)
         w.appearance_applied.connect(self._on_appearance_applied)
         w.close_behavior_changed.connect(self._on_close_behavior_changed)
+        w.check_updates_requested.connect(lambda: self.check_for_updates(manual=True))
         w.ab_bookmark_save_requested.connect(self._on_ab_bookmark_save)
         w.ab_bookmark_select_requested.connect(self._on_ab_bookmark_select)
         w.ab_bookmark_delete_requested.connect(self._on_ab_bookmark_delete)
@@ -1919,7 +1926,75 @@ class ListenScopeController:
             progression_mode=self.window.chroma_widget.progression_mode,
             window_geometry=bytes(self.window.saveGeometry().toBase64()).decode("ascii"),
             close_behavior=str(getattr(self.window, "close_behavior", "ask") or "ask"),
+            auto_check_updates=bool(getattr(self.window, "auto_check_updates", True)),
+            include_prerelease_updates=bool(getattr(self.window, "include_prerelease_updates", False)),
+            update_mirror_prefix=str(getattr(self.window, "update_mirror_prefix", "") or "").strip(),
+            skipped_update_version=str(getattr(self.window, "skipped_update_version", "") or "").strip(),
+            last_update_check_ts=float(getattr(self.window, "last_update_check_ts", 0.0) or 0.0),
         )
+
+    def check_for_updates(self, *, manual: bool = False) -> None:
+        from core.updater import check_for_updates_async, should_auto_check
+        from core.version import get_base_version
+
+        if not manual:
+            if not bool(getattr(self.window, "auto_check_updates", True)):
+                return
+            if not should_auto_check(float(getattr(self.window, "last_update_check_ts", 0.0) or 0.0)):
+                return
+
+        cur_ver = get_base_version()
+        include_pre = bool(getattr(self.window, "include_prerelease_updates", False))
+        skipped = "" if manual else str(getattr(self.window, "skipped_update_version", "") or "")
+        mirror = str(getattr(self.window, "update_mirror_prefix", "") or "").strip()
+
+        def _on_done(res: Any) -> None:
+            try:
+                self._update_result_q.put_nowait((manual, res))
+            except queue.Full:
+                pass
+
+        check_for_updates_async(
+            cur_ver,
+            _on_done,
+            include_prerelease=include_pre,
+            skipped_version=skipped,
+            mirror_prefix=mirror,
+        )
+
+    def _drain_update_results(self) -> None:
+        while True:
+            try:
+                manual, res = self._update_result_q.get_nowait()
+            except queue.Empty:
+                break
+            if res.status != "error":
+                self.window.last_update_check_ts = time.time()
+                try:
+                    save_settings(self._build_persisted_settings(), self._settings_path)
+                except OSError:
+                    pass
+            if res.status == "update_available" and res.release is not None:
+                from ui.update_dialog import UpdateAvailableDialog
+
+                dlg = UpdateAvailableDialog(
+                    res.release,
+                    current_version=res.current_version,
+                    dest_dir=self.work_dir / "updates",
+                    mirror_prefix=str(getattr(self.window, "update_mirror_prefix", "") or "").strip(),
+                    parent=self.window,
+                )
+                dlg.exec()
+                if dlg.user_action == "skip":
+                    self.window.skipped_update_version = res.release.version
+                    try:
+                        save_settings(self._build_persisted_settings(), self._settings_path)
+                    except OSError:
+                        pass
+            elif manual and res.status == "up_to_date":
+                self.window.show_banner_message("当前已是最新版本。", tone="info")
+            elif manual and res.status == "error":
+                self.window.show_banner_message("检查更新失败，请检查网络或镜像设置后重试。", tone="warn")
 
     def _on_close_behavior_changed(self, _behavior: str = "ask") -> None:
         try:
@@ -2181,6 +2256,8 @@ class ListenScopeController:
             except Exception:
                 logger.exception("Error handling _ui_deep_analysis_q item")
 
+        self._drain_update_results()
+
         if self.drum_preview.close_if_finished():
             self.window.mixer_widget.set_drum_preview_playing(False)
         elif self.drum_preview.is_playing:
@@ -2401,6 +2478,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             logging.getLogger(__name__).warning("Ignoring invalid %s=%r", _DEBUG_RESTART_ENV, raw_restart_s)
     if args.headless_smoke:
         QtCore.QTimer.singleShot(300, ctrl.window.force_quit)
+    elif os.environ.get("QT_QPA_PLATFORM", "").strip().lower() != "offscreen":
+        QtCore.QTimer.singleShot(3000, lambda: ctrl.check_for_updates(manual=False))
     ret = app.exec()
     shutdown_done = threading.Event()
 

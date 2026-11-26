@@ -126,6 +126,7 @@ class SettingsDialog(QtWidgets.QDialog):
     appearance_changed = QtCore.Signal(object)
     restart_requested = QtCore.Signal()
     bootstrap_runtimes_ready = QtCore.Signal(str, str)
+    check_updates_requested = QtCore.Signal()
 
     def __init__(
         self,
@@ -137,6 +138,9 @@ class SettingsDialog(QtWidgets.QDialog):
         midi_python_executable: str = "",
         appearance: Appearance = Appearance(),
         close_behavior: str = "ask",
+        auto_check_updates: bool = True,
+        include_prerelease_updates: bool = False,
+        update_mirror_prefix: str = "",
         acid_variant: Optional[str] = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
@@ -165,6 +169,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self._updated_close_behavior: str = str(close_behavior or "ask").strip().lower()
         if self._updated_close_behavior not in ("ask", "tray", "quit"):
             self._updated_close_behavior = "ask"
+        self._updated_auto_check_updates: bool = bool(auto_check_updates)
+        self._updated_include_prerelease_updates: bool = bool(include_prerelease_updates)
+        self._updated_update_mirror_prefix: str = str(update_mirror_prefix or "").strip()
         self._verified_ai_probe: Optional[dict[str, Any]] = None
         self._dialog_closed = False
         self._bootstrap_mgr = get_bootstrap_manager()
@@ -355,6 +362,24 @@ class SettingsDialog(QtWidgets.QDialog):
         cb_idx = self.close_behavior_combo.findData(self._updated_close_behavior)
         self.close_behavior_combo.setCurrentIndex(max(0, cb_idx))
         appearance_form.addRow("关闭按钮行为:", self.close_behavior_combo)
+
+        upd_row = QtWidgets.QHBoxLayout()
+        upd_row.setSpacing(8)
+        self.auto_check_updates_chk = QtWidgets.QCheckBox("自动检查更新（每 24 小时最多一次）")
+        self.auto_check_updates_chk.setChecked(self._updated_auto_check_updates)
+        self.include_prerelease_chk = QtWidgets.QCheckBox("包含预发布版本")
+        self.include_prerelease_chk.setChecked(self._updated_include_prerelease_updates)
+        self.check_updates_now_btn = QtWidgets.QPushButton("立即检查")
+        self.check_updates_now_btn.clicked.connect(self.check_updates_requested.emit)
+        upd_row.addWidget(self.auto_check_updates_chk)
+        upd_row.addWidget(self.include_prerelease_chk)
+        upd_row.addStretch(1)
+        upd_row.addWidget(self.check_updates_now_btn)
+        appearance_form.addRow("在线更新:", upd_row)
+
+        self.update_mirror_edit = QtWidgets.QLineEdit(self._updated_update_mirror_prefix)
+        self.update_mirror_edit.setPlaceholderText("可选：GitHub 下载失败时使用的镜像前缀（如 https://gh-proxy.example.com/）")
+        appearance_form.addRow("更新下载镜像:", self.update_mirror_edit)
 
         telem_row = QtWidgets.QHBoxLayout()
         telem_row.setSpacing(10)
@@ -1700,6 +1725,12 @@ class SettingsDialog(QtWidgets.QDialog):
             if hasattr(self, "close_behavior_combo"):
                 cb_val = str(self.close_behavior_combo.currentData() or "ask").strip().lower()
                 self._updated_close_behavior = cb_val if cb_val in ("ask", "tray", "quit") else "ask"
+            if hasattr(self, "auto_check_updates_chk"):
+                self._updated_auto_check_updates = bool(self.auto_check_updates_chk.isChecked())
+            if hasattr(self, "include_prerelease_chk"):
+                self._updated_include_prerelease_updates = bool(self.include_prerelease_chk.isChecked())
+            if hasattr(self, "update_mirror_edit"):
+                self._updated_update_mirror_prefix = str(self.update_mirror_edit.text() or "").strip()
             if self._verified_ai_probe is not None and str(self._verified_ai_probe.get("python_executable", "")) != entered_py:
                 self._verified_ai_probe = None
         except ValueError as exc:
@@ -1730,6 +1761,18 @@ class SettingsDialog(QtWidgets.QDialog):
     @property
     def updated_close_behavior(self) -> str:
         return self._updated_close_behavior
+
+    @property
+    def updated_auto_check_updates(self) -> bool:
+        return self._updated_auto_check_updates
+
+    @property
+    def updated_include_prerelease_updates(self) -> bool:
+        return self._updated_include_prerelease_updates
+
+    @property
+    def updated_update_mirror_prefix(self) -> str:
+        return self._updated_update_mirror_prefix
 
     @property
     def verified_ai_probe(self) -> Optional[dict[str, Any]]:
