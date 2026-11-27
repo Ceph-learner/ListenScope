@@ -211,6 +211,8 @@ def test_r4_2_release_workflow_hardened_and_supports_dry_run() -> None:
     assert "inputs.dry_run != true" in yml
     assert "Write dry-run artifact summary" in yml
     assert "GITHUB_STEP_SUMMARY" in yml
+    assert r"QT_QPA_FONTDIR: C:\Windows\Fonts" in yml
+    assert "-o faulthandler_timeout=180" in yml
 
     # Prerelease tag handling: '-' in tag enables --prerelease and prerelease notice
     assert '$isPrerelease = $tag.Contains("-")' in yml
