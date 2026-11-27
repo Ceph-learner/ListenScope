@@ -808,8 +808,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         # Frameless Window Control Buttons (Minimize / Maximize-Restore / Close)
         self._win_ctrl_box = QtWidgets.QWidget()
         win_ctrl_l = QtWidgets.QHBoxLayout(self._win_ctrl_box)
-        win_ctrl_l.setContentsMargins(2, 0, 0, 0)
-        win_ctrl_l.setSpacing(2)
+        win_ctrl_l.setContentsMargins(0, 0, 0, 0)
+        win_ctrl_l.setSpacing(1)
         self.win_min_btn = WindowGlyphButton("min", "")
         self.win_min_btn.setObjectName("windowCtrlBtn")
         self.win_min_btn.setAccessibleName("最小化窗口")
@@ -1552,15 +1552,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             QtCore.QSize(cw, ch),
             btn,
         )
-        return max(cw + 12, styled.width()) + 2
+        return max(cw + 12, styled.width())
 
     def _estimate_capture_status_width(self, compact: bool, lang: str) -> int:
-        fm = self.capture_status_lbl.fontMetrics()
-        chrome = (
-            max(18, self.capture_status_lbl._horizontal_chrome())
-            if hasattr(self.capture_status_lbl, "_horizontal_chrome")
-            else 18
-        )
+        # Active capture warnings use font-weight: 700 + left 4px accent border; measure bold width with fixed chrome
+        bold_font = QtGui.QFont(self.capture_status_lbl.font())
+        bold_font.setBold(True)
+        fm = QtGui.QFontMetrics(bold_font)
+        chrome = 22
         if compact:
             samples = (
                 "⚠ -120 dB",
@@ -1572,7 +1571,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 translate_text("[混入警告] 有信号 · -120.0 dBFS", lang),
                 translate_text("[混入警告] 静音 · -120.0 dBFS", lang),
             )
-        est = max(fm.horizontalAdvance(s) for s in samples) + chrome + 2
+        est = max(fm.horizontalAdvance(s) for s in samples) + chrome
         if bool(compact) == getattr(self, "_capture_compact_mode", False):
             est = max(est, self.capture_status_lbl.sizeHint().width())
         return est
@@ -1682,7 +1681,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 cap_icon_only: bool,
                 estop_short: bool,
             ) -> int:
-                req = top_m.left() + top_m.right() + cmd_m.left() + cmd_m.right() + 4
+                req = top_m.left() + top_m.right() + cmd_m.left() + cmd_m.right() + 2
                 vis_items = 0
                 for i in range(self._topbar_cmd_row.count()):
                     wdg = self._topbar_cmd_row.itemAt(i).widget()

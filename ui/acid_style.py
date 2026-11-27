@@ -524,8 +524,9 @@ class TopbarElideLabel(QtWidgets.QLabel):
                 return
             w = self.width()
             cr_w = self.contentsRect().width()
-            # Skip eliding before the widget has a real layout geometry
-            if w <= 0 or cr_w <= 0:
+            # Skip eliding before the widget has a real layout geometry or while parent window is unshown
+            in_unshown_window = self.parentWidget() is not None and not self.window().isVisible()
+            if w <= 0 or cr_w <= 0 or in_unshown_window:
                 if super().text() != full:
                     super().setText(full)
                 return
@@ -567,6 +568,10 @@ class TopbarElideLabel(QtWidgets.QLabel):
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
+        self._apply_elide()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
         self._apply_elide()
 
     def changeEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
@@ -3288,8 +3293,8 @@ QPushButton#windowCtrlBtn {{
     border: 1px solid transparent;
     border-radius: 0px;
     padding: 0px;
-    min-width: 36px;
-    max-width: 36px;
+    min-width: 32px;
+    max-width: 32px;
     min-height: 32px;
     max-height: 32px;
     font-family: {mono_family};
@@ -3307,8 +3312,8 @@ QPushButton#windowCloseBtn {{
     border: 1px solid transparent;
     border-radius: 0px;
     padding: 0px;
-    min-width: 36px;
-    max-width: 36px;
+    min-width: 32px;
+    max-width: 32px;
     min-height: 32px;
     max-height: 32px;
     font-family: {mono_family};
@@ -3372,6 +3377,10 @@ QFrame#acidTopbar QPushButton#captureBtn,
 QFrame#acidTopbar QPushButton#freezeBtn,
 QFrame#acidTopbar QPushButton#settingsBtn {{
     padding: 4px 6px;
+}}
+QFrame#acidTopbar QLabel#captureStatus,
+QFrame#acidTopbar QLabel#statusBadge {{
+    padding: 2px 6px;
 }}
 QFrame#acidDivider {{
     background-color: {p.border};

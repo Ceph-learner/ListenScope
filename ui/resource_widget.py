@@ -47,8 +47,8 @@ class ResourceMonitorBar(QtWidgets.QFrame):
         self._critical_ram_mb = float(critical_ram_mb)
         self._critical_vram_free_mb = float(critical_vram_free_mb)
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 6, 2)
-        layout.setSpacing(4)
+        layout.setContentsMargins(5, 2, 5, 2)
+        layout.setSpacing(3)
 
         self.ram_label = TopbarElideLabel("RAM -")
         self.ram_label.setObjectName("monoTelemetry")
@@ -68,7 +68,6 @@ class ResourceMonitorBar(QtWidgets.QFrame):
         layout.addWidget(self.ram_label)
         layout.addWidget(self._sep_lbl)
         layout.addWidget(self.vram_label)
-        layout.addSpacing(2)
         layout.addWidget(self.status_badge)
         self.setToolTip("RAM / VRAM")
         self.ram_label.setToolTip("RAM -")
@@ -79,15 +78,18 @@ class ResourceMonitorBar(QtWidgets.QFrame):
     def estimate_worst_case_width(self, compact: bool, lang: str) -> int:
         """Estimate worst-case capsule width for `compact` and `lang` using sample long telemetry strings."""
         lay = self.layout()
-        lm = lay.contentsMargins() if lay is not None else QtCore.QMargins(6, 2, 6, 2)
-        sp = max(0, lay.spacing()) if lay is not None else 4
+        lm = lay.contentsMargins() if lay is not None else QtCore.QMargins(5, 2, 5, 2)
+        sp = max(0, lay.spacing()) if lay is not None else 3
         cm = self.contentsMargins()
         frame_w = self.frameWidth() * 2
         # Left accent border in QSS is 3px + right border 1px + padding
         outer_w = max(frame_w + cm.left() + cm.right(), 4) + lm.left() + lm.right()
 
-        badge_fm = self.status_badge.fontMetrics()
-        badge_chrome = max(18, self.status_badge._horizontal_chrome())
+        badge_font = QtGui.QFont(self.status_badge.font())
+        badge_font.setBold(True)
+        badge_fm = QtGui.QFontMetrics(badge_font)
+        # Keep pill chrome constant (padding + 4px accent border + Qt text margin) so live text never shifts layout stage
+        badge_chrome = 24
         if compact:
             badge_samples = (
                 "Normal",
@@ -96,14 +98,14 @@ class ResourceMonitorBar(QtWidgets.QFrame):
                 translate_text("低内存", lang),
             )
             badge_w = max(badge_fm.horizontalAdvance(s) for s in badge_samples) + badge_chrome
-            est = outer_w + badge_w + 2
+            est = outer_w + badge_w
         else:
             ram_name = "内存" if lang == "zh" else "RAM"
             vram_name = "显存" if lang == "zh" else "VRAM"
             ram_fm = self.ram_label.fontMetrics()
             vram_fm = self.vram_label.fontMetrics()
-            ram_w = ram_fm.horizontalAdvance(f"{ram_name} 99.9G") + self.ram_label._horizontal_chrome()
-            vram_w = vram_fm.horizontalAdvance(f"{vram_name} 99.9/99.9G") + self.vram_label._horizontal_chrome()
+            ram_w = ram_fm.horizontalAdvance(f"{ram_name} 99.9G") + 2
+            vram_w = vram_fm.horizontalAdvance(f"{vram_name} 99.9/99.9G") + 2
             sep_w = self._sep_lbl.sizeHint().width()
             badge_samples = (
                 translate_text("Normal", lang),
@@ -112,7 +114,7 @@ class ResourceMonitorBar(QtWidgets.QFrame):
                 translate_text("内存偏低", lang),
             )
             badge_w = max(badge_fm.horizontalAdvance(s) for s in badge_samples) + badge_chrome
-            est = outer_w + ram_w + sep_w + vram_w + badge_w + sp * 3 + 2
+            est = outer_w + ram_w + sep_w + vram_w + badge_w + sp * 3
         if bool(compact) == self._compact_mode and lang == self._lang:
             est = max(est, self.sizeHint().width())
         return est
