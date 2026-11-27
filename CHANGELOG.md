@@ -6,15 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added
-- Compliance and open-source release preparation (`LICENSE`, `THIRD_PARTY_NOTICES.md`, `licenses/`, `docs/PROVENANCE.md`).
-- Community and governance documentation (`CODE_OF_CONDUCT.md`, `SECURITY.md`, `PRIVACY.md`, `SUPPORT.md`, `ROADMAP.md`, `.editorconfig`).
-- User and developer documentation (`docs/USER_GUIDE*.md`, `docs/FAQ*.md`, `docs/GLOSSARY*.md`, `docs/TESTING.md`, `docs/I18N.md`).
-- GitHub YAML issue forms, PR template, `CODEOWNERS`, and `dependabot.yml`.
-
-### Changed
-- Renamed key detection profile `"keyfinder"` to `"temperley1999"` in `analysis/key_detection.py` (keeping `"keyfinder"` as a backward-compatible alias) to clarify academic provenance.
-
 ## [1.1.0] - Pending Release
 
-- Initial public release preparation (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/DECISIONS.md](docs/DECISIONS.md)).
+### 新功能
+- **应用内在线更新检查与升级**：支持在设置中检查 GitHub Releases 最新版本、自动校验安装包 SHA256 哈希并引导下载与升级（随 #66 及后续升级应用 PR 合并）。
+- **系统环回默认播放设备自动跟随**：在系统环回捕获模式下，切换耳机、扬声器或修改 Windows 默认播放设备时自动重连新设备并继续捕获，同时保留已录制的 120 秒环形缓冲与当前 A/B 练习区间（随 #67 合并）。
+- **24 调和弦练习窗与 MIDI 导出**：新增 24 个大小调常用和弦进行交互式练习窗口，支持本地合成试听并导出为标准 `.mid` 文件。
+- **Cubase 兼容 MIDI 导出（SMF Type-0 / 480 TPB）**：支持将和弦进行、AI 分离鼓组、贝斯/人声/其他单轨以及本地单轨 WAV 转写并规范化导出为 Steinberg Cubase 兼容的 SMF Type-0 MIDI 文件，并保留多拍速变化下的时间轴精度。
+- **四语言实时切换与明暗主题系统**：支持简体中文、English、한국어、日本語界面热切换，提供浅色、深色、跟随系统模式以及 Acid Telemetry、经典、极光冰蓝、石墨靛紫、暖砂琥珀等预设配色。
+- **上下文帮助系统（`[?]` 与 `F1`）**：提供全局帮助开关、支持键盘聚焦的 `[?]` 帮助徽章及 `F1` 快捷说明弹窗，并在各页面精简徽章数量以保持界面整洁。
+- **紧凑 A/B 练习停靠栏与快捷预设**：底部 A/B 循环与节拍器停靠栏支持折叠收起与分段控件，提供 `10s / 30s / 60s` 快速框选预设、12 个练习书签、Tap 定速节拍器及 `0.5x–1.25x` 不变调慢放。
+- **可配置关闭按钮行为与系统托盘**：支持在设置中指定点击关闭按钮时的行为（询问 / 最小化到托盘 / 直接退出），托盘图标自适应 Windows 明暗模式并支持彻底退出。
+- **图形化一键配置 AI / MIDI 与本机 PyTorch 扫描**：在「设置 → AI 与 MIDI 环境」提供一键自动部署独立 AI 与 MIDI 环境、扫描识别本机已有 PyTorch / Conda 环境、实时安装日志与版本诊断。
+
+### 改进
+- **节拍半倍速 / 双倍速消歧与手动倍率**：采用基于采样时钟（`HOP=512`）的 `TempoEstimator` 与双峰先验消歧算法，并在界面增加 `×2` / `÷2` 倍率切换与备选 BPM 采用按钮。
+- **YIN 主音高估计与多音贝斯回退**：将 YIN 算法独立为 `analysis/yin.py` 并引入音调性（tonality）与窗口长度门控，在低音/贝斯区段结合谐波梳状与 YIN 回退，提升低至 `B0` / `E1` 的基频识别准确度。
+- **斜杠 / 减 / 增 / 七和弦识别与 `temperley1999` 调性模板**：新增减/增三和弦模板与七和弦偏置，结合 `bass_chroma` 区分第一转位与斜杠和弦；调性识别引入 `temperley1999` 模板（保留 `keyfinder` 兼容别名）、平行大小调消歧与动态转调切换，并改用 5 格稳定度条与无重复主标签展示。
+- **有状态流式重采样与混音相位对齐**：引入 `StreamingResampler` 有状态重采样器接入环回捕获与音频对齐管线，混音引擎采用带边界晕区（halo）的相位对齐重采样。
+- **增量 4 秒实时波形、自动增益与 Chroma 秒数轴**：基于 `FixedRingBuffer` 512 桶增量包络实现 4 秒实时波形与自动增益；Chroma 热图横轴切换为实际秒数刻度，频谱与 FFT 视图采用 1/24 倍频程对数频率网格与自适应纵轴刻度。
+- **两阶段渐进折叠顶栏与 125% DPI / 窄屏布局优化**：顶栏在窄窗口与高 DPI 缩放下按两阶段渐进折叠并自动省略超长文字，避免挤压下方实时图表与分轨混音空状态面板。
+- **精细化多尺寸应用 / 托盘图标与实时遥测状态栏**：重新设计 7 档以上多尺寸 `.ico` 应用图标与自适应托盘矢量图标；使用 24 px 实时遥测状态栏替代静态装饰条，集中展示版本号、音源、采样率、分析延迟（p50）、缓冲时长、CPU 占用与「减少动效」开关。
+- **空闲低内存琥珀态指示**：系统可用内存偏低且当前无运行中的 AI 任务时，资源指示条以温和琥珀警示态提示，避免误报紧急报错。
+- **实时分析性能与资源采样优化**：减少环形缓冲重复读取、向量化起始检测对数谱批处理、预分配频谱与 Chroma 缓冲区，并将快照去重与资源采样移至独立节拍以降低主线程开销。
+- **合规、治理与用户文档体系**：完善 `LICENSE`、`THIRD_PARTY_NOTICES.md`、`licenses/`、`docs/PROVENANCE.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`PRIVACY.md`、`SUPPORT.md`、`ROADMAP.md`、中英用户指南（`docs/USER_GUIDE*.md`）、FAQ（`docs/FAQ*.md`）、术语表（`docs/GLOSSARY*.md`）以及 GitHub Issue/PR 模板和 Dependabot 配置。
+
+### 修复
+- **AI 分轨采样率与响度归一化对齐**：修正分离模型输入重采样与标准化/反标准化契约，保证分离单轨与原始混音电平及采样率一致。
+- **贝斯 MIDI 八度鬼音抑制**：结合 RMS 能量跃升切分同音重奏并优化低频八度过滤，减少贝斯转写 MIDI 中的虚假高八度鬼音。
+- **鼓组串扰门控**：在鼓组分析中增加跨频段能量门控，抑制 1.5 kHz 附近旋律乐器或人声串扰导致的鼓点误检。
+- **托盘彻底退出与 Windows 重启可靠性**：修复托盘隐藏后的残留进程问题，并完善 Windows Job Object 下的脱离（breakaway）重启流程，确保一键部署完成后可靠重启。
+- **四语言运行时切换与动态提示翻译**：修复切换界面语言后动态状态文字、镜像 URL 拼接文本与图表动态 tooltip 未及时更新的问题。
+- **配置原子写入备份与过期分轨清理**：为损坏的 `settings.json` 自动生成备份并采用唯一临时文件加 `fsync` 原子保存，同时在启动与新建分轨任务时自动清理过期工作目录。
+- **AI 启动与分轨进度反馈**：本地化 AI 启动与处理阶段状态，展示已用时间与预计剩余时间，并在用户取消或急停（`E-STOP`）时及时提示并释放显存。
+- **Windows CI 与环回捕获稳定性**：修复进程环回停止后再次启动丢帧、系统环回重连竞态、单声道环形缓冲兼容及 Windows 离线字体与编码一致性问题。
+
+### 已知限制
+- 无边框主窗口暂不支持 Windows 11 贴靠布局（Snap Layouts，即悬停最大化按钮时弹出的布局菜单），已规划在后续版本实现。
+- 主要实测验证环境为 **Windows 11 + NVIDIA RTX 5060 Ti (8 GB 显存) + 16 GB 内存**；其余显卡、核显与硬件配置尚未经过全面实测。
+- **按进程环回捕获**需要 Windows 11（Build ≥ 20348）；Windows 10 用户可使用系统环回捕获整机播放输出。
+- 发行包暂未进行商业代码签名，首次运行可能弹出 Windows SmartScreen 提示；请在运行前对照 Release 中的 `SHA256SUMS.txt` 校验文件哈希，确认无误后点击「更多信息 → 仍要运行」。

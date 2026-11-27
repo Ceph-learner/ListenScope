@@ -46,3 +46,15 @@
 1. After AI separation, click **To MIDI** on any stem, or use **Open Solo WAV to MIDI** for an existing local mono/solo track.
 2. All chord, beat/drum, and solo MIDI exports are normalized to **Steinberg Cubase-compatible SMF Type-0 (`480 TPB`)**.
 3. Drag the exported `.mid` file from `exports/` directly into your Cubase project.
+
+---
+
+## 4. Playback Device Auto-Following & Online Updates
+
+### 1. Automatic Default Playback Device Following (System Loopback)
+- When capturing in **System Loopback** mode, if you plug or unplug headphones, switch speakers, or change the Windows default output device, ListenScope automatically detects the default device change and switches capture seamlessly.
+- Your **120-second rolling buffer and current A/B loop markers are preserved** across the switch without needing to stop capture or re-mark your loop. (In Per-Process Loopback mode, capture stays bound to the selected application process.)
+
+### 2. Online Update Check & SHA256 Verification
+- Checking for updates in **Settings** reads **only public release metadata from GitHub Releases** and uploads no audio, settings, or personal data.
+- Downloaded release packages are automatically verified against `SHA256SUMS.txt`. You can disable automatic update checks in Settings at any time.

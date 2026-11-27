@@ -7,7 +7,7 @@ name: release-windows
 #   - Smoke-tests a relocated copy of the frozen exe (`--simulate --headless-smoke`) without polluting dist/
 #   - Creates portable archive `ListenScope-Core-Windows-x64-Portable.zip`
 #   - Compiles Inno Setup 6 installer `ListenScope-Setup-Windows-x64.exe`
-#   - Generates `SHA256SUMS.txt` and publishes GitHub Release on `v*` tag pushes
+#   - Generates `SHA256SUMS.txt`, uploads workflow artifacts, and publishes GitHub Release on `v*` tags (unless dry_run=true)
 on:
   push:
     tags:
@@ -15,9 +15,14 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional version tag override when running manually (e.g. v0.2.1)"
+        description: "Optional version tag override when running manually (e.g. v1.1.0)"
         required: false
         default: ""
+      dry_run:
+        description: "Dry-run mode: build installer, portable ZIP, and SHA256SUMS.txt as workflow artifacts without creating a Release or tag"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -37,9 +42,9 @@ jobs:
       PYTHONUTF8: "1"
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
           architecture: "x64"
@@ -50,21 +55,24 @@ jobs:
 
       - name: Resolve application version
         env:
-          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
           EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
         run: |
           $pyVersion = python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text('utf-8'))['project']['version'])"
           $pyVersion = $pyVersion.Trim()
           if (-not $pyVersion) {
             throw "Failed to read project.version from pyproject.toml"
           }
-          $tagName = "${{ github.ref_name }}"
+          $tagName = "$env:REF_NAME".Trim()
           if ($env:EVENT_NAME -eq "workflow_dispatch" -and "$env:RELEASE_TAG_INPUT".Trim()) {
             $tagName = "$env:RELEASE_TAG_INPUT".Trim()
           }
           if ($tagName -match '^v(\d+\.\d+\.\d+(?:[-+].+)?)$') {
             $tagVersion = $Matches[1]
-            if ("${{ github.ref_type }}" -eq "tag" -and $tagVersion -ne $pyVersion) {
+            if ($env:REF_TYPE -eq "tag" -and $tagVersion -ne $pyVersion) {
               throw "Tag '$tagName' ($tagVersion) does not match pyproject.toml version ($pyVersion)"
             }
           }
@@ -72,10 +80,10 @@ jobs:
           "RELEASE_TAG=v$pyVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $shortSha = (git rev-parse --short=7 HEAD).Trim()
           "LISTENSCOPE_GIT_SHA=$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          if ("${{ github.ref_type }}" -eq "tag") {
+          if ($env:REF_TYPE -eq "tag") {
             "LISTENSCOPE_BUILD_VERSION=$pyVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
-          Write-Host "Resolved APP_VERSION=$pyVersion RELEASE_TAG=v$pyVersion GIT_SHA=$shortSha"
+          Write-Host "Resolved APP_VERSION=$pyVersion RELEASE_TAG=v$pyVersion GIT_SHA=$shortSha DRY_RUN=$($env:DRY_RUN_INPUT)"
 
       - name: Install Windows Core dependencies and PyInstaller
         run: |
@@ -205,7 +213,7 @@ jobs:
           Get-Content "dist\release\SHA256SUMS.txt"
 
       - name: Upload Release build artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: listenscope-windows-core-${{ env.APP_VERSION }}
           path: |
@@ -214,17 +222,48 @@ jobs:
             dist/release/SHA256SUMS.txt
           retention-days: 14
 
+      - name: Write dry-run artifact summary
+        if: inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v')
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          $artifactName = "listenscope-windows-core-$($env:APP_VERSION)"
+          $sums = (Get-Content -Path "dist\release\SHA256SUMS.txt" -Raw).TrimEnd()
+          @(
+            "### Windows Core Dry-Run Artifact Summary",
+            "",
+            "- **Event**: ``$($env:EVENT_NAME)`` (``dry_run=$($env:DRY_RUN_INPUT)``)",
+            "- **Artifact**: ``$artifactName``",
+            "- **App Version**: ``$($env:APP_VERSION)``",
+            "- **Release Published**: ``false``",
+            "",
+            "#### ``SHA256SUMS.txt``",
+            '```text',
+            $sums,
+            '```'
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "$env:REF_NAME"
           $notesLines = @(
             "### 安装包说明 (Windows x64 Core)",
             "- **``ListenScope-Setup-Windows-x64.exe``**：Inno Setup 6 单文件安装版（免管理员，默认保留升级后 ``exports\``）。",
             "- **``ListenScope-Core-Windows-x64-Portable.zip``**：解压即用的绿色便携版（内含 ``ListenScope.exe``）。",
             "- **图形化一键配置**：主程序仅打包轻量 Core（无需显卡即可实时分析与 A/B 练习）；如需 GPU AI 分轨或 Basic Pitch 转 MIDI，可在软件内 **``CONFIG // 设置 → AI 与 MIDI 环境``** 一键扫描本机 PyTorch 或自动配置。",
+            "",
+            "### 完整性校验（SHA256）",
+            "发行包暂未进行商业代码签名，首次运行可能弹出 Windows SmartScreen 提示。请在 PowerShell 中校验 SHA256 哈希并与附件 ``SHA256SUMS.txt`` 比对一致后，点击 **「更多信息 → 仍要运行」**：",
+            '```powershell',
+            "Get-FileHash ListenScope-Setup-Windows-x64.exe -Algorithm SHA256",
+            "Get-FileHash ListenScope-Core-Windows-x64-Portable.zip -Algorithm SHA256",
+            "Get-Content SHA256SUMS.txt",
+            '```',
             "",
             "### 硬件兼容性备注",
             "- 目前已在 **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM** 环境实测通过；其余显卡与硬件配置尚未全面测试，如遇问题欢迎在 Issues 反馈。"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "listenscope"
-version = "1.0.1"
+version = "1.1.0"
 description = "Offline, local-first Windows music analysis and AI stem separation assistant (resource-guarded for RTX 5060 Ti 8GB VRAM + 16GB RAM)"
 readme = "README.md"
 license = {text = "MIT"}
