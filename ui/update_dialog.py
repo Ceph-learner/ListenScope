@@ -49,7 +49,7 @@ class UpdateAvailableDialog(QtWidgets.QDialog):
         self.install_kind: Literal["installer", "portable"] = (
             install_kind if install_kind in ("installer", "portable") else detect_install_kind()
         )
-        self.user_action: Literal["later", "skip", "downloaded"] = "later"
+        self.user_action: Literal["later", "skip", "downloaded", "apply"] = "later"
         self.downloaded_path: Optional[Path] = None
         self._cancel_event: Optional[threading.Event] = None
         self._download_thread: Optional[threading.Thread] = None
@@ -115,6 +115,17 @@ class UpdateAvailableDialog(QtWidgets.QDialog):
         self.update_btn.clicked.connect(self._on_start_download)
         btn_row.addWidget(self.update_btn)
 
+        apply_zh = (
+            "立即安装更新并退出"
+            if self.install_kind == "installer"
+            else "立即应用更新并重启"
+        )
+        self.apply_btn = QtWidgets.QPushButton(apply_zh)
+        self.apply_btn.setObjectName("acidPrimaryBtn")
+        self.apply_btn.setVisible(False)
+        self.apply_btn.clicked.connect(self._on_apply)
+        btn_row.addWidget(self.apply_btn)
+
         root.addLayout(btn_row)
 
         self._progress_signal.connect(self._on_progress)
@@ -131,6 +142,10 @@ class UpdateAvailableDialog(QtWidgets.QDialog):
     def _on_later(self) -> None:
         self.user_action = "later"
         self.reject()
+
+    def _on_apply(self) -> None:
+        self.user_action = "apply"
+        self.accept()
 
     def _on_cancel_download(self) -> None:
         if self._cancel_event is not None:
@@ -206,6 +221,13 @@ class UpdateAvailableDialog(QtWidgets.QDialog):
         set_i18n_text(self.later_btn, "关闭")
         self.update_btn.setVisible(False)
         self.skip_btn.setVisible(False)
+        apply_zh = (
+            "立即安装更新并退出"
+            if self.install_kind == "installer"
+            else "立即应用更新并重启"
+        )
+        set_i18n_text(self.apply_btn, apply_zh)
+        self.apply_btn.setVisible(True)
         set_i18n_text(self.status_lbl, f"下载完成并通过 SHA256 校验，已保存至: {file_path}")
 
     @QtCore.Slot(str)

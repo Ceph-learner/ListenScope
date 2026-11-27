@@ -16,7 +16,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 import uuid
 import wave
 
@@ -1991,10 +1991,79 @@ class ListenScopeController:
                         save_settings(self._build_persisted_settings(), self._settings_path)
                     except OSError:
                         pass
+                elif dlg.user_action == "apply" and dlg.downloaded_path is not None:
+                    self.apply_downloaded_update(
+                        dlg.downloaded_path,
+                        install_kind=dlg.install_kind,
+                    )
+                    if getattr(self, "_shutdown_done", False):
+                        break
             elif manual and res.status == "up_to_date":
                 self.window.show_banner_message("当前已是最新版本。", tone="info")
             elif manual and res.status == "error":
                 self.window.show_banner_message("检查更新失败，请检查网络或镜像设置后重试。", tone="warn")
+
+    def apply_downloaded_update(
+        self,
+        downloaded_path: Path,
+        *,
+        install_kind: Literal["installer", "portable"],
+    ) -> bool:
+        """Persist settings, launch the installer or portable updater, and quit cleanly on success."""
+        from core.paths import get_app_root
+        from core.updater import (
+            acquire_app_mutex,
+            launch_installer_update,
+            launch_portable_update,
+        )
+
+        pkg_path = Path(downloaded_path)
+        try:
+            save_settings(self._build_persisted_settings(), self._settings_path)
+        except Exception:
+            pass
+
+        try:
+            if install_kind == "installer":
+                launch_installer_update(pkg_path)
+            elif install_kind == "portable":
+                app_dir = get_app_root()
+                relaunch_cmd = (
+                    [sys.executable]
+                    if getattr(sys, "frozen", False)
+                    else [sys.executable, *sys.argv]
+                )
+                launch_portable_update(
+                    pkg_path,
+                    app_dir,
+                    relaunch_cmd=relaunch_cmd,
+                )
+            else:
+                raise ValueError(f"Unsupported install_kind: {install_kind!r}")
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Failed to apply downloaded update (%s): %s", install_kind, exc)
+            if install_kind == "installer":
+                acquire_app_mutex()
+            if hasattr(self, "window") and self.window is not None:
+                try:
+                    self.window.show_banner_message(
+                        f"应用更新失败，请手动安装或重启后重试: {exc}",
+                        tone="warn",
+                    )
+                except Exception:
+                    pass
+            return False
+
+        self.shutdown()
+        if hasattr(self, "window") and self.window is not None:
+            try:
+                self.window.force_quit()
+            except Exception:
+                pass
+        app = QtWidgets.QApplication.instance()
+        if isinstance(app, QtWidgets.QApplication):
+            app.quit()
+        return True
 
     def _on_close_behavior_changed(self, _behavior: str = "ask") -> None:
         try:
@@ -2440,68 +2509,74 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--headless-smoke", action="store_true", help="短时运行后干净退出（测试用途）")
     args = parser.parse_args(argv)
 
-    if sys.platform == "win32":
-        import ctypes
+    from core.updater import acquire_app_mutex, release_app_mutex
 
-        set_app_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
-        set_app_id.argtypes = [ctypes.c_wchar_p]
-        set_app_id.restype = ctypes.c_long
-        set_app_id("ListenScope.Desktop")
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    app_icon = _load_app_icon()
-    if not app_icon.isNull():
-        app.setWindowIcon(app_icon)
-    ctrl = ListenScopeController(
-        use_mock_ai_for_demo=args.simulate,
-        ai_python_executable=args.ai_python,
-        midi_python_executable=args.midi_python,
-        settings_path=args.settings,
-    )
-    if args.simulate:
-        ctrl.start_capture({"kind": "synthetic", "pattern": "switching"})
-
-    ctrl.window.show()
-    raw_restart_s = os.environ.get(_DEBUG_RESTART_ENV, "").strip()
-    if raw_restart_s:
-        try:
-            delay_s = float(raw_restart_s)
-            if delay_s >= 0.0:
-                logging.getLogger(__name__).warning(
-                    "Debug restart hook armed (%s=%.3f s); will call restart_application() once.",
-                    _DEBUG_RESTART_ENV,
-                    delay_s,
-                )
-                QtCore.QTimer.singleShot(max(0, int(round(delay_s * 1000.0))), ctrl.restart_application)
-            else:
-                logging.getLogger(__name__).warning("Ignoring negative %s=%r", _DEBUG_RESTART_ENV, raw_restart_s)
-        except ValueError:
-            logging.getLogger(__name__).warning("Ignoring invalid %s=%r", _DEBUG_RESTART_ENV, raw_restart_s)
-    if args.headless_smoke:
-        QtCore.QTimer.singleShot(300, ctrl.window.force_quit)
-    elif os.environ.get("QT_QPA_PLATFORM", "").strip().lower() != "offscreen":
-        QtCore.QTimer.singleShot(3000, lambda: ctrl.check_for_updates(manual=False))
-    ret = app.exec()
-    shutdown_done = threading.Event()
-
-    def _exit_watchdog() -> None:
-        if not shutdown_done.wait(timeout=2.0):
-            kill_all_active_subprocesses()
-            os._exit(0)
-
-    threading.Thread(
-        target=_exit_watchdog,
-        name="ListenScope-ExitWatchdog",
-        daemon=True,
-    ).start()
+    acquire_app_mutex()
     try:
-        ctrl.shutdown()
-        del ctrl
-        app.processEvents()
-        gc.collect()
-        app.processEvents()
+        if sys.platform == "win32":
+            import ctypes
+
+            set_app_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+            set_app_id.argtypes = [ctypes.c_wchar_p]
+            set_app_id.restype = ctypes.c_long
+            set_app_id("ListenScope.Desktop")
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+        app_icon = _load_app_icon()
+        if not app_icon.isNull():
+            app.setWindowIcon(app_icon)
+        ctrl = ListenScopeController(
+            use_mock_ai_for_demo=args.simulate,
+            ai_python_executable=args.ai_python,
+            midi_python_executable=args.midi_python,
+            settings_path=args.settings,
+        )
+        if args.simulate:
+            ctrl.start_capture({"kind": "synthetic", "pattern": "switching"})
+
+        ctrl.window.show()
+        raw_restart_s = os.environ.get(_DEBUG_RESTART_ENV, "").strip()
+        if raw_restart_s:
+            try:
+                delay_s = float(raw_restart_s)
+                if delay_s >= 0.0:
+                    logging.getLogger(__name__).warning(
+                        "Debug restart hook armed (%s=%.3f s); will call restart_application() once.",
+                        _DEBUG_RESTART_ENV,
+                        delay_s,
+                    )
+                    QtCore.QTimer.singleShot(max(0, int(round(delay_s * 1000.0))), ctrl.restart_application)
+                else:
+                    logging.getLogger(__name__).warning("Ignoring negative %s=%r", _DEBUG_RESTART_ENV, raw_restart_s)
+            except ValueError:
+                logging.getLogger(__name__).warning("Ignoring invalid %s=%r", _DEBUG_RESTART_ENV, raw_restart_s)
+        if args.headless_smoke:
+            QtCore.QTimer.singleShot(300, ctrl.window.force_quit)
+        elif os.environ.get("QT_QPA_PLATFORM", "").strip().lower() != "offscreen":
+            QtCore.QTimer.singleShot(3000, lambda: ctrl.check_for_updates(manual=False))
+        ret = app.exec()
+        shutdown_done = threading.Event()
+
+        def _exit_watchdog() -> None:
+            if not shutdown_done.wait(timeout=2.0):
+                kill_all_active_subprocesses()
+                os._exit(0)
+
+        threading.Thread(
+            target=_exit_watchdog,
+            name="ListenScope-ExitWatchdog",
+            daemon=True,
+        ).start()
+        try:
+            ctrl.shutdown()
+            del ctrl
+            app.processEvents()
+            gc.collect()
+            app.processEvents()
+        finally:
+            shutdown_done.set()
+        return int(ret)
     finally:
-        shutdown_done.set()
-    return int(ret)
+        release_app_mutex()
 
 
 if __name__ == "__main__":
