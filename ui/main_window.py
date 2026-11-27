@@ -540,6 +540,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     ab_bookmark_delete_requested = QtCore.Signal(int)
     restart_requested = QtCore.Signal()
     close_behavior_changed = QtCore.Signal(str)
+    check_updates_requested = QtCore.Signal()
 
     def __init__(
         self,
@@ -592,6 +593,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._win11_dwm_rounded: bool = False
         self._force_quit: bool = False
         self.close_behavior: str = "ask"
+        self.auto_check_updates: bool = True
+        self.include_prerelease_updates: bool = False
+        self.update_mirror_prefix: str = ""
+        self.skipped_update_version: str = ""
+        self.last_update_check_ts: float = 0.0
         self._tray_icon: Optional[QtWidgets.QSystemTrayIcon] = None
         self._tray_notified: bool = False
         self._telemetry_phase: float = 0.0
@@ -3113,6 +3119,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             midi_python_executable=self._midi_python_executable,
             appearance=self.appearance,
             close_behavior=self.close_behavior,
+            auto_check_updates=self.auto_check_updates,
+            include_prerelease_updates=self.include_prerelease_updates,
+            update_mirror_prefix=self.update_mirror_prefix,
             acid_variant=self._acid_variant or "",
             parent=self,
         )
@@ -3136,6 +3145,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         dlg.appearance_changed.connect(on_quick_appearance)
         dlg.restart_requested.connect(self.restart_requested.emit)
         dlg.bootstrap_runtimes_ready.connect(on_bootstrap_runtimes_ready)
+        dlg.check_updates_requested.connect(self.check_updates_requested.emit)
         if focus_midi:
             QtCore.QTimer.singleShot(0, dlg.focus_midi)
         self._active_settings_dialog = dlg
@@ -3145,6 +3155,14 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 close_behavior_changed = dlg.updated_close_behavior != self.close_behavior
                 if close_behavior_changed:
                     self.close_behavior = dlg.updated_close_behavior
+                update_prefs_changed = (
+                    dlg.updated_auto_check_updates != self.auto_check_updates
+                    or dlg.updated_include_prerelease_updates != self.include_prerelease_updates
+                    or dlg.updated_update_mirror_prefix != self.update_mirror_prefix
+                )
+                self.auto_check_updates = dlg.updated_auto_check_updates
+                self.include_prerelease_updates = dlg.updated_include_prerelease_updates
+                self.update_mirror_prefix = dlg.updated_update_mirror_prefix
                 if dlg.updated_appearance != self.appearance:
                     self.apply_appearance(dlg.updated_appearance)
                     self.appearance_applied.emit()
@@ -3159,7 +3177,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                     self.segment_spin.setValue(max(4, min(10, int(self._ai_config.demucs_default_segment_sec))))
                     self._refresh_model_combos()
                     self.settings_applied.emit(self._resource_limits, self._ai_config, self._ai_python_executable)
-                elif close_behavior_changed:
+                elif close_behavior_changed or update_prefs_changed:
                     self.close_behavior_changed.emit(self.close_behavior)
             else:
                 if self.appearance != initial_appearance:

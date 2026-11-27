@@ -99,7 +99,7 @@ See the [User Guide](docs/USER_GUIDE.en.md) for detailed instructions and typica
 - **Does it work without an NVIDIA GPU?** Yes. Everything except AI stem separation runs on the CPU.
 - **No audio captured?** Make sure you selected the app that is actually playing sound, or switch to system loopback.
 - **Still running after closing the window?** It may be minimized to the system tray — right-click the tray icon and choose **Exit**.
-- **How do I update?** For now, download the new version from Releases and replace the old one; for the portable build, keep `settings.json` and the `exports\` folder.
+- **Online Updates:** You can check for updates in **Settings** (automatic checks run at most once every 24 hours by default and can be disabled). Update checks only read public release metadata from GitHub and never upload any data; downloaded packages are automatically verified against `SHA256SUMS.txt` from the release. Release builds are not code-signed yet, so Windows SmartScreen may appear on first launch — click **More info → Run anyway**. You can also download a new release manually (for the portable build, keep `settings.json` and the `exports\` folder).
 
 More answers in the [FAQ](docs/FAQ.en.md) and [Glossary](docs/GLOSSARY.en.md).
 
