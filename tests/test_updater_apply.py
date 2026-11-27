@@ -705,13 +705,77 @@ def test_main_acquires_and_releases_app_mutex_in_finally(monkeypatch: pytest.Mon
     import main as main_mod
 
     lifecycle: list[str] = []
+    watchdog_exits: list[int] = []
+
+    class _DummyIcon:
+        def isNull(self) -> bool:
+            return True
+
+    class _DummyApp:
+        def setWindowIcon(self, icon: Any) -> None:
+            pass
+
+        def exec(self) -> int:
+            lifecycle.append("exec")
+            return 0
+
+        def processEvents(self) -> None:
+            pass
+
+    dummy_app = _DummyApp()
+
+    class _DummyQApplication:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        @classmethod
+        def instance(cls) -> _DummyApp:
+            return dummy_app
+
+    class _DummyWindow:
+        def show(self) -> None:
+            pass
+
+        def force_quit(self) -> None:
+            pass
+
+    class _DummyController:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            lifecycle.append("init")
+            self.window = _DummyWindow()
+
+        def start_capture(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def shutdown(self) -> None:
+            lifecycle.append("shutdown")
+
     monkeypatch.setattr(updater_mod, "acquire_app_mutex", lambda *a, **kw: (lifecycle.append("acquire"), 123)[1])
     monkeypatch.setattr(updater_mod, "release_app_mutex", lambda *a, **kw: (lifecycle.append("release"), True)[1])
+    monkeypatch.setattr(main_mod.os, "_exit", lambda code=0: watchdog_exits.append(int(code)))
+    monkeypatch.setattr(main_mod.gc, "collect", lambda *a, **kw: 0)
+    monkeypatch.setattr(main_mod.QtCore.QTimer, "singleShot", lambda *a, **kw: None)
+    monkeypatch.setattr(main_mod, "_load_app_icon", lambda: _DummyIcon())
+    monkeypatch.setattr(main_mod.QtWidgets, "QApplication", _DummyQApplication)
+    monkeypatch.setattr(main_mod, "ListenScopeController", _DummyController)
 
     settings_file = tmp_path / "settings.json"
-    rc = main_mod.main(["--simulate", "--headless-smoke", "--settings", str(settings_file)])
+    rc = main_mod.main(["--settings", str(settings_file)])
     assert rc == 0
+    assert lifecycle == ["acquire", "init", "exec", "shutdown", "release"]
+    assert watchdog_exits == []
+
+    lifecycle.clear()
+
+    class _BoomController:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(main_mod, "ListenScopeController", _BoomController)
+    with pytest.raises(RuntimeError, match="boom"):
+        main_mod.main(["--settings", str(settings_file)])
     assert lifecycle == ["acquire", "release"]
+    assert watchdog_exits == []
 
 
 def test_portable_update_rolls_back_on_phase1_backup_error(
