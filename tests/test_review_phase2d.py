@@ -183,7 +183,7 @@ def test_w9_dev_build_displays_real_version_with_git_short_sha() -> None:
 
     pyproj = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text("utf-8"))
     base_ver = pyproj["project"]["version"]
-    assert base_ver == "1.1.0"
+    assert base_ver == "1.1.0-rc.1"
 
     from core import paths as paths_mod
 

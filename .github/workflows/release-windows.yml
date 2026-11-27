@@ -76,14 +76,21 @@ jobs:
               throw "Tag '$tagName' ($tagVersion) does not match pyproject.toml version ($pyVersion)"
             }
           }
+          if ($pyVersion -match '^(\d+\.\d+\.\d+)-rc\.(\d+)$') {
+            $numericVersion = "$($Matches[1]).$($Matches[2])"
+          } elseif ($pyVersion -match '^(\d+\.\d+\.\d+)$') {
+            $numericVersion = "$($Matches[1]).100"
+          } elseif ($pyVersion -match '^(\d+\.\d+\.\d+)-') {
+            $numericVersion = "$($Matches[1]).0"
+          } else {
+            throw "Cannot derive numeric Windows version from '$pyVersion'"
+          }
           "APP_VERSION=$pyVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "APP_NUMERIC_VERSION=$numericVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "RELEASE_TAG=v$pyVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $shortSha = (git rev-parse --short=7 HEAD).Trim()
           "LISTENSCOPE_GIT_SHA=$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          if ($env:REF_TYPE -eq "tag") {
-            "LISTENSCOPE_BUILD_VERSION=$pyVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          }
-          Write-Host "Resolved APP_VERSION=$pyVersion RELEASE_TAG=v$pyVersion GIT_SHA=$shortSha DRY_RUN=$($env:DRY_RUN_INPUT)"
+          Write-Host "Resolved APP_VERSION=$pyVersion NUMERIC=$numericVersion RELEASE_TAG=v$pyVersion GIT_SHA=$shortSha DRY_RUN=$($env:DRY_RUN_INPUT)"
 
       - name: Install Windows Core dependencies and PyInstaller
         run: |
@@ -98,7 +105,7 @@ jobs:
         run: |
           @"
           BASE_VERSION = "$env:APP_VERSION"
-          BUILD_VERSION = "$env:LISTENSCOPE_BUILD_VERSION"
+          BUILD_VERSION = "$env:APP_VERSION"
           GIT_SHA = "$env:LISTENSCOPE_GIT_SHA"
           "@ | Set-Content -Path "core\_build_info.py" -Encoding utf8
           python -m PyInstaller packaging\listenscope_core.spec --noconfirm --clean
@@ -134,6 +141,18 @@ jobs:
             Remove-Item -Recurse -Force $smokeRoot
           }
           Copy-Item -Path "dist\ListenScopeCore" -Destination $smokeRoot -Recurse -Force
+          $biPath = if (Test-Path (Join-Path $smokeRoot "_internal\core\_build_info.py")) {
+            Join-Path $smokeRoot "_internal\core\_build_info.py"
+          } else {
+            Join-Path $smokeRoot "core\_build_info.py"
+          }
+          if (-not (Test-Path $biPath)) {
+            throw "Missing packaged _build_info.py at $biPath"
+          }
+          $biText = Get-Content -Path $biPath -Raw
+          if ($biText -notmatch ('BUILD_VERSION\s*=\s*"' + [regex]::Escape($env:APP_VERSION) + '"')) {
+            throw "Unexpected BUILD_VERSION in packaged _build_info.py:`n$biText"
+          }
           $smokeExe = Join-Path $smokeRoot "ListenScope.exe"
           $proc = Start-Process -FilePath $smokeExe -ArgumentList @("--simulate", "--headless-smoke") -WorkingDirectory $smokeRoot -PassThru
           if (-not $proc.WaitForExit(45000)) {
@@ -143,7 +162,19 @@ jobs:
           if ($proc.ExitCode -ne 0) {
             throw "Frozen ListenScope.exe smoke test exited with code $($proc.ExitCode)"
           }
-          Write-Host "Relocated frozen smoke test passed (ExitCode=0)"
+          $logFile = Get-ChildItem -Path $smokeRoot -Recurse -Filter "listenscope.log" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $logFile) {
+            throw "Expected listenscope.log under $smokeRoot after frozen smoke test"
+          }
+          $logText = Get-Content -Path $logFile.FullName -Raw
+          $expectedLine = "ListenScope startup version=$($env:APP_VERSION) base=$($env:APP_VERSION)"
+          if ($logText -notmatch [regex]::Escape($expectedLine)) {
+            throw "Frozen exe did not report expected version '$expectedLine' in listenscope.log:`n$logText"
+          }
+          if ($logText -match "ListenScope startup version=[^\r\n]*(-dev|\+)") {
+            throw "Frozen exe reported unexpected -dev/+sha version in listenscope.log:`n$logText"
+          }
+          Write-Host "Relocated frozen smoke test passed (ExitCode=0, version=$($env:APP_VERSION))"
 
       - name: Stage license and notice files into dist\ListenScopeCore
         run: |
@@ -188,7 +219,7 @@ jobs:
           if (-not $iscc -or -not (Test-Path $iscc)) {
             throw "Inno Setup 6 compiler (ISCC.exe) not found after choco install"
           }
-          & $iscc "/DMyAppVersion=$($env:APP_VERSION)" "scripts\installer.iss"
+          & $iscc "/DMyAppVersion=$($env:APP_VERSION)" "/DMyAppNumericVersion=$($env:APP_NUMERIC_VERSION)" "scripts\installer.iss"
           if ($LASTEXITCODE -ne 0) {
             throw "ISCC.exe failed with exit code $LASTEXITCODE"
           }
@@ -251,6 +282,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           $tag = "$env:REF_NAME"
+          $isPrerelease = $tag.Contains("-")
           $notesLines = @(
             "### 安装包说明 (Windows x64 Core)",
             "- **``ListenScope-Setup-Windows-x64.exe``**：Inno Setup 6 单文件安装版（免管理员，默认保留升级后 ``exports\``）。",
@@ -268,6 +300,14 @@ jobs:
             "### 硬件兼容性备注",
             "- 目前已在 **Windows 11 + NVIDIA RTX 5060 Ti (8 GB VRAM) + 16 GB RAM** 环境实测通过；其余显卡与硬件配置尚未全面测试，如遇问题欢迎在 Issues 反馈。"
           )
+          $extraArgs = @()
+          if ($isPrerelease) {
+            $notesLines = @(
+              "**测试版，仅用于验证升级流程**（Pre-release）：本版本仅用于验证应用内在线升级、安装版覆盖与便携版回滚流程，正式使用请等待正式版。",
+              ""
+            ) + $notesLines
+            $extraArgs += "--prerelease"
+          }
           $notesFile = Join-Path $env:RUNNER_TEMP "release-notes.md"
           $notesLines | Set-Content -Path $notesFile -Encoding utf8
           gh release create $tag `
@@ -276,4 +316,5 @@ jobs:
             "dist\release\SHA256SUMS.txt" `
             --title "ListenScope $tag (Windows x64 Core)" `
             --generate-notes `
-            --notes-file $notesFile
+            --notes-file $notesFile `
+            @extraArgs

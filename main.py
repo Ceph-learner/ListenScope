@@ -289,6 +289,13 @@ class ListenScopeController:
         self.log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
         logging.getLogger().addHandler(self.log_handler)
         logging.getLogger().setLevel(logging.INFO)
+        from core.version import get_app_version_display, get_base_version
+
+        logging.getLogger(__name__).info(
+            "ListenScope startup version=%s base=%s",
+            get_app_version_display(),
+            get_base_version(),
+        )
         self._telem_energy: float = 0.0
         self._telem_avg: float = 0.08
         self._telem_climax: float = 0.0

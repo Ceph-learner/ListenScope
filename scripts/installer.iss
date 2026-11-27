@@ -10,7 +10,10 @@
 
 #define MyAppName "ListenScope"
 #ifndef MyAppVersion
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.1.0-rc.1"
+#endif
+#ifndef MyAppNumericVersion
+#define MyAppNumericVersion "1.1.0.1"
 #endif
 #define MyAppPublisher "ListenScope Project"
 #define MyAppExeName "ListenScope.exe"
@@ -20,6 +23,7 @@
 AppId={{D92B6E14-9F1A-4D7E-A78A-3F6F49B8C201}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppNumericVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={code:GetDefaultInstallDir}
 DisableDirPage=no

@@ -11,7 +11,7 @@ import sys
 import tomllib
 
 
-_FALLBACK_BASE_VERSION = "1.1.0"
+_FALLBACK_BASE_VERSION = "1.1.0-rc.1"
 
 
 def _repo_root() -> Path:
