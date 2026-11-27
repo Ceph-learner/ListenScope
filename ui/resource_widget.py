@@ -12,7 +12,7 @@ from core.logging import PerformanceRecord, active_log_dir
 from core.models import ResourceSnapshot, ResourceStatus
 from core.paths import default_export_dir
 from ui.appearance import set_widget_tone
-from ui.acid_style import TelemetryHeader
+from ui.acid_style import TelemetryHeader, TopbarElideLabel
 from ui.help_badge import HelpBadge
 
 
@@ -26,6 +26,8 @@ def _status_to_tone(status: ResourceStatus) -> str:
 
 class ResourceMonitorBar(QtWidgets.QFrame):
     """Compact top-bar resource health capsule."""
+
+    size_hint_widened = QtCore.Signal(int)
 
     def __init__(
         self,
@@ -41,31 +43,79 @@ class ResourceMonitorBar(QtWidgets.QFrame):
         self._compact_mode: bool = False
         self._last_snap: Optional[ResourceSnapshot] = None
         self._lang: str = "zh"
+        self._last_hint_w: int = 0
         self._critical_ram_mb = float(critical_ram_mb)
         self._critical_vram_free_mb = float(critical_vram_free_mb)
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 6, 2)
-        layout.setSpacing(5)
-        layout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetFixedSize)
+        layout.setSpacing(4)
 
-        self.ram_label = QtWidgets.QLabel("RAM -")
+        self.ram_label = TopbarElideLabel("RAM -")
         self.ram_label.setObjectName("monoTelemetry")
         self._sep_lbl = QtWidgets.QLabel("·")
         self._sep_lbl.setObjectName("mutedCaption")
-        self.vram_label = QtWidgets.QLabel("VRAM -")
+        self._sep_lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.vram_label = TopbarElideLabel("VRAM -")
         self.vram_label.setObjectName("monoTelemetry")
-        self.status_badge = QtWidgets.QLabel("Normal")
+        self.status_badge = TopbarElideLabel("Normal")
         self.status_badge.setObjectName("statusBadge")
         set_widget_tone(self.status_badge, "normal")
         for w in (self.ram_label, self.vram_label, self.status_badge):
-            w.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Preferred)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Preferred)
+            w.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Preferred)
 
         layout.addWidget(self.ram_label)
         layout.addWidget(self._sep_lbl)
         layout.addWidget(self.vram_label)
         layout.addSpacing(2)
         layout.addWidget(self.status_badge)
+        self.setToolTip("RAM / VRAM")
+        self.ram_label.setToolTip("RAM -")
+        self.vram_label.setToolTip("VRAM -")
+        self.status_badge.setToolTip("Normal")
+        self._last_hint_w = self.sizeHint().width()
+
+    def estimate_worst_case_width(self, compact: bool, lang: str) -> int:
+        """Estimate worst-case capsule width for `compact` and `lang` using sample long telemetry strings."""
+        lay = self.layout()
+        lm = lay.contentsMargins() if lay is not None else QtCore.QMargins(6, 2, 6, 2)
+        sp = max(0, lay.spacing()) if lay is not None else 4
+        cm = self.contentsMargins()
+        frame_w = self.frameWidth() * 2
+        # Left accent border in QSS is 3px + right border 1px + padding
+        outer_w = max(frame_w + cm.left() + cm.right(), 4) + lm.left() + lm.right()
+
+        badge_fm = self.status_badge.fontMetrics()
+        badge_chrome = max(18, self.status_badge._horizontal_chrome())
+        if compact:
+            badge_samples = (
+                "Normal",
+                "Warn",
+                "Crit",
+                translate_text("低内存", lang),
+            )
+            badge_w = max(badge_fm.horizontalAdvance(s) for s in badge_samples) + badge_chrome
+            est = outer_w + badge_w + 2
+        else:
+            ram_name = "内存" if lang == "zh" else "RAM"
+            vram_name = "显存" if lang == "zh" else "VRAM"
+            ram_fm = self.ram_label.fontMetrics()
+            vram_fm = self.vram_label.fontMetrics()
+            ram_w = ram_fm.horizontalAdvance(f"{ram_name} 99.9G") + self.ram_label._horizontal_chrome()
+            vram_w = vram_fm.horizontalAdvance(f"{vram_name} 99.9/99.9G") + self.vram_label._horizontal_chrome()
+            sep_w = self._sep_lbl.sizeHint().width()
+            badge_samples = (
+                translate_text("Normal", lang),
+                translate_text("Warning", lang),
+                translate_text("Critical", lang),
+                translate_text("内存偏低", lang),
+            )
+            badge_w = max(badge_fm.horizontalAdvance(s) for s in badge_samples) + badge_chrome
+            est = outer_w + ram_w + sep_w + vram_w + badge_w + sp * 3 + 2
+        if bool(compact) == self._compact_mode and lang == self._lang:
+            est = max(est, self.sizeHint().width())
+        return est
 
     def set_compact_mode(self, compact: bool, *, lang: Optional[str] = None) -> None:
         compact_b = bool(compact)
@@ -83,21 +133,24 @@ class ResourceMonitorBar(QtWidgets.QFrame):
         lay = self.layout()
         if lay is not None:
             lay.activate()
-        self.setMinimumWidth(self.sizeHint().width())
         self.updateGeometry()
+        self._last_hint_w = self.sizeHint().width()
 
     def _set_text_if_changed(self, key: str, lbl: QtWidgets.QLabel, text: str) -> None:
         if self._cached_texts.get(key) != text:
             self._cached_texts[key] = text
             lbl.setText(text)
-            lbl.setMinimumWidth(lbl.sizeHint().width())
-            lbl.adjustSize()
             lbl.updateGeometry()
             lay = self.layout()
             if lay is not None:
                 lay.activate()
-            self.setMinimumWidth(self.sizeHint().width())
+            new_hint_w = self.sizeHint().width()
             self.updateGeometry()
+            if new_hint_w > self._last_hint_w:
+                self._last_hint_w = new_hint_w
+                self.size_hint_widened.emit(new_hint_w)
+            else:
+                self._last_hint_w = new_hint_w
             parent = self.parentWidget()
             if parent is not None and parent.layout() is not None:
                 parent.layout().activate()
@@ -128,6 +181,8 @@ class ResourceMonitorBar(QtWidgets.QFrame):
         if snap.vram_total_mb is not None and snap.vram_free_mb is not None:
             detail_tip += f" | VRAM Free: {snap.vram_free_mb:.0f}/{snap.vram_total_mb:.0f} MB"
         self.setToolTip(detail_tip)
+        self.ram_label.setToolTip(detail_tip)
+        self.vram_label.setToolTip(detail_tip)
 
         crit_ram = self._critical_ram_mb if critical_ram_mb is None else float(critical_ram_mb)
         crit_vram = self._critical_vram_free_mb if critical_vram_free_mb is None else float(critical_vram_free_mb)

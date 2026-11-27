@@ -1320,6 +1320,16 @@ P2H_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "중지됨",
         "ja": "停止しました",
     },
+    "⚠ 静音": {
+        "en": "⚠ Silent",
+        "ko": "⚠ 무음",
+        "ja": "⚠ 無音",
+    },
+    "[兜底] 系统 WASAPI Loopback（会混入其他应用声音；设备名过长时末尾以「…」省略）": {
+        "en": "[Fallback] System WASAPI Loopback (may capture other apps; long device names elide at the end with '…')",
+        "ko": "[폴백] 시스템 WASAPI Loopback (다른 앱 소리가 섞일 수 있음; 긴 장치 이름은 끝에 '…'으로 생략됨)",
+        "ja": "[フォールバック] システム WASAPI Loopback（他アプリの音声が混入する場合あり；長いデバイス名は末尾を「…」で省略）",
+    },
 }
 
 P2H_DYNAMIC_REGEX_RULES: tuple[tuple[_re.Pattern[str], dict[str, str]], ...] = (
@@ -1337,6 +1347,14 @@ P2H_DYNAMIC_REGEX_RULES: tuple[tuple[_re.Pattern[str], dict[str, str]], ...] = (
             "en": r"[Fallback] System WASAPI Loopback · \1",
             "ko": r"[폴백] 시스템 WASAPI Loopback · \1",
             "ja": r"[フォールバック] システム WASAPI Loopback · \1",
+        },
+    ),
+    (
+        _re.compile(r"^\[兜底\]\s+(.+)$"),
+        {
+            "en": r"[Fallback] \1",
+            "ko": r"[폴백] \1",
+            "ja": r"[フォールバック] \1",
         },
     ),
     (

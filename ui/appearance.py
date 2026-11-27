@@ -239,8 +239,8 @@ QPushButton#windowCtrlBtn {{
     border: 1px solid transparent;
     border-radius: 4px;
     padding: 0px;
-    min-width: 46px;
-    max-width: 46px;
+    min-width: 36px;
+    max-width: 36px;
     min-height: 32px;
     max-height: 32px;
     font-weight: 700;
@@ -256,8 +256,8 @@ QPushButton#windowCloseBtn {{
     border: 1px solid transparent;
     border-radius: 4px;
     padding: 0px;
-    min-width: 46px;
-    max-width: 46px;
+    min-width: 36px;
+    max-width: 36px;
     min-height: 32px;
     max-height: 32px;
     font-weight: 700;

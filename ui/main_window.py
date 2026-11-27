@@ -86,6 +86,7 @@ from .acid_style import (
     SignalLockDot,
     TelemetryHeader,
     TelemetryPulseStrip,
+    TopbarElideLabel,
     WindowGlyphButton,
     WorkspaceRailHandle,
     acid_stylesheet,
@@ -606,6 +607,17 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._last_capture_status_txt = "未捕获"
         self._last_coverage_txt = "已缓冲: 0.0 / 120.0 s"
         self._last_ai_badge_txt = "AI: Idle"
+        self._last_capture_stats: Optional[CaptureStats] = None
+        self._capture_compact_mode: bool = False
+        self._topbar_collapse_stage: int = 0
+        self._is_sec_icon_only: bool = False
+        self._is_estop_short_top: bool = False
+        self._in_responsive_layout: bool = False
+        self._initializing_geometry: bool = False
+        self._has_explicit_layout: bool = False
+        self._last_capture_hint_w: int = 0
+        self._last_resource_hint_w: int = 0
+        self._loopback_device_name: str = ""
         self._hist_x_key: Optional[tuple[int, float, float]] = None
         self._hist_x_buf: Optional[np.ndarray] = None
         self._last_hist_empty = False
@@ -652,7 +664,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         self._topbar_cmd_row = row_cmd = QtWidgets.QHBoxLayout()
         row_cmd.setContentsMargins(0, 0, 0, 0)
-        row_cmd.setSpacing(5)
+        row_cmd.setSpacing(4)
 
         self._brand_badge = ChamferBadge("LS", size=QtCore.QSize(28, 28), chamfer=6)
         self._brand_badge.setToolTip("LISTENSCOPE // 实时音频分析与吉他扒谱工作台")
@@ -691,6 +703,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         )
         self.source_combo.currentIndexChanged.connect(self._sync_source_combo_tooltip)
         self.refresh_btn = QtWidgets.QPushButton("刷新")
+        self.refresh_btn.setObjectName("refreshBtn")
         self.refresh_btn.setToolTip("刷新音频进程列表")
         self.refresh_btn.clicked.connect(self.refresh_sources_requested.emit)
 
@@ -701,11 +714,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.clicked.connect(self._on_capture_clicked)
 
         self._capture_dot = SignalLockDot()
-        self.capture_status_lbl = QtWidgets.QLabel("未捕获")
+        self.capture_status_lbl = TopbarElideLabel("未捕获")
         self.capture_status_lbl.setObjectName("captureStatus")
+        self.capture_status_lbl.setToolTip("未捕获")
         set_widget_tone(self.capture_status_lbl, "info")
 
         self.freeze_screen_btn = QtWidgets.QPushButton("冻结")
+        self.freeze_screen_btn.setObjectName("freezeBtn")
         self.freeze_screen_btn.setCheckable(True)
         self.freeze_screen_btn.setToolTip("冻结/恢复实时频谱、和弦、调性与音准画面刷新 (快捷键 F)")
         self.freeze_screen_btn.toggled.connect(self.set_freeze_screen)
@@ -731,8 +746,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         row_cmd.addWidget(self._topbar_vdiv)
 
         self.resource_bar = ResourceMonitorBar()
-        self.ai_status_badge = QtWidgets.QLabel("AI: Idle")
+        self.ai_status_badge = TopbarElideLabel("AI: Idle")
         self.ai_status_badge.setObjectName("aiStatusBadge")
+        self.ai_status_badge.setToolTip("AI: Idle")
         set_widget_tone(self.ai_status_badge, "info")
         self.ai_status_badge.setVisible(False)
 
@@ -760,6 +776,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._pill_light.setChecked(True)
 
         self.settings_btn = QtWidgets.QPushButton("设置")
+        self.settings_btn.setObjectName("settingsBtn")
         self.settings_btn.setToolTip("CONFIG // 设置与系统状态")
         self.settings_btn.clicked.connect(self.open_settings_dialog)
 
@@ -1176,10 +1193,21 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._frame_clock = FrameClock(self, default_hz=60)
         self._frame_clock.tick.connect(self._on_frame_tick)
 
-        self.center_on_screen()
-        self._init_system_tray()
-        install_tooltip_guard(self)
-        self.apply_appearance(appearance, force_theme=True)
+        self._topbar_relayout_timer = QtCore.QTimer(self)
+        self._topbar_relayout_timer.setSingleShot(True)
+        self._topbar_relayout_timer.setInterval(200)
+        self._topbar_relayout_timer.timeout.connect(self._on_debounced_topbar_relayout)
+        self.resource_bar.size_hint_widened.connect(self._on_capsule_hint_widened)
+
+        self._initializing_geometry = True
+        try:
+            self.center_on_screen()
+            self._init_system_tray()
+            install_tooltip_guard(self)
+            self.apply_appearance(appearance, force_theme=True)
+        finally:
+            self._initializing_geometry = False
+            self._has_explicit_layout = False
 
     def center_on_screen(self) -> None:
         """Adapt initial window size to screen available geometry and center cleanly on the primary screen."""
@@ -1441,8 +1469,15 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             geom.setBottom(new_bottom)
         self.setGeometry(geom)
 
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._has_explicit_layout = True
+        self._apply_responsive_layout()
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
+        if not getattr(self, "_initializing_geometry", False):
+            self._has_explicit_layout = True
         self._apply_responsive_layout()
         self._update_rounded_mask()
 
@@ -1484,6 +1519,115 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.recent_30_btn.click()
         self._on_sep_2stem()
 
+    def _schedule_topbar_relayout(self) -> None:
+        if getattr(self, "_in_responsive_layout", False) or getattr(self, "_tearing_down", False):
+            return
+        timer = getattr(self, "_topbar_relayout_timer", None)
+        if timer is not None and _is_qt_valid(timer):
+            timer.start()
+
+    def _on_capsule_hint_widened(self, new_w: int) -> None:
+        if new_w > getattr(self, "_last_resource_hint_w", 0):
+            self._last_resource_hint_w = int(new_w)
+            self._schedule_topbar_relayout()
+
+    def _on_debounced_topbar_relayout(self) -> None:
+        if getattr(self, "_tearing_down", False):
+            return
+        self._apply_responsive_layout()
+
+    def _estimate_button_width(self, btn: QtWidgets.QPushButton, text: str) -> int:
+        opt = QtWidgets.QStyleOptionButton()
+        btn.initStyleOption(opt)
+        opt.text = text
+        fm = btn.fontMetrics()
+        icon_w = btn.iconSize().width() if not btn.icon().isNull() else 0
+        icon_h = btn.iconSize().height() if icon_w > 0 else 0
+        txt_sz = fm.size(QtCore.Qt.TextFlag.TextShowMnemonic, text) if text else QtCore.QSize(0, fm.height())
+        cw = txt_sz.width() + (icon_w + (4 if (text and icon_w > 0) else 0))
+        ch = max(txt_sz.height(), icon_h)
+        styled = btn.style().sizeFromContents(
+            QtWidgets.QStyle.ContentsType.CT_PushButton,
+            opt,
+            QtCore.QSize(cw, ch),
+            btn,
+        )
+        return max(cw + 12, styled.width()) + 2
+
+    def _estimate_capture_status_width(self, compact: bool, lang: str) -> int:
+        fm = self.capture_status_lbl.fontMetrics()
+        chrome = (
+            max(18, self.capture_status_lbl._horizontal_chrome())
+            if hasattr(self.capture_status_lbl, "_horizontal_chrome")
+            else 18
+        )
+        if compact:
+            samples = (
+                "⚠ -120 dB",
+                translate_text("⚠ 静音", lang),
+                translate_text("未捕获", lang),
+            )
+        else:
+            samples = (
+                translate_text("[混入警告] 有信号 · -120.0 dBFS", lang),
+                translate_text("[混入警告] 静音 · -120.0 dBFS", lang),
+            )
+        est = max(fm.horizontalAdvance(s) for s in samples) + chrome + 2
+        if bool(compact) == getattr(self, "_capture_compact_mode", False):
+            est = max(est, self.capture_status_lbl.sizeHint().width())
+        return est
+
+    def _render_capture_status_label(self) -> None:
+        stats = getattr(self, "_last_capture_stats", None)
+        lang = get_current_language()
+        if stats is None or not stats.is_running:
+            tone = "info"
+            full_raw = "未捕获"
+            disp_raw = "未捕获"
+        else:
+            silence = "静音" if stats.is_silent else "有信号"
+            if stats.mode == CaptureMode.SYSTEM_LOOPBACK:
+                tone = "warn"
+                prefix = "[混入警告] "
+            elif not stats.is_silent:
+                tone = "ok"
+                prefix = ""
+            else:
+                tone = "info"
+                prefix = ""
+            full_raw = f"{prefix}{silence} · {stats.rms_dbfs:.1f} dBFS"
+            compact_active = bool(
+                getattr(self, "_capture_compact_mode", False)
+                and (self.isVisible() or getattr(self, "_has_explicit_layout", False))
+            )
+            if compact_active:
+                db_int = int(round(stats.rms_dbfs))
+                if stats.mode == CaptureMode.SYSTEM_LOOPBACK:
+                    disp_raw = "⚠ 静音" if stats.is_silent else f"⚠ {db_int} dB"
+                else:
+                    disp_raw = "静音" if stats.is_silent else f"{db_int} dB"
+            else:
+                disp_raw = full_raw
+
+        set_widget_tone(self.capture_status_lbl, tone)
+        full_txt = translate_text(full_raw, lang)
+        status_txt = translate_text(disp_raw, lang)
+        self.capture_status_lbl.setToolTip(full_txt)
+        cur_full = (
+            self.capture_status_lbl.full_text()
+            if hasattr(self.capture_status_lbl, "full_text")
+            else self.capture_status_lbl.text()
+        )
+        if status_txt != cur_full or self._last_capture_status_txt != status_txt:
+            self.capture_status_lbl.setProperty("_ls_orig_text", disp_raw)
+            self.capture_status_lbl.setMinimumWidth(0)
+            self.capture_status_lbl.setText(status_txt)
+            self._last_capture_status_txt = status_txt
+            new_hint = self.capture_status_lbl.sizeHint().width()
+            if new_hint > getattr(self, "_last_capture_hint_w", 0) and not getattr(self, "_in_responsive_layout", False):
+                self._schedule_topbar_relayout()
+            self._last_capture_hint_w = new_hint
+
     def _apply_responsive_layout(self) -> None:
         w = max(1, self.width())
         h = max(1, self.height())
@@ -1491,95 +1635,166 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         compact_w = w <= 500
         self._compact_window_mode = compact_h or compact_w
 
-        # Tighten shell and topbar padding on short/narrow screens
-        self._workspace_layout.setContentsMargins(4 if compact_h else 8, 2 if compact_h else 6, 4 if compact_h else 8, 2 if compact_h else 6)
-        self._workspace_layout.setSpacing(2 if compact_h else 5)
-        self._topbar_v.setContentsMargins(8, 3 if compact_h else 4, 8, 3 if compact_h else 4)
-        self._topbar_v.setSpacing(0)
-        self._brand_eye.setVisible(False)
-        self._topbar_divider.setVisible(False)
-        self._shortcut_pill.setVisible(False)
-        self._skin_badge.setVisible(False)
-        lang = get_current_language()
-        top_m = self._topbar_v.contentsMargins()
-        cmd_m = self._topbar_cmd_row.contentsMargins()
-        src_min = max(116, self.source_combo.fontMetrics().horizontalAdvance("0123456789AB") + 32)
-        self.source_combo.setMinimumWidth(src_min)
-        wide_btn_texts = {
-            self.refresh_btn: translate_text("刷新", lang),
-            self.settings_btn: tr("btn_settings", lang),
-            self.freeze_screen_btn: translate_text("恢复画面" if getattr(self, "_freeze_screen", False) else "冻结画面", lang),
-            self.capture_btn: tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang),
-            self.emergency_stop_btn: tr("btn_estop", lang),
-        }
+        timer = getattr(self, "_topbar_relayout_timer", None)
+        if timer is not None and _is_qt_valid(timer):
+            timer.stop()
 
-        def _compute_wide_req() -> int:
-            req = top_m.left() + top_m.right() + cmd_m.left() + cmd_m.right() + 8
-            vis_items = 0
-            for i in range(self._topbar_cmd_row.count()):
-                wdg = self._topbar_cmd_row.itemAt(i).widget()
-                if wdg is None:
-                    continue
-                if wdg in (self.ai_status_badge, self._hazard_bar) and not wdg.isVisible():
-                    continue
-                vis_items += 1
-                if wdg is self.source_combo:
-                    req += src_min
-                elif wdg is self._skin_switcher:
-                    sm = self._skin_switcher.layout().contentsMargins()
-                    sp = max(0, self._skin_switcher.layout().spacing())
-                    d_w = self._pill_dark.fontMetrics().horizontalAdvance(translate_text("黑夜", lang)) + 28
-                    l_w = self._pill_light.fontMetrics().horizontalAdvance(translate_text("白天", lang)) + 28
-                    req += sm.left() + sm.right() + sp + d_w + l_w
-                elif wdg in wide_btn_texts:
-                    req += wdg.fontMetrics().horizontalAdvance(wide_btn_texts[wdg]) + 32
-                else:
-                    req += max(wdg.minimumWidth(), wdg.sizeHint().width())
-            req += max(0, self._topbar_cmd_row.spacing()) * max(0, vis_items - 1)
-            return req
+        self._in_responsive_layout = True
+        try:
+            # Tighten shell and topbar padding on short/narrow screens
+            self._workspace_layout.setContentsMargins(
+                4 if compact_h else 8, 2 if compact_h else 6, 4 if compact_h else 8, 2 if compact_h else 6
+            )
+            self._workspace_layout.setSpacing(2 if compact_h else 5)
+            self._topbar_v.setContentsMargins(6, 3 if compact_h else 4, 6, 3 if compact_h else 4)
+            self._topbar_v.setSpacing(0)
+            self._brand_eye.setVisible(False)
+            self._topbar_divider.setVisible(False)
+            self._shortcut_pill.setVisible(False)
+            self._skin_badge.setVisible(False)
+            lang = get_current_language()
+            ws_m = self._workspace_layout.contentsMargins()
+            top_m = self._topbar_v.contentsMargins()
+            cmd_m = self._topbar_cmd_row.contentsMargins()
+            avail_w = max(1, w - ws_m.left() - ws_m.right() - 2)
+            src_min = max(116, self.source_combo.fontMetrics().horizontalAdvance("0123456789AB") + 32)
+            self.source_combo.setMinimumWidth(src_min)
 
-        # Stage 1: Prefer wide resource_bar when w >= 1200; if topbar doesn't fit, compact resource_bar first
-        if hasattr(self, "resource_bar"):
-            self.resource_bar.set_compact_mode(w < 1200, lang=lang)
-            if self.resource_bar.layout() is not None:
-                self.resource_bar.layout().activate()
-            self.resource_bar.updateGeometry()
-        wide_req = _compute_wide_req()
-        if w < wide_req and hasattr(self, "resource_bar") and not self.resource_bar._compact_mode:
-            self.resource_bar.set_compact_mode(True, lang=lang)
-            if self.resource_bar.layout() is not None:
-                self.resource_bar.layout().activate()
-            self.resource_bar.updateGeometry()
-            wide_req = _compute_wide_req()
-        # Stage 2: Only collapse topbar buttons to icon-only if still wider than available width
-        narrow_top = w < wide_req
-        self._is_narrow_top = narrow_top
-        if hasattr(self, "_pill_dark") and hasattr(self, "_pill_light") and hasattr(self, "_theme_icon_btn"):
-            self._pill_dark.setVisible(not narrow_top)
-            self._pill_light.setVisible(not narrow_top)
-            self._theme_icon_btn.setVisible(narrow_top)
-            self._theme_icon_btn.setMinimumWidth(self._theme_icon_btn.sizeHint().width() if narrow_top else 0)
-        if hasattr(self, "refresh_btn"):
-            self.refresh_btn.setText("" if narrow_top else translate_text("刷新", lang))
-            self.refresh_btn.setMinimumWidth(self.refresh_btn.sizeHint().width())
-        if hasattr(self, "settings_btn"):
-            self.settings_btn.setText("" if narrow_top else tr("btn_settings", lang))
-            self.settings_btn.setMinimumWidth(self.settings_btn.sizeHint().width())
-        if hasattr(self, "freeze_screen_btn"):
-            freeze_full = translate_text("恢复画面" if getattr(self, "_freeze_screen", False) else "冻结画面", lang)
-            self.freeze_screen_btn.setText("" if narrow_top else freeze_full)
-            self.freeze_screen_btn.setMinimumWidth(self.freeze_screen_btn.sizeHint().width())
-        if hasattr(self, "capture_btn"):
-            cap_full = tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang)
-            self.capture_btn.setText("" if narrow_top else cap_full)
-            self.capture_btn.setMinimumWidth(self.capture_btn.sizeHint().width())
-        if hasattr(self, "emergency_stop_btn"):
-            estop_full = tr("btn_estop", lang)
-            estop_txt = tr("btn_estop_short", lang) if narrow_top else estop_full
-            self.emergency_stop_btn.setAccessibleName(estop_full)
-            self.emergency_stop_btn.setText(estop_txt)
-            self.emergency_stop_btn.setMinimumWidth(self.emergency_stop_btn.sizeHint().width())
-            self.emergency_stop_btn.adjustSize()
+            btn_worst_texts = {
+                self.refresh_btn: (translate_text("刷新", lang),),
+                self.settings_btn: (tr("btn_settings", lang),),
+                self.freeze_screen_btn: (
+                    translate_text("冻结画面", lang),
+                    translate_text("恢复画面", lang),
+                ),
+            }
+            cap_worst_texts = (tr("btn_start_capture", lang), tr("btn_stop_capture", lang))
+            dark_lbl = translate_text("黑夜", lang)
+            light_lbl = translate_text("白天", lang)
+            estop_full_lbl = tr("btn_estop", lang)
+            estop_short_lbl = tr("btn_estop_short", lang)
+
+            def _compute_stage_req(
+                cap_compact: bool,
+                res_compact: bool,
+                theme_merged: bool,
+                sec_icon_only: bool,
+                cap_icon_only: bool,
+                estop_short: bool,
+            ) -> int:
+                req = top_m.left() + top_m.right() + cmd_m.left() + cmd_m.right() + 4
+                vis_items = 0
+                for i in range(self._topbar_cmd_row.count()):
+                    wdg = self._topbar_cmd_row.itemAt(i).widget()
+                    if wdg is None:
+                        continue
+                    if wdg in (self.ai_status_badge, self._hazard_bar) and not wdg.isVisible():
+                        continue
+                    vis_items += 1
+                    if wdg is self.source_combo:
+                        req += src_min
+                    elif wdg is self.capture_status_lbl:
+                        req += self._estimate_capture_status_width(cap_compact, lang)
+                    elif wdg is self.resource_bar:
+                        req += self.resource_bar.estimate_worst_case_width(res_compact, lang)
+                    elif wdg is self._skin_switcher:
+                        sm = self._skin_switcher.layout().contentsMargins()
+                        sp = max(0, self._skin_switcher.layout().spacing())
+                        if theme_merged:
+                            req += sm.left() + sm.right() + self._estimate_button_width(self._theme_icon_btn, "")
+                        else:
+                            d_w = self._estimate_button_width(self._pill_dark, dark_lbl)
+                            l_w = self._estimate_button_width(self._pill_light, light_lbl)
+                            req += sm.left() + sm.right() + sp + d_w + l_w
+                    elif wdg in btn_worst_texts:
+                        if sec_icon_only:
+                            req += self._estimate_button_width(wdg, "")
+                        else:
+                            req += max(self._estimate_button_width(wdg, t) for t in btn_worst_texts[wdg])
+                    elif wdg is self.capture_btn:
+                        if cap_icon_only:
+                            req += self._estimate_button_width(self.capture_btn, "")
+                        else:
+                            req += max(self._estimate_button_width(self.capture_btn, t) for t in cap_worst_texts)
+                    elif wdg is self.emergency_stop_btn:
+                        req += self._estimate_button_width(
+                            self.emergency_stop_btn, estop_short_lbl if estop_short else estop_full_lbl
+                        )
+                    else:
+                        req += max(wdg.minimumWidth(), wdg.sizeHint().width())
+                req += max(0, self._topbar_cmd_row.spacing()) * max(0, vis_items - 1)
+                return req
+
+            # 4-stage progressive collapse:
+            # 0: all wide
+            # 1: capture status short ("⚠ -28 dB")
+            # 2: + resource capsule compact
+            # 3: + theme pills merged into single toggle button
+            # 4: + secondary buttons icon-only (capture_btn & E-STOP full text preserved)
+            # 5/6: ultra-narrow safety (shorten E-STOP label, then icon-only capture_btn)
+            stages = (
+                (0, False, False, False, False, False, False),
+                (1, True, False, False, False, False, False),
+                (2, True, True, False, False, False, False),
+                (3, True, True, True, False, False, False),
+                (4, True, True, True, True, False, False),
+                (5, True, True, True, True, False, True),
+                (6, True, True, True, True, True, True),
+            )
+            chosen = stages[-1]
+            for st in stages:
+                if avail_w >= _compute_stage_req(st[1], st[2], st[3], st[4], st[5], st[6]):
+                    chosen = st
+                    break
+
+            stage_id, cap_compact, res_compact, theme_merged, sec_icon_only, cap_icon_only, estop_short = chosen
+            self._topbar_collapse_stage = stage_id
+            self._capture_compact_mode = cap_compact
+            self._is_sec_icon_only = sec_icon_only
+            self._is_narrow_top = cap_icon_only
+            self._is_estop_short_top = estop_short
+
+            if hasattr(self, "resource_bar"):
+                self.resource_bar.set_compact_mode(res_compact, lang=lang)
+                if self.resource_bar.layout() is not None:
+                    self.resource_bar.layout().activate()
+                self.resource_bar.updateGeometry()
+            if hasattr(self, "capture_status_lbl"):
+                self.capture_status_lbl.setMinimumWidth(0)
+                self._render_capture_status_label()
+            if hasattr(self, "_pill_dark") and hasattr(self, "_pill_light") and hasattr(self, "_theme_icon_btn"):
+                self._pill_dark.setVisible(not theme_merged)
+                self._pill_light.setVisible(not theme_merged)
+                self._theme_icon_btn.setVisible(theme_merged)
+                self._theme_icon_btn.setMinimumWidth(self._theme_icon_btn.sizeHint().width() if theme_merged else 0)
+            if hasattr(self, "refresh_btn"):
+                self.refresh_btn.setText("" if sec_icon_only else translate_text("刷新", lang))
+                self.refresh_btn.setMinimumWidth(self.refresh_btn.sizeHint().width())
+            if hasattr(self, "settings_btn"):
+                self.settings_btn.setText("" if sec_icon_only else tr("btn_settings", lang))
+                self.settings_btn.setMinimumWidth(self.settings_btn.sizeHint().width())
+            if hasattr(self, "freeze_screen_btn"):
+                freeze_full = translate_text("恢复画面" if getattr(self, "_freeze_screen", False) else "冻结画面", lang)
+                self.freeze_screen_btn.setText("" if sec_icon_only else freeze_full)
+                self.freeze_screen_btn.setMinimumWidth(self.freeze_screen_btn.sizeHint().width())
+            if hasattr(self, "capture_btn"):
+                cap_full = tr("btn_stop_capture", lang) if self.capture_btn.isChecked() else tr("btn_start_capture", lang)
+                self.capture_btn.setText("" if cap_icon_only else cap_full)
+                self.capture_btn.setMinimumWidth(self.capture_btn.sizeHint().width())
+            if hasattr(self, "emergency_stop_btn"):
+                estop_txt = estop_short_lbl if estop_short else estop_full_lbl
+                self.emergency_stop_btn.setAccessibleName(estop_full_lbl)
+                self.emergency_stop_btn.setText(estop_txt)
+                self.emergency_stop_btn.setMinimumWidth(self.emergency_stop_btn.sizeHint().width())
+                self.emergency_stop_btn.adjustSize()
+
+            self._topbar_cmd_row.activate()
+            if hasattr(self, "capture_status_lbl"):
+                self._last_capture_hint_w = self.capture_status_lbl.sizeHint().width()
+            if hasattr(self, "resource_bar"):
+                self._last_resource_hint_w = self.resource_bar.sizeHint().width()
+        finally:
+            self._in_responsive_layout = False
 
         # Default A/B panel to compact single-row mode; user can expand via '⋯ 更多'
         if self._ab_more_user_override is None:
@@ -2009,7 +2224,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.settings_btn.setText(tr("btn_settings", lang))
             self.source_combo.setPlaceholderText(translate_text("选择音源…", lang))
             self.emergency_stop_btn.setAccessibleName(tr("btn_estop", lang))
-            self.emergency_stop_btn.setText("" if self.width() < 920 else tr("btn_estop", lang))
+            self.emergency_stop_btn.setText(
+                tr("btn_estop_short", lang) if getattr(self, "_is_estop_short_top", False) else tr("btn_estop", lang)
+            )
             self._history_box.setTitle(
                 tr_telemetry(
                     "RING BUFFER // 120S HISTORY · A/B LOOP + AI DISPATCH (~46MB)",
@@ -2043,7 +2260,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.settings_btn.setText(tr("btn_settings", lang))
             self.source_combo.setPlaceholderText(translate_text("选择音源…", lang))
             self.emergency_stop_btn.setAccessibleName(tr("btn_estop", lang))
-            self.emergency_stop_btn.setText("" if self.width() < 920 else tr("btn_estop", lang))
+            self.emergency_stop_btn.setText(
+                tr("btn_estop_short", lang) if getattr(self, "_is_estop_short_top", False) else tr("btn_estop", lang)
+            )
             self._history_box.setTitle(
                 tr_telemetry(
                     "120S HISTORY BUFFER · A/B LOOP (~46MB) + AI SEPARATION",
@@ -2275,6 +2494,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self._tray_icon.setIcon(_load_tray_icon(taskbar_light=tray_light))
         # Re-apply Acid telemetry tab/header labels so fixed English + single localized caption stays crisp
         self._sync_acid_chrome(variant in ("light", "dark"), variant)
+        self._refresh_loopback_source_combo_i18n(appearance.language)
         self._apply_responsive_layout()
         if was_visible and saved_geom is not None and saved_geom.isValid() and not self.isMaximized():
             if self.geometry() != saved_geom:
@@ -2359,6 +2579,12 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self._tearing_down = True
         if hasattr(self, "_frame_clock"):
             self._frame_clock.stop()
+        relayout_timer = getattr(self, "_topbar_relayout_timer", None)
+        if _is_qt_valid(relayout_timer):
+            try:
+                relayout_timer.stop()
+            except RuntimeError:
+                pass
 
         for w_name in ("_shell_frame", "_topbar_frame"):
             w = getattr(self, w_name, None)
@@ -2786,7 +3012,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         data = self.source_combo.currentData()
         cur = self.source_combo.currentText().strip()
         if isinstance(data, dict) and data.get("kind") == "system_loopback":
-            generic = translate_text("[兜底] 系统 WASAPI Loopback (会混入其他应用声音)", lang)
+            generic = translate_text(
+                "[兜底] 系统 WASAPI Loopback（会混入其他应用声音；设备名过长时末尾以「…」省略）",
+                lang,
+            )
             dev_name = str(getattr(self, "_loopback_device_name", "") or "").strip()
             if dev_name:
                 tip = f"{dev_name}\n{generic}"
@@ -2801,8 +3030,29 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if self.source_combo.toolTip() != tip:
             self.source_combo.setToolTip(tip)
 
+    def _refresh_loopback_source_combo_i18n(self, lang: str) -> None:
+        dev_name = str(getattr(self, "_loopback_device_name", "") or "").strip()
+        if not dev_name or not hasattr(self, "source_combo"):
+            return
+        generic_loop = translate_text(
+            "[兜底] 系统 WASAPI Loopback（会混入其他应用声音；设备名过长时末尾以「…」省略）",
+            lang,
+        )
+        item_tip = f"{dev_name}\n{generic_loop}"
+        disp_loop = translate_text(f"[兜底] {dev_name}", lang)
+        for idx in range(self.source_combo.count()):
+            data = self.source_combo.itemData(idx)
+            if isinstance(data, dict) and data.get("kind") == "system_loopback":
+                if self.source_combo.itemText(idx) != disp_loop:
+                    self.source_combo.setItemText(idx, disp_loop)
+                if self.source_combo.itemData(idx, QtCore.Qt.ItemDataRole.ToolTipRole) != item_tip:
+                    self.source_combo.setItemData(idx, item_tip, QtCore.Qt.ItemDataRole.ToolTipRole)
+                break
+        self._sync_source_combo_tooltip()
+
     def populate_audio_sources(self, processes: list[AudioProcessInfo], *, include_synthetic: bool = True) -> None:
         prev = self.source_combo.currentData()
+        lang = get_current_language()
         self.source_combo.clear()
         for p in processes:
             label = f"[进程] {p.name} (PID {p.pid}, RSS {p.rss_mb:.0f}MB)"
@@ -2811,12 +3061,18 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 {"kind": "process", "pid": p.pid, "name": p.name},
             )
             self.source_combo.setItemData(self.source_combo.count() - 1, label, QtCore.Qt.ItemDataRole.ToolTipRole)
-        loop_label = "[兜底] 系统 WASAPI Loopback (会混入其他应用声音)"
+        dev_name = str(getattr(self, "_loopback_device_name", "") or "").strip()
+        if dev_name:
+            loop_label = translate_text(f"[兜底] {dev_name}", lang)
+            loop_tip = f"{dev_name}\n{translate_text('[兜底] 系统 WASAPI Loopback（会混入其他应用声音；设备名过长时末尾以「…」省略）', lang)}"
+        else:
+            loop_label = "[兜底] 系统 WASAPI Loopback (会混入其他应用声音)"
+            loop_tip = translate_text(loop_label, lang)
         self.source_combo.addItem(
             loop_label,
             {"kind": "system_loopback"},
         )
-        self.source_combo.setItemData(self.source_combo.count() - 1, loop_label, QtCore.Qt.ItemDataRole.ToolTipRole)
+        self.source_combo.setItemData(self.source_combo.count() - 1, loop_tip, QtCore.Qt.ItemDataRole.ToolTipRole)
         if include_synthetic:
             syn_label = "[测试信号] Synthetic Switching (440Hz/静音/659Hz)"
             self.source_combo.addItem(
@@ -2843,10 +3099,8 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.capture_btn.blockSignals(False)
         if not active:
             self._last_capture_banner = None
-            set_widget_tone(self.capture_status_lbl, "info")
-            _set_label_cached(self.capture_status_lbl, "未捕获")
-            self.capture_status_lbl.setMinimumWidth(self.capture_status_lbl.sizeHint().width())
-            self._last_capture_status_txt = self.capture_status_lbl.text()
+            self._last_capture_stats = None
+            self._render_capture_status_label()
 
     def dismiss_banner(self) -> None:
         self._last_capture_banner = None
@@ -2889,36 +3143,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def update_capture_stats(self, stats: CaptureStats, ring_available_sec: float) -> None:
         if self.capture_btn.isChecked() != stats.is_running:
             self.set_capture_active_ui(stats.is_running)
+        self._last_capture_stats = stats
+        self._render_capture_status_label()
         lang = get_current_language()
-        silence = "静音" if stats.is_silent else "有信号"
-        if stats.mode == CaptureMode.SYSTEM_LOOPBACK:
-            tone = "warn"
-            prefix = "[混入警告] "
-        elif stats.is_running and not stats.is_silent:
-            tone = "ok"
-            prefix = ""
-        else:
-            tone = "info"
-            prefix = ""
-        set_widget_tone(self.capture_status_lbl, tone)
-        full_raw = f"{prefix}{silence} · {stats.rms_dbfs:.1f} dBFS" if stats.is_running else "未捕获"
-        full_txt = translate_text(full_raw, lang)
-        self.capture_status_lbl.setToolTip(full_txt)
-        if self.width() < 1100:
-            if not stats.is_running:
-                disp_raw = "未捕获"
-            elif stats.mode == CaptureMode.SYSTEM_LOOPBACK:
-                disp_raw = "[混入警告] 静音" if stats.is_silent else "[混入警告] 有信号"
-            else:
-                disp_raw = "静音" if stats.is_silent else "已捕获"
-        else:
-            disp_raw = full_raw
-        status_txt = translate_text(disp_raw, lang)
-        if status_txt != self._last_capture_status_txt:
-            self.capture_status_lbl.setProperty("_ls_orig_text", disp_raw)
-            self.capture_status_lbl.setText(status_txt)
-            self.capture_status_lbl.setMinimumWidth(self.capture_status_lbl.sizeHint().width())
-            self._last_capture_status_txt = status_txt
         raw_cov = f"已缓冲: {ring_available_sec:.1f} / 120.0 s"
         cov_txt = translate_text(raw_cov, lang)
         if cov_txt != self._last_coverage_txt:
@@ -2940,21 +3167,9 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if stats.mode == CaptureMode.SYNTHETIC_SIMULATION:
             src_txt = "Simulated"
         elif stats.mode == CaptureMode.SYSTEM_LOOPBACK and getattr(stats, "process_name", ""):
-            src_txt = str(stats.process_name)
+            src_txt = str(stats.process_name).strip()
             self._loopback_device_name = src_txt
-            generic_loop = translate_text("[兜底] 系统 WASAPI Loopback (会混入其他应用声音)", lang)
-            item_tip = f"{src_txt}\n{generic_loop}"
-            for idx in range(self.source_combo.count()):
-                data = self.source_combo.itemData(idx)
-                if isinstance(data, dict) and data.get("kind") == "system_loopback":
-                    raw_loop = f"[兜底] 系统 WASAPI Loopback · {src_txt}"
-                    disp_loop = translate_text(raw_loop, lang)
-                    if self.source_combo.itemText(idx) != disp_loop:
-                        self.source_combo.setItemText(idx, disp_loop)
-                    if self.source_combo.itemData(idx, QtCore.Qt.ItemDataRole.ToolTipRole) != item_tip:
-                        self.source_combo.setItemData(idx, item_tip, QtCore.Qt.ItemDataRole.ToolTipRole)
-                    self._sync_source_combo_tooltip()
-                    break
+            self._refresh_loopback_source_combo_i18n(lang)
         else:
             src_txt = self.source_combo.currentText().strip() or "--"
         if hasattr(self, "_acid_footer"):
@@ -3016,7 +3231,11 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "freeze_screen_btn"):
             self.freeze_screen_btn.blockSignals(True)
             self.freeze_screen_btn.setChecked(self._freeze_screen)
-            set_i18n_text(self.freeze_screen_btn, "恢复画面" if self._freeze_screen else "冻结画面")
+            orig_txt = "恢复画面" if self._freeze_screen else "冻结画面"
+            set_i18n_text(self.freeze_screen_btn, orig_txt)
+            if getattr(self, "_is_sec_icon_only", False):
+                self.freeze_screen_btn.setText("")
+            self.freeze_screen_btn.setMinimumWidth(self.freeze_screen_btn.sizeHint().width())
             self.freeze_screen_btn.blockSignals(False)
 
     def toggle_freeze_screen(self) -> None:
@@ -3035,6 +3254,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
                 self._acid_footer.set_telemetry(p50_ms=med_ms)
 
     def _set_ai_active_ui(self, active: bool) -> None:
+        was_vis = self.ai_status_badge.isVisible()
         self.emergency_stop_btn.setProperty("ai_active", active)
         style = self.emergency_stop_btn.style()
         if style is not None:
@@ -3043,12 +3263,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         self.ai_status_badge.setVisible(active)
         is_acid = self._acid_variant in ("light", "dark")
         self._hazard_bar.setVisible(is_acid and active)
+        if active and not was_vis:
+            self._schedule_topbar_relayout()
 
     def update_ai_progress(self, prog: AIJobProgress) -> None:
         txt = f"AI: {prog.state.value} ({int(round(prog.progress * 100))}%)"
+        self.ai_status_badge.setToolTip(txt)
         if txt != self._last_ai_badge_txt:
             self.ai_status_badge.setText(txt)
             self._last_ai_badge_txt = txt
+            self._schedule_topbar_relayout()
         set_widget_tone(self.ai_status_badge, "info")
         is_running = prog.state in (
             AIJobState.PREPARING,
@@ -3061,6 +3285,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
     def handle_ai_result(self, res: AIJobResult) -> None:
         txt = f"AI: {res.state.value}"
+        self.ai_status_badge.setToolTip(txt)
         if txt != self._last_ai_badge_txt:
             self.ai_status_badge.setText(txt)
             self._last_ai_badge_txt = txt

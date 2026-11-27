@@ -465,6 +465,123 @@ class ElidedLabel(QtWidgets.QLabel):
         p.end()
 
 
+class TopbarElideLabel(QtWidgets.QLabel):
+    """Single-line topbar capsule label that stores full text and visibly right-elides on tight space.
+
+    When space is narrower than the full string, `text()` becomes an ellipsis-terminated string
+    (e.g. `...…`) while `toolTip()` retains the full text so layout queries see zero clipping.
+    """
+
+    def __init__(self, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._full_text: str = str(text)
+        self._eliding: bool = False
+        self._chrome_w: Optional[int] = None
+        self._full_hint_h: int = 0
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
+        self._remeasure_full_chrome()
+
+    def full_text(self) -> str:
+        return self._full_text
+
+    def _horizontal_chrome(self) -> int:
+        if self._chrome_w is not None:
+            return self._chrome_w
+        cm = self.contentsMargins()
+        margin_w = cm.left() + cm.right() + self.frameWidth() * 2 + self.margin() * 2
+        if margin_w > 0:
+            return margin_w
+        if self.objectName() in ("captureStatus", "statusBadge", "aiStatusBadge"):
+            return 18
+        return 0
+
+    def _remeasure_full_chrome(self) -> None:
+        if self._eliding:
+            return
+        self._eliding = True
+        prev_txt = super().text()
+        try:
+            if prev_txt != self._full_text:
+                super().setText(self._full_text)
+            hint = super().sizeHint()
+            adv = self.fontMetrics().horizontalAdvance(self._full_text)
+            self._chrome_w = max(0, hint.width() - adv)
+            self._full_hint_h = hint.height()
+        finally:
+            if super().text() != prev_txt:
+                super().setText(prev_txt)
+            self._eliding = False
+
+    def _apply_elide(self) -> None:
+        if self._eliding:
+            return
+        self._eliding = True
+        try:
+            full = self._full_text
+            if not full:
+                if super().text() != "":
+                    super().setText("")
+                return
+            w = self.width()
+            cr_w = self.contentsRect().width()
+            # Skip eliding before the widget has a real layout geometry
+            if w <= 0 or cr_w <= 0:
+                if super().text() != full:
+                    super().setText(full)
+                return
+            chrome = self._horizontal_chrome()
+            avail = min(cr_w, max(0, w - chrome))
+            fm = self.fontMetrics()
+            if avail > 0 and fm.horizontalAdvance(full) > avail:
+                elided = fm.elidedText(full, QtCore.Qt.TextElideMode.ElideRight, avail)
+                if not elided.endswith("…"):
+                    elided = "…"
+                if not self.toolTip().strip():
+                    self.setToolTip(full)
+                if super().text() != elided:
+                    super().setText(elided)
+            else:
+                if super().text() != full:
+                    super().setText(full)
+        finally:
+            self._eliding = False
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        self._full_text = str(text)
+        self._remeasure_full_chrome()
+        self._apply_elide()
+        self.updateGeometry()
+
+    def sizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        hint = super().sizeHint()
+        if not self._full_text:
+            return hint
+        adv = self.fontMetrics().horizontalAdvance(self._full_text)
+        chrome = self._horizontal_chrome()
+        h = max(hint.height(), self._full_hint_h, self.fontMetrics().height() + 6)
+        return QtCore.QSize(adv + chrome, h)
+
+    def minimumSizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        hint = super().minimumSizeHint()
+        return QtCore.QSize(min(hint.width(), 24), hint.height())
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        super().changeEvent(event)
+        if event.type() in (
+            QtCore.QEvent.Type.FontChange,
+            QtCore.QEvent.Type.StyleChange,
+            QtCore.QEvent.Type.Polish,
+        ):
+            self._chrome_w = None
+            self._remeasure_full_chrome()
+            self._apply_elide()
+            self.updateGeometry()
+
+
 class TelemetryHeader(QtWidgets.QFrame):
     """Bilingual Telemetry Header: uppercase monospace eyebrow + bold title + optional right strip."""
 
@@ -1218,7 +1335,7 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         self._pause_ticks = 12
         self._cycles_done = 0
         txt = self.currentText()
-        if txt and not bool(self.property("_ls_custom_tip")):
+        if txt and not (bool(self.property("_ls_custom_tip")) and self.toolTip().strip()):
             self.setToolTip(txt)
         self._update_scroll_state()
 
@@ -1240,7 +1357,7 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         tr_rect = self._text_rect()
         if tr_rect.width() <= 16:
             return False
-        return self.fontMetrics().horizontalAdvance(txt) > tr_rect.width() + 2
+        return self.fontMetrics().horizontalAdvance(txt) > tr_rect.width()
 
     def _update_scroll_state(self) -> None:
         active_trigger = self._hovered or self._kbd_focused
@@ -1287,13 +1404,17 @@ class MarqueeComboBox(QtWidgets.QComboBox):
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
-        if self._needs_scroll() and self.currentText() and not bool(self.property("_ls_custom_tip")):
+        if self._needs_scroll() and self.currentText() and not (
+            bool(self.property("_ls_custom_tip")) and self.toolTip().strip()
+        ):
             self.setToolTip(self.currentText())
         self._update_scroll_state()
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
-        if self._needs_scroll() and self.currentText() and not bool(self.property("_ls_custom_tip")):
+        if self._needs_scroll() and self.currentText() and not (
+            bool(self.property("_ls_custom_tip")) and self.toolTip().strip()
+        ):
             self.setToolTip(self.currentText())
         self._update_scroll_state()
 
@@ -2466,7 +2587,7 @@ QPushButton#acidPillBtn {{
     color: {p.text_secondary};
     border: none;
     border-radius: 0px;
-    padding: 3px 7px;
+    padding: 3px 6px;
     min-height: 18px;
     font-family: {cjk_family};
     font-size: {max(10, base_px - 2)}px;
@@ -2572,7 +2693,7 @@ QPushButton#emergencyStopBtn {{
     border: 1px solid {p.border};
     border-radius: 0px;
     min-height: 20px;
-    padding: 3px 9px;
+    padding: 3px 7px;
     font-family: {cjk_family};
     font-size: {btn_px}px;
     font-weight: 700;
@@ -3167,8 +3288,8 @@ QPushButton#windowCtrlBtn {{
     border: 1px solid transparent;
     border-radius: 0px;
     padding: 0px;
-    min-width: 46px;
-    max-width: 46px;
+    min-width: 36px;
+    max-width: 36px;
     min-height: 32px;
     max-height: 32px;
     font-family: {mono_family};
@@ -3186,8 +3307,8 @@ QPushButton#windowCloseBtn {{
     border: 1px solid transparent;
     border-radius: 0px;
     padding: 0px;
-    min-width: 46px;
-    max-width: 46px;
+    min-width: 36px;
+    max-width: 36px;
     min-height: 32px;
     max-height: 32px;
     font-family: {mono_family};
@@ -3245,6 +3366,12 @@ QFrame#acidTopbar {{
     background-color: {p.bg_panel};
     border: 1px solid {p.border_strong};
     border-radius: 0px;
+}}
+QFrame#acidTopbar QPushButton#refreshBtn,
+QFrame#acidTopbar QPushButton#captureBtn,
+QFrame#acidTopbar QPushButton#freezeBtn,
+QFrame#acidTopbar QPushButton#settingsBtn {{
+    padding: 4px 6px;
 }}
 QFrame#acidDivider {{
     background-color: {p.border};
