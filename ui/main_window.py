@@ -1622,7 +1622,10 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             cards_compact = compact_tabs or (self.isVisible() and sw_h < 460)
             self.spectrum_widget.set_compact_mode(compact_tabs, compact_cards=cards_compact)
         if hasattr(self, "chroma_widget"):
-            self.chroma_widget.set_compact_mode(h < 600 or w < 1050)
+            avail_chroma_h = max(0, self.tabs.height() - 28) if self.isVisible() and self.tabs.height() > 0 else h - 180
+            self.chroma_widget.set_compact_mode(
+                avail_chroma_h < self.chroma_widget.full_mode_min_height() or w < 1050
+            )
         if self._ab_more_panel.isVisible():
             self._apply_ab_more_splitter_fit()
 
@@ -2531,9 +2534,13 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
     def _refresh_model_combos(self) -> None:
+        from core.i18n import get_current_language, translate_text
+
+        lang = get_current_language()
         self.ai_2stem_combo.clear()
-        for m in list_models(stem_mode="2stem", ai_config=self._ai_config):
-            self.ai_2stem_combo.addItem(m.display_name, m.model_id)
+        for idx, m in enumerate(list_models(stem_mode="2stem", ai_config=self._ai_config)):
+            self.ai_2stem_combo.setProperty(f"_ls_orig_item_{idx}", m.display_name)
+            self.ai_2stem_combo.addItem(translate_text(m.display_name, lang), m.model_id)
 
     def update_hardware_report(
         self,
@@ -2767,11 +2774,26 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
     def _sync_source_combo_tooltip(self, *_args: object) -> None:
         if not hasattr(self, "source_combo"):
             return
+        lang = get_current_language()
+        self.source_combo.setProperty("_ls_custom_tip", True)
+        self.source_combo.setProperty("_ls_dynamic_tip", True)
+        data = self.source_combo.currentData()
         cur = self.source_combo.currentText().strip()
-        if cur:
-            self.source_combo.setToolTip(cur)
+        if isinstance(data, dict) and data.get("kind") == "system_loopback":
+            generic = translate_text("[兜底] 系统 WASAPI Loopback (会混入其他应用声音)", lang)
+            dev_name = str(getattr(self, "_loopback_device_name", "") or "").strip()
+            if dev_name:
+                tip = f"{dev_name}\n{generic}"
+            elif cur:
+                tip = cur
+            else:
+                tip = generic
+        elif cur:
+            tip = cur
         else:
-            self.source_combo.setToolTip(translate_text("AUDIO_IN // 选择要捕获的音频进程或系统环回", get_current_language()))
+            tip = translate_text("AUDIO_IN // 选择要捕获的音频进程或系统环回", lang)
+        if self.source_combo.toolTip() != tip:
+            self.source_combo.setToolTip(tip)
 
     def populate_audio_sources(self, processes: list[AudioProcessInfo], *, include_synthetic: bool = True) -> None:
         prev = self.source_combo.currentData()
@@ -2898,19 +2920,40 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
             self.history_coverage_lbl.setText(cov_txt)
             self._last_coverage_txt = cov_txt
 
+        switch_msg = getattr(stats, "device_switch_message", None)
         banner_msg: Optional[str] = None
+        banner_tone: Optional[str] = None
         if stats.last_error:
             banner_msg = stats.last_error
+        elif switch_msg:
+            banner_msg = switch_msg
+            banner_tone = "info"
         elif stats.mode == CaptureMode.SYSTEM_LOOPBACK and stats.warning_message:
             banner_msg = stats.warning_message
 
         if stats.mode == CaptureMode.SYNTHETIC_SIMULATION:
             src_txt = "Simulated"
+        elif stats.mode == CaptureMode.SYSTEM_LOOPBACK and getattr(stats, "process_name", ""):
+            src_txt = str(stats.process_name)
+            self._loopback_device_name = src_txt
+            generic_loop = translate_text("[兜底] 系统 WASAPI Loopback (会混入其他应用声音)", lang)
+            item_tip = f"{src_txt}\n{generic_loop}"
+            for idx in range(self.source_combo.count()):
+                data = self.source_combo.itemData(idx)
+                if isinstance(data, dict) and data.get("kind") == "system_loopback":
+                    raw_loop = f"[兜底] 系统 WASAPI Loopback · {src_txt}"
+                    disp_loop = translate_text(raw_loop, lang)
+                    if self.source_combo.itemText(idx) != disp_loop:
+                        self.source_combo.setItemText(idx, disp_loop)
+                    if self.source_combo.itemData(idx, QtCore.Qt.ItemDataRole.ToolTipRole) != item_tip:
+                        self.source_combo.setItemData(idx, item_tip, QtCore.Qt.ItemDataRole.ToolTipRole)
+                    self._sync_source_combo_tooltip()
+                    break
         else:
             src_txt = self.source_combo.currentText().strip() or "--"
         if hasattr(self, "_acid_footer"):
             self._acid_footer.set_telemetry(
-                source_name=src_txt[:28],
+                source_name=src_txt,
                 sample_rate_hz=int(getattr(stats, "sample_rate", 48000) or 48000),
                 buffer_sec=ring_available_sec,
             )
@@ -2918,7 +2961,7 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
         if banner_msg != self._last_capture_banner:
             self._last_capture_banner = banner_msg
             if banner_msg:
-                self.show_banner_message(banner_msg)
+                self.show_banner_message(banner_msg, tone=banner_tone)
 
     def update_resource_snapshot(
         self,

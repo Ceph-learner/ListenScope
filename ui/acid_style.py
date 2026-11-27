@@ -1218,7 +1218,7 @@ class MarqueeComboBox(QtWidgets.QComboBox):
         self._pause_ticks = 12
         self._cycles_done = 0
         txt = self.currentText()
-        if txt:
+        if txt and not bool(self.property("_ls_custom_tip")):
             self.setToolTip(txt)
         self._update_scroll_state()
 
@@ -1287,13 +1287,13 @@ class MarqueeComboBox(QtWidgets.QComboBox):
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
-        if self._needs_scroll() and self.currentText():
+        if self._needs_scroll() and self.currentText() and not bool(self.property("_ls_custom_tip")):
             self.setToolTip(self.currentText())
         self._update_scroll_state()
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
-        if self._needs_scroll() and self.currentText():
+        if self._needs_scroll() and self.currentText() and not bool(self.property("_ls_custom_tip")):
             self.setToolTip(self.currentText())
         self._update_scroll_state()
 
@@ -2285,6 +2285,10 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         row.setSpacing(8)
         self.status_lbl = QtWidgets.QLabel("")
         self.status_lbl.setObjectName("monoTelemetry")
+        self.status_lbl.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.status_lbl.setProperty("_ls_dynamic_tip", True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setProperty("_ls_dynamic_tip", True)
         row.addWidget(self.status_lbl, 1)
 
         self.lock_btn = QtWidgets.QPushButton("减少动效")
@@ -2305,9 +2309,17 @@ class AcidBarcodeFooter(QtWidgets.QWidget):
         cpu_txt = f"{self._cpu_pct:.0f}%" if self._cpu_pct is not None else "--"
         khz = self._sample_rate_hz / 1000.0
         rate_txt = f"{khz:g}kHz"
-        self.status_lbl.setText(
-            f"v{ver}  |  {self._source_name} · {rate_txt}  |  p50: {p50_txt}  |  Buf: {self._buffer_sec:.1f}s  |  CPU: {cpu_txt}"
+        full_src = str(self._source_name or "--")
+        elided_src = self.status_lbl.fontMetrics().elidedText(
+            full_src, QtCore.Qt.TextElideMode.ElideRight, 190
         )
+        new_txt = f"v{ver}  |  {elided_src} · {rate_txt}  |  p50: {p50_txt}  |  Buf: {self._buffer_sec:.1f}s  |  CPU: {cpu_txt}"
+        if self.status_lbl.text() != new_txt:
+            self.status_lbl.setText(new_txt)
+        if self.status_lbl.toolTip() != full_src:
+            self.status_lbl.setToolTip(full_src)
+        if self.toolTip() != full_src:
+            self.setToolTip(full_src)
 
     def set_telemetry(
         self,

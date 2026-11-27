@@ -170,6 +170,7 @@ class CaptureStats:
     is_running: bool = False
     warning_message: Optional[str] = None
     last_error: Optional[str] = None
+    device_switch_message: Optional[str] = None
 
 
 @dataclass

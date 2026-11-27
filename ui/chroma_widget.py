@@ -564,6 +564,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
         # Recent bounded chord transition strip + Practice action + Capo/Reset toolbar
         prog_bar = QtWidgets.QHBoxLayout()
+        self._prog_bar = prog_bar
         prog_bar.setSpacing(8)
         self.chord_progression_lbl = MarqueeLabel("最近和弦进行 (最多 12 步): -")
         self.chord_progression_lbl.setObjectName("chromaProgression")
@@ -593,13 +594,12 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
         self.reset_harmony_btn.clicked.connect(self._on_reset_clicked)
         prog_bar.addWidget(self.chord_progression_lbl, 1)
         prog_bar.addWidget(self.progression_mode_combo)
-        prog_bar.addWidget(
-            HelpBadge(
-                "最近和弦进行与练习和弦工作流",
-                "• <b>最近和弦进行</b>：记录最近 12 次稳定和弦切换轨迹。选择「和弦名与级数」时会以单行紧凑格式（如 <code>C[I] → G[V] → Am[vi]</code>）呈现，鼠标悬停可查看完整 12 步历史，绝不折行撑乱界面。<br/>"
-                "• <b>练习和弦</b>：点击右侧按钮可将当前识别到的和弦与调性快照带入和弦练习台，自动匹配常见套路（如卡农、4536251）、支持本地合成试听并导出 Cubase 标准 MIDI。",
-            )
+        self._prog_help_badge = HelpBadge(
+            "最近和弦进行与练习和弦工作流",
+            "• <b>最近和弦进行</b>：记录最近 12 次稳定和弦切换轨迹。选择「和弦名与级数」时会以单行紧凑格式（如 <code>C[I] → G[V] → Am[vi]</code>）呈现，鼠标悬停可查看完整 12 步历史，绝不折行撑乱界面。<br/>"
+            "• <b>练习和弦</b>：点击右侧按钮可将当前识别到的和弦与调性快照带入和弦练习台，自动匹配常见套路（如卡农、4536251）、支持本地合成试听并导出 Cubase 标准 MIDI。",
         )
+        prog_bar.addWidget(self._prog_help_badge)
         self.practice_chords_btn = QtWidgets.QPushButton("练习和弦")
         self.practice_chords_btn.setObjectName("analysisAction")
         self.practice_chords_btn.clicked.connect(self._open_chord_practice)
@@ -613,8 +613,10 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             "SMTC 自动切歌重置：仅当 Windows 媒体会话 (SMTC) 连续两次确认目标播放器切换了新曲目时，才自动清空和弦轨迹、调性窗口与 BPM，暂停/拖动进度条不会误重置。"
         )
         tools_bar = QtWidgets.QHBoxLayout()
+        self._tools_bar = tools_bar
         tools_bar.setSpacing(10)
-        tools_bar.addWidget(QtWidgets.QLabel("移调/Capo:"))
+        self._transpose_lbl = QtWidgets.QLabel("移调/Capo:")
+        tools_bar.addWidget(self._transpose_lbl)
         tools_bar.addWidget(self.transpose_combo)
         tools_bar.addSpacing(4)
         tools_bar.addWidget(self.auto_reset_chk)
@@ -715,6 +717,11 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
 
     def refresh_chroma_note_ticks(self) -> None:
         axis = self.chroma_hist_plot.getAxis("left")
+        if getattr(self, "_compact_mode", False):
+            if getattr(self, "_chroma_tick_stride", None) != 0:
+                self._chroma_tick_stride = 0
+                axis.setTicks([[]])
+            return
         font = axis.style["tickFont"] or self.font()
         label_height = QtGui.QFontMetrics(font).height() + 2
         available = max(1.0, axis.height())
@@ -960,15 +967,32 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
                 locked=locked,
             )
 
+    def chroma_bar_min_height(self) -> int:
+        ax = self.chroma_bar_plot.getAxis("bottom")
+        tick_font = ax.style.get("tickFont") or self.font()
+        tick_h = max(12, QtGui.QFontMetrics(tick_font).height())
+        # Bottom 12 pitch-class tick labels + readable bar height >= 3.5x font height
+        return max(76, 4 * tick_h + 20)
+
+    def full_mode_min_height(self) -> int:
+        cards_h = max(
+            self._chord_box.sizeHint().height(),
+            self._key_box.sizeHint().height(),
+            self._rhythm_box.sizeHint().height(),
+        )
+        return max(430, cards_h + self.chroma_bar_min_height() + 170)
+
     def set_compact_mode(self, compact: bool) -> None:
         compact = bool(compact)
+        self._compact_mode = compact
         self._root_layout.setContentsMargins(6 if compact else 10, 2 if compact else 6, 6 if compact else 10, 2 if compact else 6)
-        self._root_layout.setSpacing(2 if compact else 5)
+        self._root_layout.setSpacing(2 if compact else 4)
         self._cards_layout.setSpacing(5 if compact else 8)
         for hdr in (self._chord_hdr, self._key_hdr, self._rhythm_hdr):
             hdr.set_compact_mode(compact)
+            hdr.setVisible(not compact)
         for lay in (self._chord_l, self._key_l, self._rhythm_l):
-            lay.setContentsMargins(7 if compact else 10, 3 if compact else 6, 7 if compact else 10, 3 if compact else 6)
+            lay.setContentsMargins(7 if compact else 10, 2 if compact else 6, 7 if compact else 10, 2 if compact else 6)
             lay.setSpacing(1 if compact else 3)
         for w in (
             self.chord_tones_lbl,
@@ -978,6 +1002,7 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.key_secondary_lbl,
             self.key_relation_lbl,
             self.key_sig_note_lbl,
+            self.bpm_stab_lbl,
             self.pitch_lbl,
             self.tuning_bar,
             self.tap_tempo_btn,
@@ -991,41 +1016,74 @@ class ChromaAndHarmonyWidget(QtWidgets.QWidget):
             self.metronome_vol_slider,
             self.metronome_vol_lbl,
             self.tap_status_lbl,
+            self.progression_mode_combo,
+            self._prog_help_badge,
+            self._transpose_lbl,
+            self.transpose_combo,
+            self.auto_reset_chk,
+            self.track_status_lbl,
         ):
             w.setVisible(not compact)
+
         if compact:
+            if self._prog_bar.indexOf(self.reset_harmony_btn) < 0:
+                self._tools_bar.removeWidget(self.reset_harmony_btn)
+                self._prog_bar.addWidget(self.reset_harmony_btn)
+            self.reset_harmony_btn.setVisible(True)
             self._chord_box.setToolTip(
+                f"{self._chord_hdr.title_lbl.text()}\n"
                 f"{self.chord_tones_lbl.text()} · {self.chord_degree_lbl.text()}\n"
                 f"{self.chord_secondary_lbl.text()}\n{self.chord_stability_lbl.text()}"
             )
-            self._key_box.setToolTip(f"{self.key_secondary_lbl.text()}\n{self.key_relation_lbl.text()}\n{self.key_sig_note_lbl.text()}")
-            self.chroma_bar_plot.setMinimumHeight(30)
+            self._key_box.setToolTip(
+                f"{self._key_hdr.title_lbl.text()}\n"
+                f"{self.key_secondary_lbl.text()}\n{self.key_relation_lbl.text()}\n{self.key_sig_note_lbl.text()}"
+            )
+            self._rhythm_box.setToolTip(
+                f"{self._rhythm_hdr.title_lbl.text()}\n"
+                f"{self.bpm_stab_lbl.text()}\n{self.pitch_lbl.text()}"
+            )
+            bar_min = self.chroma_bar_min_height()
+            self.chroma_bar_plot.setTitle(None)
+            self.chroma_bar_plot.setMinimumHeight(bar_min)
             self.chroma_hist_plot.setTitle(None)
             self.chroma_hist_plot.setMinimumHeight(96)
-            self._chroma_splitter.setSizes([32, 96])
+            self._chroma_splitter.setSizes([bar_min, 96])
+            self._chroma_tick_stride = None
             self.refresh_chroma_note_ticks()
         else:
+            if self._tools_bar.indexOf(self.reset_harmony_btn) < 0:
+                self._prog_bar.removeWidget(self.reset_harmony_btn)
+                insert_at = max(0, self._tools_bar.indexOf(self.track_status_lbl))
+                self._tools_bar.insertWidget(insert_at, self.reset_harmony_btn)
+            self.reset_harmony_btn.setVisible(True)
             self._chord_box.setToolTip("")
             self._key_box.setToolTip("")
-            self.chroma_bar_plot.setMinimumHeight(56)
+            self._rhythm_box.setToolTip("")
+            self.chroma_bar_plot.setTitle(translate_text("12-BIN CHROMA // 实时色度分布", get_current_language()))
+            self.chroma_bar_plot.setMinimumHeight(max(76, self.chroma_bar_min_height()))
             self.chroma_hist_plot.setTitle(translate_text("CHROMA HEATMAP // 有界时序热图 (30s)", get_current_language()))
             self.chroma_hist_plot.setMinimumHeight(96)
+            self._chroma_tick_stride = None
             self.refresh_chroma_note_ticks()
 
     def _refresh_plot_tooltips(self, lang: str) -> None:
         from core.i18n import tr
 
         hold = float(getattr(self._chroma_ballistics, "hold_sec", 1.2))
-        self.chroma_bar_plot.setProperty("_ls_dynamic_tip", True)
-        self.chroma_bar_plot.setToolTip(
-            tr(
-                f"柱子：当前各音级的能量。黄色短条：峰值保持，保留最近 {hold:g} 秒内的最高值，之后缓慢回落。",
-                f"Bars: current energy per pitch class. Yellow ticks: peak hold, keeping the maximum over the last {hold:g} s before decaying slowly.",
-                f"막대: 현재 각 음계의 에너지. 노란색 막대: 피크 홀드, 최근 {hold:g}초 내 최고값을 유지한 뒤 서서히 감소합니다.",
-                f"バー: 現在の各音階のエネルギー。黄色いバー: ピークホールド（直近 {hold:g} 秒間の最大値を保持後、緩やかに減衰）。",
-                lang=lang,
-            )
+        bar_tip = tr(
+            f"柱子：当前各音级的能量。黄色短条：峰值保持，保留最近 {hold:g} 秒内的最高值，之后缓慢回落。",
+            f"Bars: current energy per pitch class. Yellow ticks: peak hold, keeping the maximum over the last {hold:g} s before decaying slowly.",
+            f"막대: 현재 각 음계의 에너지. 노란색 막대: 피크 홀드, 최근 {hold:g}초 내 최고값을 유지한 뒤 서서히 감소합니다.",
+            f"バー: 現在の各音階のエネルギー。黄色いバー: ピークホールド（直近 {hold:g} 秒間の最大値を保持後、緩やかに減衰）。",
+            lang=lang,
         )
+        self.chroma_bar_plot.setProperty("_ls_dynamic_tip", True)
+        self.chroma_bar_plot.setToolTip(bar_tip)
+        vp = self.chroma_bar_plot.viewport()
+        if vp is not None:
+            vp.setProperty("_ls_dynamic_tip", True)
+            vp.setToolTip(bar_tip)
 
     def apply_theme(
         self,

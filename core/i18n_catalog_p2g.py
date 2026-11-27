@@ -708,3 +708,523 @@ P2G_DYNAMIC_REGEX_RULES: tuple[tuple[_re.Pattern[str], dict[str, str]], ...] = (
     ),
 )
 
+
+
+# --- Phase 2H Catalog ---
+P2H_PHRASE_MAP: dict[str, dict[str, str]] = {
+    "# ListenScope 离线分轨与扒谱分析报告": {
+        "en": "# ListenScope Offline Separation & Transcription Report",
+        "ko": "# ListenScope 오프라인 분리 및 채보 분석 보고서",
+        "ja": "# ListenScope オフライン分離・採譜分析レポート",
+    },
+    "## 1. 全局调性与节拍概览": {
+        "en": "## 1. Global Key & Tempo Overview",
+        "ko": "## 1. 전체 조성 및 템포 개요",
+        "ja": "## 1. 全体キー・テンポ概要",
+    },
+    "## 2. 时间轴和弦进行表 (Chord Timeline)": {
+        "en": "## 2. Chord Progression Timeline",
+        "ko": "## 2. 타임라인 코드 진행표 (Chord Timeline)",
+        "ja": "## 2. コード進行タイムライン (Chord Timeline)",
+    },
+    "## 3. Bass 音轨分析": {
+        "en": "## 3. Bass Track Analysis",
+        "ko": "## 3. 베이스 트랙 분석",
+        "ja": "## 3. ベース・トラック分析",
+    },
+    "## 4. 鼓组 (Drums) 三频段瞬态与 16 步律动表": {
+        "en": "## 4. Drums 3-Band Transients & 16-Step Groove Grid",
+        "ko": "## 4. 드럼 3밴드 트랜지언트 및 16스텝 그루브 표",
+        "ja": "## 4. ドラム 3帯域トランジェント・16ステップグルーヴ表",
+    },
+    "- **记谱移调 (Transpose)**: `0 半音 (原调实音)`": {
+        "en": "- **Notation Transpose**: `0 semitones (Concert Pitch)`",
+        "ko": "- **기보 이조 (Transpose)**: `0 반음 (원조 실음)`",
+        "ja": "- **記譜移調 (Transpose)**: `0 半音 (実音)`",
+    },
+    "4-Stem 标准分轨 (HTDemucs)": {
+        "en": "4-Stem Standard Separation (HTDemucs)",
+        "ko": "4-Stem 표준 분리 (HTDemucs)",
+        "ja": "4-Stem 標準分離 (HTDemucs)",
+    },
+    "A/B 书签结束帧必须大于起始帧。": {
+        "en": "A/B bookmark end frame must be greater than start frame.",
+        "ko": "A/B 북마크 종료 프레임은 시작 프레임보다 커야 합니다.",
+        "ja": "A/B ブックマークの終了フレームは開始フレームより大きくする必要があります。",
+    },
+    "A/B 选区已过期，请在历史波形上重新选择。": {
+        "en": "A/B selection expired; please re-select on the history waveform.",
+        "ko": "A/B 선택 영역이 만료되었습니다. 히스토리 파형에서 다시 선택하세요.",
+        "ja": "A/B 選択範囲の有効期限が切れました。履歴波形から再選択してください。",
+    },
+    "A/B 选区结束位置超出了当前历史音频，请重新选择区间。": {
+        "en": "A/B selection end exceeds current history audio; please re-select.",
+        "ko": "A/B 선택 끝 위치가 현재 히스토리 오디오를 초과했습니다. 다시 선택하세요.",
+        "ja": "A/B 選択終了位置が現在の履歴音声を超えています。再選択してください。",
+    },
+    "AI 分轨任务已取消": {
+        "en": "AI separation task cancelled",
+        "ko": "AI 분리 작업이 취소되었습니다",
+        "ja": "AI 分離タスクがキャンセルされました",
+    },
+    "AI 分轨任务已取消并清理临时文件": {
+        "en": "AI separation task cancelled and temp files cleaned",
+        "ko": "AI 분리 작업이 취소되고 임시 파일이 정리되었습니다",
+        "ja": "AI 分離タスクがキャンセルされ一時ファイルを削除しました",
+    },
+    "Basic Pitch 建议仅用于分轨后的 bass / vocals / piano / guitar 单轨；默认禁止直接分析复杂完整混音（传入 allow_full_mix=True 才可强制尝试）。": {
+        "en": "Basic Pitch is recommended only for separated bass/vocals/piano/guitar stems; direct full-mix analysis is disabled by default (pass allow_full_mix=True to force).",
+        "ko": "Basic Pitch는 분리된 bass/vocals/piano/guitar 단일 스템에만 권장되며, 기본적으로 전체 믹스 직접 분석은 금지됩니다 (allow_full_mix=True 전달 시 강제 시도).",
+        "ja": "Basic Pitch は分離後の bass / vocals / piano / guitar 単一ステム専用を推奨します。フルミックスの直接解析はデフォルトで無効です（allow_full_mix=True で強制可）。",
+    },
+    "GPU AI 环境未就绪": {
+        "en": "GPU AI environment not ready",
+        "ko": "GPU AI 환경이 준비되지 않았습니다",
+        "ja": "GPU AI 環境が未準備です",
+    },
+    "ListenScope 关闭，清理 AI Worker": {
+        "en": "ListenScope closing, cleaning up AI Worker",
+        "ko": "ListenScope 종료 중, AI Worker 정리",
+        "ja": "ListenScope 終了のため AI Worker をクリーンアップ中",
+    },
+    "MIDI 通道必须在 0–15 之间。": {
+        "en": "MIDI channel must be between 0 and 15.",
+        "ko": "MIDI 채널은 0~15 사이여야 합니다.",
+        "ja": "MIDI チャンネルは 0〜15 の範囲で指定してください。",
+    },
+    "PyTorch/CUDA 或 ONNX Runtime GPU 未就绪，拒绝 GPU 基准测试。": {
+        "en": "PyTorch/CUDA or ONNX Runtime GPU not ready; GPU benchmark rejected.",
+        "ko": "PyTorch/CUDA 또는 ONNX Runtime GPU가 준비되지 않아 GPU 벤치마크가 거부되었습니다.",
+        "ja": "PyTorch/CUDA または ONNX Runtime GPU が未準備のため、GPU ベンチマークを拒否しました。",
+    },
+    "PyTorch/CUDA 或 ONNX Runtime GPU 未就绪，拒绝进入 GPU AI 推理。": {
+        "en": "PyTorch/CUDA or ONNX Runtime GPU not ready; GPU AI inference rejected.",
+        "ko": "PyTorch/CUDA 또는 ONNX Runtime GPU가 준비되지 않아 GPU AI 추론이 거부되었습니다.",
+        "ja": "PyTorch/CUDA または ONNX Runtime GPU が未準備のため、GPU AI 推論を拒否しました。",
+    },
+    "Worker 异常": {
+        "en": "Worker error",
+        "ko": "Worker 오류",
+        "ja": "Worker エラー",
+    },
+    r"^([A-Ga-g][#b♯♭]?)\s+(major|minor|大调|小调)$": {
+        "en": r"^([A-Ga-g][#b♯♭]?)\s+(major|minor)$",
+        "ko": r"^([A-Ga-g][#b♯♭]?)\s+(major|minor|장조|단조)$",
+        "ja": r"^([A-Ga-g][#b♯♭]?)\s+(major|minor|長調|短調)$",
+    },
+    r"^\s*([A-Ga-g][#b♯♭]?)\s*(major|minor|m|maj|大调|小调)?\s*$": {
+        "en": r"^\s*([A-Ga-g][#b♯♭]?)\s*(major|minor|m|maj)?\s*$",
+        "ko": r"^\s*([A-Ga-g][#b♯♭]?)\s*(major|minor|m|maj|장조|단조)?\s*$",
+        "ja": r"^\s*([A-Ga-g][#b♯♭]?)\s*(major|minor|m|maj|長調|短調)?\s*$",
+    },
+    "⚠️ 底层 WASAPI 退回全系统 Loopback：其他应用声音可能被混入。": {
+        "en": "⚠️ Low-level WASAPI fell back to system-wide Loopback: audio from other apps may be mixed in.",
+        "ko": "⚠️ 하위 WASAPI가 전체 시스템 Loopback으로 폴백되었습니다: 다른 앱 소리가 섞일 수 있습니다.",
+        "ja": "⚠️ 下層 WASAPI がシステム全体の Loopback にフォールバックしました：他アプリの音声が混入する可能性があります。",
+    },
+    "任务在写入输出阶段被取消": {
+        "en": "Task cancelled during output writing",
+        "ko": "출력 쓰기 단계에서 작업이 취소되었습니다",
+        "ja": "出力書き込み段階でタスクがキャンセルされました",
+    },
+    "任务在准备阶段被取消": {
+        "en": "Task cancelled during preparation",
+        "ko": "준비 단계에서 작업이 취소되었습니다",
+        "ja": "準備段階でタスクがキャンセルされました",
+    },
+    "任务在加载模型阶段被取消": {
+        "en": "Task cancelled while loading model",
+        "ko": "모델 로드 단계에서 작업이 취소되었습니다",
+        "ja": "モデル読み込み段階でタスクがキャンセルされました",
+    },
+    "任务在模型加载完成后被取消": {
+        "en": "Task cancelled after model loading completed",
+        "ko": "모델 로드 완료 후 작업이 취소되었습니다",
+        "ja": "モデル読み込み完了後にタスクがキャンセルされました",
+    },
+    "全局调性滑动窗口检测到可能转调": {
+        "en": "Possible modulation detected by global key sliding window",
+        "ko": "전체 조성 슬라이딩 윈도우에서 전조 가능성이 감지되었습니다",
+        "ja": "全体キースライディングウィンドウで転調の可能性を検出しました",
+    },
+    "实时分轨 worker 启动超时": {
+        "en": "Live separation worker startup timed out",
+        "ko": "실시간 분리 worker 시작 시간 초과",
+        "ja": "リアルタイム分離 worker の起動がタイムアウトしました",
+    },
+    "实时分轨启动已被用户取消": {
+        "en": "Live separation startup cancelled by user",
+        "ko": "실시간 분리 시작이 사용자에 의해 취소되었습니다",
+        "ja": "リアルタイム分離の起動がユーザーによりキャンセルされました",
+    },
+    "实时分轨基准测试已被取消": {
+        "en": "Live separation benchmark cancelled",
+        "ko": "실시간 분리 벤치마크가 취소되었습니다",
+        "ja": "リアルタイム分離ベンチマークがキャンセルされました",
+    },
+    "实时分轨基准测试已被紧急停止/取消": {
+        "en": "Live separation benchmark emergency-stopped/cancelled",
+        "ko": "실시간 분리 벤치마크가 긴급 중지/취소되었습니다",
+        "ja": "リアルタイム分離ベンチマークが緊急停止/キャンセルされました",
+    },
+    "实验功能已停止": {
+        "en": "Experimental feature stopped",
+        "ko": "실험 기능이 중지되었습니다",
+        "ja": "実験機能は停止しました",
+    },
+    "实验功能已关闭 (默认关闭)": {
+        "en": "Experimental feature disabled (off by default)",
+        "ko": "실험 기능이 꺼져 있습니다 (기본값 꺼짐)",
+        "ja": "実験機能は無効です（デフォルト無効）",
+    },
+    "实验性实时分轨仅支持 2-stem 模型。": {
+        "en": "Experimental live separation only supports 2-stem models.",
+        "ko": "실험적 실시간 분리는 2-stem 모델만 지원합니다.",
+        "ja": "実験的リアルタイム分離は 2-stem モデルのみ対応しています。",
+    },
+    "实验性实时分轨已在运行中。": {
+        "en": "Experimental live separation is already running.",
+        "ko": "실험적 실시간 분리가 이미 실행 중입니다.",
+        "ja": "実験的リアルタイム分離は既に実行中です。",
+    },
+    "实验性实时分轨正在启动或运行基准测试中，请稍候。": {
+        "en": "Experimental live separation is starting or benchmarking; please wait.",
+        "ko": "실험적 실시간 분리가 시작 중이거나 벤치마크 실행 중입니다. 잠시 기다려 주세요.",
+        "ja": "実験的リアルタイム分離を起動中またはベンチマーク実行中です。お待ちください。",
+    },
+    "实验性近实时分轨仅支持 2-stem (人声 + 伴奏) 模型，不支持 4-stem 模型。": {
+        "en": "Experimental near-real-time separation only supports 2-stem (Vocals + Instrumental) models, not 4-stem.",
+        "ko": "실험적 준실시간 분리는 2-stem (보컬 + 반주) 모델만 지원하며 4-stem 모델은 지원하지 않습니다.",
+        "ja": "実験的ニアリアルタイム分離は 2-stem（ボーカル + 伴奏）モデルのみ対応し、4-stem モデルには非対応です。",
+    },
+    "导出区间为空，或已被历史缓冲覆盖。": {
+        "en": "Export range is empty or already overwritten by history buffer.",
+        "ko": "내보내기 구간이 비어 있거나 히스토리 버퍼에 의해 덮어쓰였습니다.",
+        "ja": "書き出し範囲が空か、履歴バッファで上書きされました。",
+    },
+    "导出期间部分音频已被历史缓冲覆盖，请重新选择 A/B 区间。": {
+        "en": "Part of the audio was overwritten during export; please re-select the A/B range.",
+        "ko": "내보내기 중 일부 오디오가 히스토리 버퍼에 의해 덮어쓰였습니다. A/B 구간을 다시 선택하세요.",
+        "ja": "書き出し中に一部の音声が履歴バッファで上書きされました。A/B 範囲を再選択してください。",
+    },
+    "导出期间音频历史已重置，请重新选择 A/B 区间。": {
+        "en": "Audio history was reset during export; please re-select the A/B range.",
+        "ko": "내보내기 중 오디오 히스토리가 초기화되었습니다. A/B 구간을 다시 선택하세요.",
+        "ja": "書き出し中に音声履歴がリセットされました。A/B 範囲を再選択してください。",
+    },
+    "已有 AI 分轨任务运行中（硬限制=1），禁止并行。": {
+        "en": "An AI separation task is already running (hard limit = 1); parallel jobs disallowed.",
+        "ko": "이미 AI 분리 작업이 실행 중입니다 (하드 제한=1). 병렬 실행이 금지됩니다.",
+        "ja": "AI 分離タスクが既に実行中です（上限=1）。並列実行は禁止されています。",
+    },
+    "已有离线 AI 分轨任务运行中（硬限制=1），请先停止或等待其完成。": {
+        "en": "An offline AI separation task is already running (hard limit = 1); stop or wait for it first.",
+        "ko": "오프라인 AI 분리 작업이 이미 실행 중입니다 (하드 제한=1). 먼저 중지하거나 완료될 때까지 기다리세요.",
+        "ja": "オフライン AI 分離タスクが既に実行中です（上限=1）。先に停止するか完了をお待ちください。",
+    },
+    "建议暂停原播放器（如 QQ 音乐），避免与 ListenScope A/B 回放重音叠加。": {
+        "en": "Recommend pausing the source player (e.g., QQ Music) to avoid overlapping with ListenScope A/B playback.",
+        "ko": "ListenScope A/B 재생과 소리가 겹치지 않도록 원본 플레이어(예: QQ Music)를 일시정지하는 것이 좋습니다.",
+        "ja": "ListenScope の A/B 再生と重ならないよう、元のプレーヤー（QQ 音楽など）を一時停止することをお勧めします。",
+    },
+    "当前 A/B 选区的原始音频是静音。可拖动 A/B 边界，或重新选择有波形的片段。": {
+        "en": "Raw audio in the current A/B selection is silent. Drag A/B handles or select a non-silent segment.",
+        "ko": "현재 A/B 선택 영역의 원본 오디오가 무음입니다. A/B 경계를 드래그하거나 파형이 있는 구간을 다시 선택하세요.",
+        "ja": "現在の A/B 選択範囲の元音声は無音です。A/B 境界をドラッグするか、波形のある区間を再選択してください。",
+    },
+    "当前分析没有可导出的鼓点。": {
+        "en": "No drum hits available to export in current analysis.",
+        "ko": "현재 분석에서 내보낼 수 있는 드럼 타격이 없습니다.",
+        "ja": "現在の分析に書き出し可能なドラムヒットがありません。",
+    },
+    "当前没有可导出的分离音轨。": {
+        "en": "No separated stems available to export.",
+        "ko": "내보낼 수 있는 분리 스템이 없습니다.",
+        "ja": "書き出し可能な分離ステムがありません。",
+    },
+    "当前没有可导出的和弦进行。": {
+        "en": "No chord progression available to export.",
+        "ko": "내보낼 수 있는 코드 진행이 없습니다.",
+        "ja": "書き出し可能なコード進行がありません。",
+    },
+    "当前没有已加载的分轨。": {
+        "en": "No separated stems currently loaded.",
+        "ko": "현재 로드된 분리 스템이 없습니다.",
+        "ja": "現在読み込まれている分離ステムがありません。",
+    },
+    "当前音频输出不可用，请检查系统默认播放设备。": {
+        "en": "Audio output unavailable; please check your system default playback device.",
+        "ko": "현재 오디오 출력을 사용할 수 없습니다. 시스템 기본 재생 장치를 확인하세요.",
+        "ja": "現在オーディオ出力が利用できません。システムの既定再生デバイスを確認してください。",
+    },
+    "必须指定 --pid 或 --name。": {
+        "en": "Must specify --pid or --name.",
+        "ko": "--pid 또는 --name을 지정해야 합니다.",
+        "ja": "--pid または --name を指定する必要があります。",
+    },
+    "所选 A/B 片段已滚出最近 120s 环形缓冲，请重新选择区间。": {
+        "en": "Selected A/B segment has scrolled out of the recent 120s ring buffer; please re-select.",
+        "ko": "선택한 A/B 구간이 최근 120s 링 버퍼를 벗어났습니다. 구간을 다시 선택하세요.",
+        "ja": "選択した A/B 区間は直近 120s リングバッファから押し出されました。再選択してください。",
+    },
+    "捕获源已变化，实时分轨启动已取消。": {
+        "en": "Capture source changed; live separation startup cancelled.",
+        "ko": "캡처 소스가 변경되어 실시간 분리 시작이 취소되었습니다.",
+        "ja": "キャプチャ元が変更されたため、リアルタイム分離の起動をキャンセルしました。",
+    },
+    "未安装 PyAudioWPatch，无法启用系统 WASAPI Loopback fallback。请运行: pip install PyAudioWPatch": {
+        "en": "PyAudioWPatch not installed; cannot enable system WASAPI Loopback fallback. Run: pip install PyAudioWPatch",
+        "ko": "PyAudioWPatch가 설치되지 않아 시스템 WASAPI Loopback 폴백을 활성화할 수 없습니다. 실행: pip install PyAudioWPatch",
+        "ja": "PyAudioWPatch が未インストールのため、システム WASAPI Loopback フォールバックを有効化できません。実行: pip install PyAudioWPatch",
+    },
+    "未安装 Spotify `basic-pitch`。请在 AI Worker 环境中安装: pip install basic-pitch[onnx]": {
+        "en": "Spotify `basic-pitch` not installed. Install in AI Worker env: pip install basic-pitch[onnx]",
+        "ko": "Spotify `basic-pitch`가 설치되지 않았습니다. AI Worker 환경에 설치하세요: pip install basic-pitch[onnx]",
+        "ja": "Spotify `basic-pitch` が未インストールです。AI Worker 環境にインストールしてください: pip install basic-pitch[onnx]",
+    },
+    "未安装 `audio-separator`。请在 AI Worker 环境中安装: pip install audio-separator[gpu]": {
+        "en": "`audio-separator` not installed. Install in AI Worker env: pip install audio-separator[gpu]",
+        "ko": "`audio-separator`가 설치되지 않았습니다. AI Worker 환경에 설치하세요: pip install audio-separator[gpu]",
+        "ja": "`audio-separator` が未インストールです。AI Worker 環境にインストールしてください: pip install audio-separator[gpu]",
+    },
+    "未安装 `demucs` 或 `audio-separator`。请在 AI Worker 环境安装: pip install demucs audio-separator[gpu]": {
+        "en": "`demucs` or `audio-separator` not installed. Install in AI Worker env: pip install demucs audio-separator[gpu]",
+        "ko": "`demucs` 또는 `audio-separator`가 설치되지 않았습니다. AI Worker 환경에 설치하세요: pip install demucs audio-separator[gpu]",
+        "ja": "`demucs` または `audio-separator` が未インストールです。AI Worker 環境にインストールしてください: pip install demucs audio-separator[gpu]",
+    },
+    "未安装 onnxruntime-gpu / onnxruntime-directml，无法运行 GPU MDX-ONNX 模型。": {
+        "en": "onnxruntime-gpu / onnxruntime-directml not installed; cannot run GPU MDX-ONNX models.",
+        "ko": "onnxruntime-gpu / onnxruntime-directml이 설치되지 않아 GPU MDX-ONNX 모델을 실행할 수 없습니다.",
+        "ja": "onnxruntime-gpu / onnxruntime-directml が未インストールのため、GPU MDX-ONNX モデルを実行できません。",
+    },
+    "未安装 proc-tap，无法启动 WASAPI Process Loopback。请运行: pip install proc-tap": {
+        "en": "proc-tap not installed; cannot start WASAPI Process Loopback. Run: pip install proc-tap",
+        "ko": "proc-tap이 설치되지 않아 WASAPI Process Loopback을 시작할 수 없습니다. 실행: pip install proc-tap",
+        "ja": "proc-tap が未インストールのため、WASAPI Process Loopback を起動できません。実行: pip install proc-tap",
+    },
+    "未找到可供深度分析的音轨 WAV 文件。": {
+        "en": "No stem WAV files found for deep analysis.",
+        "ko": "심층 분석에 사용할 스템 WAV 파일을 찾을 수 없습니다.",
+        "ja": "詳細分析用のステム WAV ファイルが見つかりません。",
+    },
+    "未找到默认 WASAPI Loopback 输出设备。": {
+        "en": "Default WASAPI Loopback output device not found.",
+        "ko": "기본 WASAPI Loopback 출력 장치를 찾을 수 없습니다.",
+        "ja": "既定の WASAPI Loopback 出力デバイスが見つかりません。",
+    },
+    "系统 WASAPI Loopback 启动超时。": {
+        "en": "System WASAPI Loopback startup timed out.",
+        "ko": "시스템 WASAPI Loopback 시작 시간이 초과되었습니다.",
+        "ja": "システム WASAPI Loopback の起動がタイムアウトしました。",
+    },
+    "检查期间所选历史音频已变化，请重新选择 A/B 区间。": {
+        "en": "Selected history audio changed during check; please re-select the A/B range.",
+        "ko": "검사 중 선택한 히스토리 오디오가 변경되었습니다. A/B 구간을 다시 선택하세요.",
+        "ja": "確認中に選択した履歴音声が変更されました。A/B 範囲を再選択してください。",
+    },
+    "正在完成音轨写入与输出校验...": {
+        "en": "Finalizing stem output writing and verification...",
+        "ko": "스템 쓰기 및 출력 검증 완료 중...",
+        "ja": "ステムの書き込みと出力検証を完了中...",
+    },
+    "正在运行基准测试 / 初始化...": {
+        "en": "Running benchmark / initializing...",
+        "ko": "벤치마크 실행 / 초기화 중...",
+        "ja": "ベンチマーク実行 / 初期化中...",
+    },
+    "正在运行基准测试与启动实时分轨...": {
+        "en": "Running benchmark and starting live separation...",
+        "ko": "벤치마크 실행 및 실시간 분리 시작 중...",
+        "ja": "ベンチマーク実行とリアルタイム分離を起動中...",
+    },
+    "每个和弦至少需要 1 拍。": {
+        "en": "Each chord requires at least 1 beat.",
+        "ko": "각 코드에는 최소 1박이 필요합니다.",
+        "ja": "各コードには少なくとも 1 拍が必要です。",
+    },
+    "独立 AI 环境 (.venv-ai) 未配置：Windows 打包版不含 PyTorch/CUDA，请在「设置 -> 资源安全阈值 & AI 配置」中指定 .venv-ai\\Scripts\\python.exe。": {
+        "en": "Isolated AI env (.venv-ai) not configured: Windows bundle excludes PyTorch/CUDA; specify .venv-ai\\Scripts\\python.exe in Settings -> Resource Limits & AI.",
+        "ko": "독립 AI 환경(.venv-ai)이 설정되지 않았습니다: Windows 패키징 버전에는 PyTorch/CUDA가 없으므로 '설정 -> 리소스 안전 임계값 & AI 설정'에서 .venv-ai\\Scripts\\python.exe를 지정하세요.",
+        "ja": "独立 AI 環境 (.venv-ai) が未設定です：Windows パッケージ版には PyTorch/CUDA が含まれないため、「設定 -> リソース安全しきい値 & AI 設定」で .venv-ai\\Scripts\\python.exe を指定してください。",
+    },
+    "独立 AI 环境 (.venv-ai) 未配置：Windows 打包版主程序不包含 PyTorch/ONNX Runtime，请在「设置 -> 资源安全阈值 & AI 配置」中指定 .venv-ai\\Scripts\\python.exe。": {
+        "en": "Isolated AI env (.venv-ai) not configured: Windows bundle excludes PyTorch/ONNX Runtime; specify .venv-ai\\Scripts\\python.exe in Settings -> Resource Limits & AI.",
+        "ko": "독립 AI 환경(.venv-ai)이 설정되지 않았습니다: Windows 패키징 본체에는 PyTorch/ONNX Runtime이 없으므로 '설정 -> 리소스 안전 임계값 & AI 설정'에서 .venv-ai\\Scripts\\python.exe를 지정하세요.",
+        "ja": "独立 AI 環境 (.venv-ai) が未設定です：Windows パッケージ本体には PyTorch/ONNX Runtime が含まれないため、「設定 -> リソース安全しきい値 & AI 設定」で .venv-ai\\Scripts\\python.exe を指定してください。",
+    },
+    "第一优先级：轻量 2-stem MDX/ONNX，低显存占用、速度快，不借用 Demucs 4轨混合假两轨。": {
+        "en": "Priority 1: Lightweight 2-stem MDX/ONNX, low VRAM, fast, without faking 2-stem from 4-stem Demucs.",
+        "ko": "1순위: 경량 2-stem MDX/ONNX, 낮은 VRAM 점유, 빠른 속도 (Demucs 4트랙 혼합 방식 미사용).",
+        "ja": "第1優先：軽量 2-stem MDX/ONNX、低 VRAM かつ高速（Demucs 4トラック合成の擬似 2-stem ではありません）。",
+    },
+    "第三优先级：高质量人声分离，显存需求略高于默认低资源 MDX。": {
+        "en": "Priority 3: High-quality vocal separation; slightly higher VRAM than default low-resource MDX.",
+        "ko": "3순위: 고품질 보컬 분리, 기본 저리소스 MDX보다 VRAM 요구량이 약간 높음.",
+        "ja": "第3優先：高品質ボーカル分離、デフォルト低リソース MDX より VRAM 要件がやや高め。",
+    },
+    "第二优先级：4-stem 标准方案；实测默认 segment=6s，强制 jobs=1, shifts=1, segment<=10s, OOM 时自动降 segment。": {
+        "en": "Priority 2: 4-stem standard; measured default segment=6s, enforces jobs=1, shifts=1, segment<=10s, auto-reduces segment on OOM.",
+        "ko": "2순위: 4-stem 표준 방안; 실측 기본 segment=6s, jobs=1/shifts=1/segment<=10s 강제, OOM 시 자동 축소.",
+        "ja": "第2優先：4-stem 標準方式；実測デフォルト segment=6s、jobs=1/shifts=1/segment<=10s 強制、OOM 時は自動で segment 削減。",
+    },
+    "第四优先级（默认关闭）：仅在 RTX 5060 Ti 8GB 实测峰值 VRAM/RAM 合格后才建议手动开启。": {
+        "en": "Priority 4 (off by default): Enable manually only after peak VRAM/RAM passes on RTX 5060 Ti 8GB.",
+        "ko": "4순위 (기본 꺼짐): RTX 5060 Ti 8GB 실측 피크 VRAM/RAM 통과 후에만 수동 활성화를 권장합니다.",
+        "ja": "第4優先（デフォルト無効）：RTX 5060 Ti 8GB で実測ピーク VRAM/RAM 合格後にのみ手動有効化を推奨。",
+    },
+    "等待有效音频输入": {
+        "en": "Waiting for valid audio input",
+        "ko": "유효한 오디오 입력 대기 중",
+        "ja": "有効な音声入力を待機中",
+    },
+    "紧急停止执行中，当前禁止启动新的 AI 分轨任务。": {
+        "en": "Emergency stop in progress; starting new AI separation tasks is currently blocked.",
+        "ko": "긴급 중지 실행 중이므로 새 AI 분리 작업을 시작할 수 없습니다.",
+        "ja": "緊急停止を実行中のため、新しい AI 分離タスクの起動は禁止されています。",
+    },
+    "警告：正在对完整混音进行 MIDI 转录，多乐器叠加可能导致大量误检音符。": {
+        "en": "Warning: transcribing full mix to MIDI; overlapping instruments may cause many false notes.",
+        "ko": "경고: 전체 믹스를 MIDI로 전사 중입니다. 다중 악기 중첩으로 오검출 노트가 많을 수 있습니다.",
+        "ja": "警告：フルミックスを MIDI 採譜中です。複数楽器の重なりにより誤検出音符が多くなる場合があります。",
+    },
+    "请先停止 A/B 播放，再微调边界。": {
+        "en": "Please stop A/B playback before fine-tuning boundaries.",
+        "ko": "경계를 미세 조정하기 전에 먼저 A/B 재생을 중지하세요.",
+        "ja": "境界を微調整する前に A/B 再生を停止してください。",
+    },
+    "请先在 120s 历史时间轴选择有效的 A/B 片段。": {
+        "en": "Please select a valid A/B segment on the 120s history timeline first.",
+        "ko": "먼저 120s 히스토리 타임라인에서 유효한 A/B 구간을 선택하세요.",
+        "ja": "先に 120s 履歴タイムラインで有効な A/B 区間を選択してください。",
+    },
+    "请先在历史波形上设定 A/B 区间。": {
+        "en": "Please set an A/B range on the history waveform first.",
+        "ko": "먼저 히스토리 파형에서 A/B 구간을 설정하세요.",
+        "ja": "先に履歴波形で A/B 範囲を設定してください。",
+    },
+    "请求 GPU HTDemucs 分轨，但当前 torch.cuda.is_available() 为 False。": {
+        "en": "Requested GPU HTDemucs separation, but torch.cuda.is_available() is False.",
+        "ko": "GPU HTDemucs 분리를 요청했으나 현재 torch.cuda.is_available()가 False입니다.",
+        "ja": "GPU HTDemucs 分離が要求されましたが、現在の torch.cuda.is_available() が False です。",
+    },
+    "通过进程名匹配（目标当前可能尚未产生活跃 WASAPI 音频会话）。": {
+        "en": "Matched by process name (target may not have an active WASAPI audio session yet).",
+        "ko": "프로세스 이름으로 일치됨 (대상에 아직 활성 WASAPI 오디오 세션이 없을 수 있음).",
+        "ja": "プロセス名で一致（対象にまだアクティブな WASAPI 音声セッションがない可能性があります）。",
+    },
+    "速度 (BPM) 必须为正数。": {
+        "en": "Tempo (BPM) must be positive.",
+        "ko": "템포 (BPM)는 양수여야 합니다.",
+        "ja": "テンポ (BPM) は正の数である必要があります。",
+    },
+    "采样率必须为正数。": {
+        "en": "Sample rate must be positive.",
+        "ko": "샘플레이트는 양수여야 합니다.",
+        "ja": "サンプリングレートは正の数である必要があります。",
+    },
+    "音频历史已重置，请重新选择 A/B 区间。": {
+        "en": "Audio history reset; please re-select the A/B range.",
+        "ko": "오디오 히스토리가 초기화되었습니다. A/B 구간을 다시 선택하세요.",
+        "ja": "音声履歴がリセットされました。A/B 範囲を再選択してください。",
+    },
+    "鼓轨时长无效。": {
+        "en": "Invalid drum track duration.",
+        "ko": "드럼 트랙 길이가 유효하지 않습니다.",
+        "ja": "ドラムトラックの長さが無効です。",
+    },
+    "（当前使用测试/Core 轻量单音追踪 fallback，非 Spotify Basic Pitch 模型）": {
+        "en": "(Using test/Core lightweight monophonic fallback, not Spotify Basic Pitch)",
+        "ko": "(Spotify Basic Pitch 모델이 아닌 테스트/Core 경량 단음 추적 폴백 사용 중)",
+        "ja": "（Spotify Basic Pitch ではなく、テスト/Core 軽量単音追跡フォールバックを使用中）",
+    },
+    "🧪 合成测试信号模式（非 Windows 真机 WASAPI 捕获）。": {
+        "en": "🧪 Synthetic test signal mode (not real Windows WASAPI capture).",
+        "ko": "🧪 합성 테스트 신호 모드 (실제 Windows WASAPI 캡처 아님).",
+        "ja": "🧪 合成テスト信号モード（Windows 実機 WASAPI キャプチャではありません）。",
+    },
+    "用户点击 紧急停止 AI": {
+        "en": "User clicked Emergency Stop AI",
+        "ko": "사용자가 AI 긴급 중지를 클릭함",
+        "ja": "ユーザーが AI 緊急停止をクリックしました",
+    },
+    "显存/内存不足，请选择安全恢复策略：": {
+        "en": "Insufficient VRAM/RAM; please choose a safe recovery strategy:",
+        "ko": "VRAM/RAM 부족, 안전한 복구 전략을 선택하세요:",
+        "ja": "VRAM/RAM 不足です。安全な復旧方法を選択してください：",
+    },
+    "已停止": {
+        "en": "Stopped",
+        "ko": "중지됨",
+        "ja": "停止しました",
+    },
+}
+
+P2H_DYNAMIC_REGEX_RULES: tuple[tuple[_re.Pattern[str], dict[str, str]], ...] = (
+    (
+        _re.compile(r"^已切换到\s*(.+)$"),
+        {
+            "en": r"Switched to \1",
+            "ko": r"\1(으)로 전환됨",
+            "ja": r"\1 に切り替えました",
+        },
+    ),
+    (
+        _re.compile(r"^\[兜底\] 系统 WASAPI Loopback · (.+)$"),
+        {
+            "en": r"[Fallback] System WASAPI Loopback · \1",
+            "ko": r"[폴백] 시스템 WASAPI Loopback · \1",
+            "ja": r"[フォールバック] システム WASAPI Loopback · \1",
+        },
+    ),
+    (
+        _re.compile(r"^\[([a-z_]+)\]\s*用户点击 紧急停止 AI$"),
+        {
+            "en": r"[\1] User clicked Emergency Stop AI",
+            "ko": r"[\1] 사용자가 AI 긴급 중지를 클릭함",
+            "ja": r"[\1] ユーザーが AI 緊急停止をクリックしました",
+        },
+    ),
+    (
+        _re.compile(r"^\[([a-z_]+)\]\s*已停止$"),
+        {
+            "en": r"[\1] Stopped",
+            "ko": r"[\1] 중지됨",
+            "ja": r"[\1] 停止しました",
+        },
+    ),
+    (
+        _re.compile(r"^\[([a-z_]+)\]\s*AI 分轨任务已取消$"),
+        {
+            "en": r"[\1] AI separation task cancelled",
+            "ko": r"[\1] AI 분리 작업이 취소되었습니다",
+            "ja": r"[\1] AI 分離タスクがキャンセルされました",
+        },
+    ),
+    (
+        _re.compile(r"^\[([a-z_]+)\]\s*AI 分轨任务已取消并清理临时文件$"),
+        {
+            "en": r"[\1] AI separation task cancelled and temp files cleaned",
+            "ko": r"[\1] AI 분리 작업이 취소되고 임시 파일이 정리되었습니다",
+            "ja": r"[\1] AI 分離タスクがキャンセルされ一時ファイルを削除しました",
+        },
+    ),
+    (
+        _re.compile(r"^\[([a-z_]+)\]\s*实时分轨启动已被用户取消$"),
+        {
+            "en": r"[\1] Live separation startup cancelled by user",
+            "ko": r"[\1] 실시간 분리 시작이 사용자에 의해 취소되었습니다",
+            "ja": r"[\1] リアルタイム分離の起動がユーザーによりキャンセルされました",
+        },
+    ),
+    (
+        _re.compile(r"^\[([a-z_]+)\]\s*实时分轨基准测试已被紧急停止/取消$"),
+        {
+            "en": r"[\1] Live separation benchmark emergency-stopped/cancelled",
+            "ko": r"[\1] 실시간 분리 벤치마크가 긴급 중지/취소되었습니다",
+            "ja": r"[\1] リアルタイム分離ベンチマークが緊急停止/キャンセルされました",
+        },
+    ),
+)
+
+P2G_PHRASE_MAP.update(P2H_PHRASE_MAP)
+P2G_DYNAMIC_REGEX_RULES = P2G_DYNAMIC_REGEX_RULES + P2H_DYNAMIC_REGEX_RULES
