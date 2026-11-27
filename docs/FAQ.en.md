@@ -28,3 +28,9 @@ If minimize-to-tray is enabled in Settings, clicking the window close button hid
 - **Data location**: `settings.json`, `exports/`, `workspace_outputs/`, and `logs/` are stored in the **application directory** by default.
 - **Installer edition**: Uninstall via Windows *Settings → Apps* or the uninstaller in the install folder. **`exports/` is preserved on uninstall** so your exported WAV/MIDI files are never lost.
 - **Portable edition**: Simply delete the extracted folder (back up `exports/` first if needed).
+
+### 8. Will switching headphones/speakers or the Windows default output device interrupt capture?
+In **System Loopback** mode, ListenScope automatically follows changes to the Windows default playback device and reconnects capture to the new output while **preserving both your 120-second rolling buffer and current A/B loop selection**. (Per-process loopback stays bound to the chosen player process directly.)
+
+### 9. Does checking for updates online upload any data, and can I disable auto-check?
+**No.** Update checks only read public version metadata from GitHub Releases and send no audio, settings, device info, or telemetry. Downloaded update packages are verified against `SHA256SUMS.txt`, and automatic update checking can be turned off in **Settings** at any time.

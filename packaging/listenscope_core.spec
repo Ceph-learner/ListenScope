@@ -56,6 +56,9 @@ if collect_all is not None:
         except Exception:
             pass
 
+if (project_root / "core" / "_build_info.py").exists():
+    extra_hiddenimports.append("core._build_info")
+
 a = Analysis(
     [str(project_root / "main.py")],
     pathex=[str(project_root)],

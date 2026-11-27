@@ -20,7 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtSvg, QtWidgets
 
 from analysis.worker import AnalysisWorker
 from audio.playback import StemMixerEngine
@@ -110,6 +110,38 @@ def _build_synthetic_snapshot() -> tuple[AnalysisSnapshot, np.ndarray]:
     return snap, spec_mat
 
 
+def _ensure_ui_fonts(app: QtWidgets.QApplication) -> dict[str, str]:
+    """Load platform UI fonts cleanly and return preferred sans/cjk/mono font family names."""
+    if sys.platform == "win32":
+        for font_file in ("msyh.ttc", "msyhbd.ttc", "segoeui.ttf", "consola.ttf"):
+            fp = Path(r"C:\Windows\Fonts") / font_file
+            if fp.exists():
+                QtGui.QFontDatabase.addApplicationFont(str(fp))
+    families = set(QtGui.QFontDatabase.families())
+    if sys.platform == "win32":
+        assert any(f in families for f in ("Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI")), (
+            f"Missing Windows UI fonts in QFontDatabase: {sorted(families)[:20]}"
+        )
+
+    def _pick(candidates: tuple[str, ...], fallback: str) -> str:
+        for name in candidates:
+            if name in families:
+                return name
+        return fallback
+
+    sans = _pick(("Segoe UI", "Noto Sans", "Cantarell", "DejaVu Sans"), app.font().family())
+    cjk = _pick(
+        ("Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans", "DejaVu Sans"),
+        sans,
+    )
+    mono = _pick(
+        ("Cascadia Mono", "Cascadia Code", "Consolas", "Source Code Pro", "DejaVu Sans Mono"),
+        "Monospace",
+    )
+    app.setFont(QtGui.QFont(cjk, 10))
+    return {"sans": sans, "cjk": cjk, "mono": mono}
+
+
 def _save_png_under_limit(pixmap: QtGui.QPixmap, out_path: Path, max_kb: int = 200) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     # Use maximum PNG compression (quality=0..100 in Qt PNG means 0=max compression or -1 default)
@@ -123,6 +155,80 @@ def _save_png_under_limit(pixmap: QtGui.QPixmap, out_path: Path, max_kb: int = 2
         scaled.save(str(out_path), "PNG", 9)
 
 
+def _prepare_synthetic_main_window(
+    app: QtWidgets.QApplication,
+    *,
+    theme_mode: str = "light",
+    language: str = "zh",
+    width: int = 1366,
+    height: int = 768,
+) -> tuple[ListenScopeMainWindow, StemMixerEngine]:
+    """Create a populated ListenScopeMainWindow using deterministic synthetic audio/telemetry."""
+    snap, spec_mat = _build_synthetic_snapshot()
+    if spec_mat is None or spec_mat.size == 0:
+        n_frames, n_bins = 450, 96
+        t_idx = np.linspace(0.0, 1.0, n_frames, dtype=np.float32)[:, None]
+        spec_mat = np.full((n_frames, n_bins), -78.0, dtype=np.float32)
+        spec_mat[:, 20:24] = -18.0 + 6.0 * np.sin(2.0 * np.pi * 2.0 * t_idx)
+        spec_mat[:, 44:47] = -12.0 + 4.0 * np.cos(2.0 * np.pi * 1.5 * t_idx)
+        spec_mat[:, 56:58] = -26.0
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    res_snap = ResourceSnapshot(
+        timestamp=1.0,
+        main_ram_mb=320.0,
+        ai_worker_ram_mb=0.0,
+        system_ram_total_mb=16384.0,
+        system_ram_available_mb=6200.0,
+        gpu_name="Synthetic RTX GPU",
+        vram_total_mb=8192.0,
+        vram_used_mb=1024.0,
+        vram_free_mb=7168.0,
+        gpu_utilization_pct=4.0,
+        active_ai_jobs=0,
+        loaded_models=0,
+        current_model=None,
+        current_task=None,
+        audio_queue_size=1,
+        audio_queue_maxsize=64,
+        ai_buffer_seconds=3.0,
+        status=ResourceStatus.NORMAL,
+    )
+    cap_stats = CaptureStats(
+        mode=CaptureMode.SYNTHETIC_SIMULATION,
+        pid=None,
+        process_name="Simulated",
+        is_running=True,
+        sample_rate=48000,
+        channels=2,
+        dtype="float32",
+        rms_dbfs=-18.0,
+        peak_dbfs=-6.2,
+        is_silent=False,
+    )
+    chroma_hist = np.full((450, 12), 0.12, dtype=np.float32)
+    chroma_hist[:, 4] = 0.92  # E
+    chroma_hist[:, 1] = 0.85  # C#
+    chroma_hist[:, 8] = 0.80  # G#
+
+    win.apply_appearance(Appearance(theme_mode=theme_mode, language=language))
+    win.tabs.setCurrentIndex(0)
+    win.resize(width, height)
+    win.show()
+    win.update_analysis_snapshot(snap, spec_mat, chroma_hist)
+    win.update_capture_stats(cap_stats, ring_available_sec=3.0)
+    win.update_resource_snapshot(res_snap, [], [])
+    win._acid_footer.set_telemetry(cpu_pct=4.2)
+    for _ in range(4):
+        app.processEvents()
+    return win, mixer
+
+
 def capture_screenshots(
     out_dir: Path,
     *,
@@ -131,19 +237,7 @@ def capture_screenshots(
     max_kb: int = 200,
 ) -> list[Path]:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    if sys.platform == "win32":
-        for font_file in ("msyh.ttc", "msyhbd.ttc", "segoeui.ttf", "consola.ttf"):
-            fp = Path(r"C:\Windows\Fonts") / font_file
-            if fp.exists():
-                QtGui.QFontDatabase.addApplicationFont(str(fp))
-        families = set(QtGui.QFontDatabase.families())
-        assert any(f in families for f in ("Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI")), (
-            f"Missing Windows UI fonts in QFontDatabase: {sorted(families)[:20]}"
-        )
-        if "Microsoft YaHei UI" in families:
-            app.setFont(QtGui.QFont("Microsoft YaHei UI", 10))
-        elif "Microsoft YaHei" in families:
-            app.setFont(QtGui.QFont("Microsoft YaHei", 10))
+    _ensure_ui_fonts(app)
     snap, spec_mat = _build_synthetic_snapshot()
     if spec_mat is None or spec_mat.size == 0:
         n_frames, n_bins = 450, 96
@@ -640,6 +734,160 @@ def capture_demo_gif(out_path: Path, *, width: int = 860, max_kb: int = 2900) ->
     return out_path
 
 
+def capture_social_preview(out_path: Path, *, max_kb: int = 1024) -> Path:
+    """Render an exact 1280x640 light-theme social preview combining official branding and live UI."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    fonts = _ensure_ui_fonts(app)
+
+    win, mixer = _prepare_synthetic_main_window(
+        app,
+        theme_mode="light",
+        language="zh",
+        width=1366,
+        height=768,
+    )
+    try:
+        ui_pm = win.grab()
+    finally:
+        win.close()
+        mixer.close()
+
+    canvas_w, canvas_h = 1280, 640
+    canvas = QtGui.QImage(canvas_w, canvas_h, QtGui.QImage.Format.Format_ARGB32)
+    canvas.fill(QtGui.QColor("#EEF2F6"))
+
+    p = QtGui.QPainter(canvas)
+    p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+    p.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, True)
+    p.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing, True)
+
+    # Subtle engineering grid background matching light Acid Telemetry canvas
+    p.setPen(QtGui.QPen(QtGui.QColor("#DCE3EC"), 1))
+    for gx in range(32, canvas_w, 32):
+        p.drawLine(gx, 0, gx, canvas_h)
+    for gy in range(32, canvas_h, 32):
+        p.drawLine(0, gy, canvas_w, gy)
+
+    # Top & bottom hairline accent bars
+    p.fillRect(0, 0, 760, 6, QtGui.QColor("#007A57"))
+    p.fillRect(760, 0, 280, 6, QtGui.QColor("#0284C7"))
+    p.fillRect(1040, 0, 240, 6, QtGui.QColor("#090D14"))
+    p.fillRect(0, canvas_h - 4, canvas_w, 4, QtGui.QColor("#007A57"))
+
+    # Right-side framed light-theme UI screenshot (852x479 -> 16:9 from 1366x768)
+    shot_w = 852
+    shot_h = round(shot_w * ui_pm.height() / max(1, ui_pm.width()))
+    shot_x = canvas_w - 38 - shot_w
+    shot_y = (canvas_h - shot_h) // 2
+
+    # Crisp multi-step elevation shadow behind the UI window
+    for offset, alpha in ((10, 16), (6, 24), (2, 36)):
+        p.fillRect(
+            shot_x + offset,
+            shot_y + offset,
+            shot_w,
+            shot_h,
+            QtGui.QColor(9, 13, 20, alpha),
+        )
+
+    scaled_ui = ui_pm.scaled(
+        shot_w,
+        shot_h,
+        QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+        QtCore.Qt.TransformationMode.SmoothTransformation,
+    )
+    p.drawPixmap(shot_x, shot_y, scaled_ui)
+    p.setPen(QtGui.QPen(QtGui.QColor("#94A3B8"), 1))
+    p.drawRect(shot_x, shot_y, shot_w, shot_h)
+
+    # Left brand column (x=40..356)
+    brand_x = 42
+    brand_w = shot_x - brand_x - 28
+
+    # Official light app icon rendered from SVG
+    svg_path = REPO_ROOT / "ui" / "assets" / "listenscope_master_light.svg"
+    renderer = QtSvg.QSvgRenderer(str(svg_path))
+    icon_size = 92
+    icon_y = 84
+    renderer.render(p, QtCore.QRectF(brand_x, icon_y, icon_size, icon_size))
+
+    # Bold application title
+    title_y = icon_y + icon_size + 24
+    title_font = QtGui.QFont(fonts["sans"], 34, QtGui.QFont.Weight.Bold)
+    title_font.setLetterSpacing(QtGui.QFont.SpacingType.AbsoluteSpacing, -0.5)
+    p.setFont(title_font)
+    p.setPen(QtGui.QColor("#090D14"))
+    p.drawText(QtCore.QRectF(brand_x, title_y, brand_w, 48), QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, "ListenScope")
+
+    # Dual-tone accent divider
+    div_y = title_y + 56
+    p.fillRect(brand_x, div_y, 56, 4, QtGui.QColor("#007A57"))
+    p.fillRect(brand_x + 62, div_y, 22, 4, QtGui.QColor("#0284C7"))
+
+    # Clean subtitle (ZH + EN) using verified installed CJK/sans fonts
+    sub_y = div_y + 18
+    sub_zh_font = QtGui.QFont(fonts["cjk"], 15, QtGui.QFont.Weight.DemiBold)
+    p.setFont(sub_zh_font)
+    p.setPen(QtGui.QColor("#0F172A"))
+    p.drawText(
+        QtCore.QRectF(brand_x, sub_y, brand_w, 52),
+        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.TextFlag.TextWordWrap,
+        "实时听歌分析 · A/B 慢放\n本地 AI 分轨与扒谱工作台",
+    )
+
+    sub_en_font = QtGui.QFont(fonts["sans"], 11, QtGui.QFont.Weight.Normal)
+    p.setFont(sub_en_font)
+    p.setPen(QtGui.QColor("#475569"))
+    p.drawText(
+        QtCore.QRectF(brand_x, sub_y + 56, brand_w, 40),
+        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.TextFlag.TextWordWrap,
+        "Offline Windows Audio Analysis, A/B Loop & Stem Practice",
+    )
+
+    # Compact telemetry highlight chips
+    chips = [
+        ("SPECTRUM & F0", "实时频谱 · 音准刻度"),
+        ("CHORD · KEY · BPM", "24 调和弦 · 移调联动"),
+        ("120s A/B · STEMS", "AI 分轨 · Cubase MIDI"),
+    ]
+    chip_y = 414
+    chip_h = 44
+    chip_gap = 10
+    tag_font = QtGui.QFont(fonts["mono"], 9, QtGui.QFont.Weight.Bold)
+    desc_font = QtGui.QFont(fonts["cjk"], 11, QtGui.QFont.Weight.Normal)
+    for tag, desc in chips:
+        p.fillRect(brand_x, chip_y, brand_w, chip_h, QtGui.QColor("#FFFFFF"))
+        p.setPen(QtGui.QPen(QtGui.QColor("#CBD5E1"), 1))
+        p.drawRect(brand_x, chip_y, brand_w, chip_h)
+        p.fillRect(brand_x, chip_y, 4, chip_h, QtGui.QColor("#007A57"))
+
+        p.setFont(tag_font)
+        p.setPen(QtGui.QColor("#007A57"))
+        p.drawText(QtCore.QRectF(brand_x + 12, chip_y + 4, brand_w - 18, 16), QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, tag)
+
+        p.setFont(desc_font)
+        p.setPen(QtGui.QColor("#1E293B"))
+        p.drawText(QtCore.QRectF(brand_x + 12, chip_y + 21, brand_w - 18, 20), QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, desc)
+
+        chip_y += chip_h + chip_gap
+
+    p.end()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(str(out_path), "PNG", 9)
+    max_bytes = int(max_kb) * 1024
+    if out_path.stat().st_size > max_bytes:
+        from PIL import Image
+
+        with Image.open(out_path) as im:
+            quant = im.convert("RGB").quantize(colors=256, method=Image.Quantize.MEDIANCUT)
+            quant.save(out_path, format="PNG", optimize=True)
+    assert out_path.stat().st_size <= max_bytes, (
+        f"Social preview exceeds size budget: {out_path.stat().st_size} > {max_bytes}"
+    )
+    return out_path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Capture offscreen synthetic screenshots for ListenScope.")
     parser.add_argument("--out-dir", type=Path, default=REPO_ROOT / "docs" / "review" / "screens")
@@ -650,6 +898,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--p2f", action="store_true", help="Generate Phase 2F verification screenshots")
     parser.add_argument("--settings-ai", type=Path, default=None, help="Output path for Settings AI & MIDI PNG")
     parser.add_argument("--demo-gif", type=Path, default=None, help="Output path for ~10s 860px light demo GIF")
+    parser.add_argument("--social-preview", type=Path, default=None, help="Output path for 1280x640 light social preview PNG")
     args = parser.parse_args(argv)
     if args.p2f:
         pfx = "p2f_after_" if args.prefix == "p2e_before_" else args.prefix
@@ -663,6 +912,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.demo_gif is not None:
         out = capture_demo_gif(args.demo_gif)
+        print(f"{out} ({out.stat().st_size / 1024.0:.1f} KB)")
+        return 0
+    if args.social_preview is not None:
+        out = capture_social_preview(args.social_preview)
         print(f"{out} ({out.stat().st_size / 1024.0:.1f} KB)")
         return 0
     if args.design_sheet:

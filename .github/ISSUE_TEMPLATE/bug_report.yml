@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: 软件版本号（页脚显示的 dev / release 版本号）
-      placeholder: "例如：v1.0.1-dev+abc1234 或 v1.1.0"
+      placeholder: "例如：v1.1.0-dev+abc1234 或 v1.1.0"
     validations:
       required: true
   - type: input
