@@ -645,6 +645,16 @@ P2G_PHRASE_MAP: dict[str, dict[str, str]] = {
         "ko": "현재 설치 유형과 일치하는 패키지를 찾을 수 없습니다. Releases 페이지에서 수동으로 다운로드하세요.",
         "ja": "現在のインストール形式に一致するパッケージが見つかりません。Releases ページから手動でダウンロードしてください。",
     },
+    "立即安装更新并退出": {
+        "en": "Install Update & Quit",
+        "ko": "지금 업데이트 설치 후 종료",
+        "ja": "今すぐ更新をインストールして終了",
+    },
+    "立即应用更新并重启": {
+        "en": "Apply Update & Restart",
+        "ko": "지금 업데이트 적용 후 다시 시작",
+        "ja": "今すぐ更新を適用して再起動",
+    },
 }
 
 import re as _re
@@ -849,6 +859,14 @@ P2G_DYNAMIC_REGEX_RULES: tuple[tuple[_re.Pattern[str], dict[str, str]], ...] = (
             "en": r"Update download failed: \1",
             "ko": r"업데이트 다운로드 실패: \1",
             "ja": r"更新のダウンロードに失敗しました: \1",
+        },
+    ),
+    (
+        _re.compile(r"^应用更新失败，请手动安装或重启后重试:\s*"),
+        {
+            "en": "Failed to apply update; please install manually or restart and retry: ",
+            "ko": "업데이트 적용에 실패했습니다. 수동으로 설치하거나 다시 시작한 후 재시도하세요: ",
+            "ja": "更新の適用に失敗しました。手動でインストールするか再起動後に再試行してください: ",
         },
     ),
 )
