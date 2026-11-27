@@ -437,12 +437,14 @@ def test_four_stage_progressive_collapse_order_and_short_capture_format() -> Non
         # Observe monotonic stages from wide 1600 down to minimumWidth 760
         seen_stages: list[int] = []
         stage_states: dict[int, tuple[bool, bool, bool, bool]] = {}
+        stage_widths: dict[int, int] = {}
         for w in range(1600, 759, -16):
             win.resize(w, 720)
             app.processEvents()
             st = win._topbar_collapse_stage
             if not seen_stages or st != seen_stages[-1]:
                 seen_stages.append(st)
+            stage_widths.setdefault(st, w)
             stage_states[st] = (
                 win._capture_compact_mode,
                 win.resource_bar._compact_mode,
@@ -461,8 +463,8 @@ def test_four_stage_progressive_collapse_order_and_short_capture_format() -> Non
         assert stage_states[3] == (True, True, True, False)
         assert stage_states[4] == (True, True, True, True)
 
-        # Verify short capture label and full tooltip at 1190
-        win.resize(1190, 720)
+        # Verify short capture label and full tooltip at observed Stage-1 width (w=1190 is covered by sweep tests)
+        win.resize(stage_widths[1], 720)
         app.processEvents()
         assert win.capture_status_lbl.text() == "⚠ -28 dB"
         assert "[混入警告]" in win.capture_status_lbl.toolTip()
