@@ -3378,10 +3378,6 @@ QFrame#acidTopbar QPushButton#freezeBtn,
 QFrame#acidTopbar QPushButton#settingsBtn {{
     padding: 4px 6px;
 }}
-QFrame#acidTopbar QLabel#captureStatus,
-QFrame#acidTopbar QLabel#statusBadge {{
-    padding: 2px 6px;
-}}
 QFrame#acidDivider {{
     background-color: {p.border};
     max-height: 1px;
@@ -3508,6 +3504,10 @@ QLabel#statusBadge, QLabel#captureStatus, QLabel#aiStatusBadge, QLabel#bannerNot
     font-family: {cjk_family};
     font-size: {mono_px}px;
     letter-spacing: 0px;
+}}
+QLabel#captureStatus,
+QFrame#resourceCapsule QLabel#statusBadge {{
+    padding: 2px 6px;
 }}
 QFrame#bannerNoticeBox {{
     border-radius: 0px;

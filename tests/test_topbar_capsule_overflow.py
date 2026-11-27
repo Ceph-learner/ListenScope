@@ -434,10 +434,10 @@ def test_four_stage_progressive_collapse_order_and_short_capture_format() -> Non
             [],
         )
 
-        # Observe monotonic stages from wide 1600 down to narrow 874
+        # Observe monotonic stages from wide 1600 down to minimumWidth 760
         seen_stages: list[int] = []
         stage_states: dict[int, tuple[bool, bool, bool, bool]] = {}
-        for w in range(1600, 870, -16):
+        for w in range(1600, 759, -16):
             win.resize(w, 720)
             app.processEvents()
             st = win._topbar_collapse_stage
