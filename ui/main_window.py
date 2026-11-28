@@ -3165,10 +3165,16 @@ class ListenScopeMainWindow(QtWidgets.QMainWindow):
 
         if stats.mode == CaptureMode.SYNTHETIC_SIMULATION:
             src_txt = "Simulated"
-        elif stats.mode == CaptureMode.SYSTEM_LOOPBACK and getattr(stats, "process_name", ""):
-            src_txt = str(stats.process_name).strip()
-            self._loopback_device_name = src_txt
-            self._refresh_loopback_source_combo_i18n(lang)
+        elif stats.mode == CaptureMode.SYSTEM_LOOPBACK:
+            proc_name = str(getattr(stats, "process_name", "") or "").strip()
+            if proc_name:
+                src_txt = proc_name
+                self._loopback_device_name = proc_name
+                self._refresh_loopback_source_combo_i18n(lang)
+            elif getattr(self, "_loopback_device_name", ""):
+                src_txt = str(self._loopback_device_name).strip()
+            else:
+                src_txt = self.source_combo.currentText().strip() or "--"
         else:
             src_txt = self.source_combo.currentText().strip() or "--"
         if hasattr(self, "_acid_footer"):

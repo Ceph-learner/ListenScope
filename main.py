@@ -2579,6 +2579,7 @@ def _run_loopback_smoke(json_path: str) -> int:
             "opened": opened,
             "attempts": int(backend.last_open_attempts),
             "attempt_errors": list(backend.last_open_errors),
+            "timings": list(getattr(backend, "last_open_timings", [])),
             "error": err_text,
             "pyaudiowpatch_version": str(pa_info.get("pyaudiowpatch_version", "") or ""),
             "portaudio_version_text": str(pa_info.get("portaudio_version_text", "") or ""),

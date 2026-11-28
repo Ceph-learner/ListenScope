@@ -75,3 +75,63 @@
 3. **Genuine Disconnect & Manual Recovery (I2)**:
    - Disable or unplug the active playback device without switching to another valid device. Confirm capture stops cleanly after `max_device_reconnects` (3) attempts with the error banner and the capture button unchecked.
    - Re-enable/reconnect the playback device and click **Start Capture**. Confirm capture resumes cleanly and PCM audio flows immediately.
+
+## Round 2
+
+### 1. Root Causes & Fixes (I1-R2 & I2-R2)
+- **I1-R2 (Scaled Startup Timeout, Stage Diagnostics & Per-Attempt Timings)**:
+  - **Root Cause**: `WasapiSystemLoopbackBackend.start()` previously waited `max(5.0, 5.0 + retry_sleeps)` (`5.45s` total for 3 attempts), which did not scale with `1 + startup_open_retries` when slow WASAPI device initialization took ~2s+ per attempt, and timeout failures lacked stage-level stall attribution or per-attempt sub-step timings.
+  - **Fix**:
+    - `audio/system_loopback.py`: Added `startup_per_attempt_timeout_sec: float = 5.0` and `_compute_startup_wait_sec()` (`total_attempts * per_attempt + retry_sleeps + guard`, yielding `16.45s` at defaults). Added `_startup_stage` (`pa_init`, `enum_default`, `fallback_enum`, `open_f32`, `open_i16`, `terminate`, `retry_sleep`, `ready`) and read-only `last_open_timings` property returning shallow-copied per-attempt timing dicts (`attempt`, `pa_init_ms`, `enum_default_ms`, `fallback_enum_ms`, `open_f32_ms`, `open_i16_ms`, `terminate_ms`, `total_ms`, `status`, `device_name`, `error`). Timeout warnings log `stage=<stage> stage_elapsed_ms=<ms> attempts=<n>` before raising `RuntimeError("系统 WASAPI Loopback 启动超时。")`.
+    - `main.py`: Included `"timings": list(getattr(backend, "last_open_timings", []))` in `--loopback-smoke` JSON output.
+- **I2-R2 (Switch/Idle Silence Keepalive, Device Name Preservation & Rapid-Switch Helper)**:
+  - **Root Cause**:
+    1. During proactive switch backoff/reopen and prolonged `get_read_available() == 0` idle gaps, no zero-PCM frames were emitted to `self.queue`, causing `RingBuffer` growth to stall `>= 1.0s` across consecutive switches.
+    2. `ListenScopeMainWindow.update_capture_stats()` fell back to `source_combo.currentText()` / `"--"` if `stats.process_name` was transiently empty during `CaptureMode.SYSTEM_LOOPBACK`.
+    3. Real-device switch verification lacked a standalone PowerShell Core Audio switching helper.
+  - **Fix**:
+    - `audio/system_loopback.py`: Added `idle_silence_grace_sec: float = 0.15`, `_emit_silence_chunk(target_sr, dev_name, chunk_frames)`, and `_SwitchSilenceKeepalive` (`ListenScope-SwitchSilenceKeepalive`, `daemon=True`). Keepalive emits ~20ms zero-PCM chunks strictly into `self.queue` / `self._stats.record_chunk` (never touching PortAudio, COM, Qt, `_unexpected_disconnect_attempts`, `clean_chunks_since_reconnect`, or unverified `stats.process_name`), joins synchronously (`timeout <= 0.3s`) before returning to `stream.read()` and during `stop()` (`< 0.5s` total stop latency). Added `idle_silence_grace_sec` silence cadence inside the `get_read_available()` wait loop and preserved non-empty `current_dev_name`.
+    - `ui/main_window.py`: Updated `update_capture_stats()` to preserve `self._loopback_device_name` in `_acid_footer` when `stats.mode == CaptureMode.SYSTEM_LOOPBACK` and `stats.process_name` is transiently empty.
+    - `scripts/rapid_switch.ps1`: Added PowerShell 5.1+ compatible Core Audio switcher using `IMMDeviceEnumerator` + `IPolicyConfig` (no external modules), supporting `-Devices` (default `@("XIBERIA", "Realtek")`), `-Rounds` (default `2`, 4 alternating switches), `-IntervalSeconds`, `-Regex`, case-insensitive substring matching (`OrdinalIgnoreCase`), active endpoint listing, and immediate `exit 1` on `NO_MATCH`.
+
+### 2. Round 2 Thread-Ownership & COM Audit
+
+| Thread / Component | Owning Thread | Allowed Operations | Forbidden Operations |
+| :--- | :--- | :--- | :--- |
+| PortAudio (`PyAudio`, `open`, `get_read_available`, `read`, `stop_stream`, `close`, `terminate`) | `ListenScope-SystemLoopback` | Startup enumeration, stream read/idle poll, reopen, cleanup | Any PortAudio call from caller, watcher, keepalive, or UI thread |
+| Windows COM (`CoInitializeEx`, `IMMDeviceEnumerator`, `CoUninitialize`) | `ListenScope-DefaultDeviceWatcher` | Endpoint polling on watcher thread only | Any COM init/call on `ListenScope-SystemLoopback` or `ListenScope-SwitchSilenceKeepalive` |
+| Silence Keepalive (`_SwitchSilenceKeepalive`, `_emit_silence_chunk`) | `ListenScope-SwitchSilenceKeepalive` (daemon) / `ListenScope-SystemLoopback` (idle poll) | Pure NumPy zero-chunk generation, `queue.put_drop_oldest`, `_stats.record_chunk`; joined synchronously (`<= 0.25s`) before `stream.read()` / `stop()` | Any PortAudio, COM, Qt widget/signal, `_unexpected_disconnect_attempts` reset, `clean_chunks_since_reconnect` increment, or unverified `process_name` mutation |
+| Qt GUI (`update_capture_stats`, `_acid_footer`) | Qt main UI thread | Reading `CaptureStats` snapshots, preserving `_loopback_device_name` on transient empty `process_name` | Any direct mutation from capture, watcher, or keepalive threads |
+
+### 3. Round 2 Verification Results (Linux / Offscreen)
+
+> **Scope Note**: Local tests below ran on Linux (`QT_QPA_PLATFORM=offscreen`) with mock/unit PortAudio and Windows COM doubles; real Windows 11 WASAPI hardware, 10x frozen `.exe` restarts, and `scripts\rapid_switch.ps1` COM switching require Windows CI and target-machine verification.
+
+- `QT_QPA_PLATFORM=offscreen ... pytest tests/test_review_phase2i.py`: **15 passed, 1 skipped** (`test_i1_windows_real_loopback_and_portaudio_version` skipped on Linux).
+- `QT_QPA_PLATFORM=offscreen ... pytest tests/test_review_phase2i.py tests/test_review_phase2h.py tests/test_release_prep_v110.py tests/test_updater.py tests/test_updater_apply.py tests/test_review_phase1.py tests/test_phase1_capture.py tests/test_review_phase2g.py`: **110 passed, 3 skipped** (includes `test_h3_ast_expanded_packages_chinese_strings_covered_by_i18n` and `test_g1_ast_static_chinese_strings_covered_by_i18n`).
+
+### 4. Windows 11 Target-Machine Retest Steps (Copy & Run)
+
+1. **10x Installed-Exe Loopback Startup Restart Smoke (I1-R2)**:
+   ```powershell
+   $exe = "D:\ListenScope\ListenScope.exe"
+   1..10 | ForEach-Object {
+     $out = "$env:TEMP\ls_smoke_$_.json"
+     & $exe --loopback-smoke $out
+     if ($LASTEXITCODE -ne 0) { throw "Attempt $_ exited $LASTEXITCODE" }
+     $r = Get-Content $out -Raw | ConvertFrom-Json
+     Write-Host "Run $_`: opened=$($r.opened) attempts=$($r.attempts) total_ms=$($r.timings[-1].total_ms)"
+     if (-not $r.opened) { throw "Run $_ failed: $($r.error)" }
+   }
+   ```
+2. **4-Switch Rapid Default Playback Test with `rapid_switch.ps1` (I2-R2)**:
+   - Launch `D:\ListenScope\ListenScope.exe`, select **System WASAPI Loopback**, click **Start Capture**, and play continuous audio.
+   - In a second PowerShell window at the repo root, execute:
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File scripts\rapid_switch.ps1 -Devices XIBERIA,Realtek -Rounds 2 -IntervalSeconds 1.5
+     ```
+   - Confirm:
+     - All 4 alternating switches complete cleanly without permanent capture stop (`播放设备中断且重连超过 ... 次` never appears).
+     - Buffer counter in footer/history grows monotonically without `>= 1.0s` stalls and device label in footer stays populated (never drops to `--`).
+     - `logs\listenscope.log` shows 4 `loopback default device changed old=... new=...` entries matching the switched endpoints.
+

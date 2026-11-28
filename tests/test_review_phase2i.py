@@ -252,6 +252,7 @@ def test_i1_portaudio_runtime_info_and_loopback_smoke_cli(tmp_path: Path, monkey
         "opened",
         "attempts",
         "attempt_errors",
+        "timings",
         "error",
         "pyaudiowpatch_version",
         "portaudio_version_text",
@@ -261,6 +262,7 @@ def test_i1_portaudio_runtime_info_and_loopback_smoke_cli(tmp_path: Path, monkey
         "sounddevice_dll_size",
     ):
         assert req_key in payload
+    assert isinstance(payload["timings"], list)
     assert payload["portaudio_version_text"] == "PortAudio V19.7.0-devel"
 
 
@@ -901,7 +903,6 @@ def test_i2_new_status_and_error_messages_i18n_4_languages() -> None:
                 )
 
 
-@pytest.mark.xfail(strict=True, reason="I1-R2: startup timeout not scaled by retries and last_open_timings missing")
 def test_i1_r2_startup_timeout_scales_with_retries_logs_timings_and_10_restarts() -> None:
     from audio.system_loopback import WasapiSystemLoopbackBackend
 
@@ -994,7 +995,42 @@ def test_i1_r2_startup_timeout_scales_with_retries_logs_timings_and_10_restarts(
             backend.stop()
 
 
-@pytest.mark.xfail(strict=True, reason="I2-R2: switch/idle silence keepalive and UI device name preservation not implemented")
+def test_i1_r2_startup_timeout_logs_stalled_stage_and_elapsed_ms(caplog) -> None:
+    from audio.system_loopback import WasapiSystemLoopbackBackend
+
+    release_block = threading.Event()
+    entered_pa_init = threading.Event()
+
+    def _stalled_pa_factory() -> Any:
+        entered_pa_init.set()
+        release_block.wait(timeout=3.0)
+        raise OSError("released after test")
+
+    backend = WasapiSystemLoopbackBackend(
+        pyaudio_factory=_stalled_pa_factory,
+        allow_non_windows=True,
+        follow_default_device=False,
+        startup_open_retries=0,
+        startup_per_attempt_timeout_sec=0.10,
+    )
+    try:
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(RuntimeError, match="启动超时"):
+                backend.start()
+        assert entered_pa_init.is_set()
+        timeout_logs = [
+            r.message
+            for r in caplog.records
+            if "startup timed out" in r.message
+        ]
+        assert timeout_logs, f"Expected timeout warning log, got {[r.message for r in caplog.records]}"
+        assert "stage=pa_init" in timeout_logs[0]
+        assert "stage_elapsed_ms=" in timeout_logs[0]
+    finally:
+        release_block.set()
+        backend.stop()
+
+
 def test_i2_r2_four_real_switches_buffer_monotonic_no_1s_stall_and_device_name_preserved() -> None:
     from PySide6 import QtWidgets
     from audio.playback import StemMixerEngine
@@ -1207,8 +1243,10 @@ def test_i2_r2_four_real_switches_buffer_monotonic_no_1s_stall_and_device_name_p
         app.processEvents()
 
 
-@pytest.mark.xfail(strict=True, reason="I2-R2: scripts/rapid_switch.ps1 not added yet")
 def test_i2_r2_rapid_switch_ps1_substring_and_regex_matching_contract() -> None:
+    import shutil
+    import subprocess
+
     ps1_path = REPO_ROOT / "scripts" / "rapid_switch.ps1"
     assert ps1_path.is_file(), "scripts/rapid_switch.ps1 missing"
     text = ps1_path.read_text("utf-8")
@@ -1228,4 +1266,14 @@ def test_i2_r2_rapid_switch_ps1_substring_and_regex_matching_contract() -> None:
         "exit 1",
     ):
         assert required in text, f"Missing {required!r} in scripts/rapid_switch.ps1"
+
+    pwsh = shutil.which("pwsh")
+    if pwsh is not None:
+        parse_cmd = (
+            "$errs = $null; $tokens = $null; "
+            f"[void][System.Management.Automation.Language.Parser]::ParseFile('{ps1_path}', [ref]$tokens, [ref]$errs); "
+            "if ($errs -and $errs.Count -gt 0) { $errs | ForEach-Object { Write-Error $_.Message }; exit 1 }"
+        )
+        res = subprocess.run([pwsh, "-NoProfile", "-Command", parse_cmd], capture_output=True, text=True, timeout=20)
+        assert res.returncode == 0, f"PowerShell syntax parse failed: {res.stderr}"
 

@@ -323,6 +323,61 @@ def get_portaudio_runtime_info() -> dict[str, Any]:
     return info
 
 
+class _SwitchSilenceKeepalive:
+    """Pushes ~20ms zero-PCM chunks during proactive device-switch backoff/reopen."""
+
+    def __init__(
+        self,
+        backend: "WasapiSystemLoopbackBackend",
+        *,
+        target_sr: int,
+        dev_name: str,
+        chunk_frames: int,
+    ) -> None:
+        self._backend = backend
+        self._target_sr = max(1, int(target_sr))
+        self._dev_name = str(dev_name or "")
+        self._chunk_frames = max(1, int(chunk_frames))
+        self._interval_sec = max(0.005, self._chunk_frames / float(self._target_sr))
+        self._local_stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._local_stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="ListenScope-SwitchSilenceKeepalive",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def signal_stop(self) -> None:
+        self._local_stop.set()
+
+    def _run(self) -> None:
+        while (
+            not self._local_stop.is_set()
+            and not self._backend._stop_event.is_set()
+            and not self._backend._closing.is_set()
+        ):
+            t0 = time.monotonic()
+            self._backend._emit_silence_chunk(self._target_sr, self._dev_name, self._chunk_frames)
+            elapsed = time.monotonic() - t0
+            rem = self._interval_sec - elapsed
+            if rem > 0.0:
+                if self._local_stop.wait(timeout=rem):
+                    break
+
+    def stop(self, timeout: float = 0.25) -> None:
+        self._local_stop.set()
+        t = self._thread
+        self._thread = None
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=min(0.3, max(0.01, float(timeout))))
+
+
 class WasapiSystemLoopbackBackend(AudioCaptureBackend):
     """Fallback Windows system-wide WASAPI loopback using PyAudioWPatch.
 
@@ -344,6 +399,8 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         device_switch_ttl_sec: float = 5.0,
         startup_open_retries: int = 2,
         startup_retry_delay_sec: float = 0.15,
+        startup_per_attempt_timeout_sec: float = 5.0,
+        idle_silence_grace_sec: float = 0.15,
         switch_backoff_initial_sec: float = 0.05,
         switch_backoff_max_sec: float = 2.0,
     ) -> None:
@@ -357,6 +414,8 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         self._device_switch_ttl_sec = max(0.05, float(device_switch_ttl_sec))
         self._startup_open_retries = max(0, int(startup_open_retries))
         self._startup_retry_delay_sec = max(0.0, float(startup_retry_delay_sec))
+        self._startup_per_attempt_timeout_sec = max(0.01, float(startup_per_attempt_timeout_sec))
+        self._idle_silence_grace_sec = max(0.0, float(idle_silence_grace_sec))
         self._switch_backoff_initial_sec = max(0.0, float(switch_backoff_initial_sec))
         self._switch_backoff_max_sec = max(self._switch_backoff_initial_sec, float(switch_backoff_max_sec))
 
@@ -365,10 +424,13 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         self._device_switch_requested = threading.Event()
         self._startup_ready = threading.Event()
         self._startup_error: Optional[BaseException] = None
+        self._startup_stage: str = "idle"
+        self._startup_stage_ts: float = 0.0
         self._lock = threading.RLock()
         self._wakeup_cond = threading.Condition()
         self._thread: Optional[threading.Thread] = None
         self._watcher_thread: Optional[threading.Thread] = None
+        self._active_keepalive: Optional[_SwitchSilenceKeepalive] = None
         self._pa: Any = None
         self._stream: Any = None
         self._device_name = "System Default WASAPI Loopback"
@@ -380,6 +442,7 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         self._last_probe_warn_ts: dict[int, float] = {}
         self._last_open_attempts: int = 0
         self._last_open_errors: tuple[str, ...] = ()
+        self._last_open_timings: list[dict[str, Any]] = []
         self._unexpected_disconnect_attempts: int = 0
         self._proactive_switch_attempts: int = 0
         self._proactive_switch_success_count: int = 0
@@ -408,6 +471,11 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
     @property
     def last_open_errors(self) -> tuple[str, ...]:
         return self._last_open_errors
+
+    @property
+    def last_open_timings(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(item) for item in self._last_open_timings]
 
     @property
     def proactive_switch_success_count(self) -> int:
@@ -514,6 +582,33 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 break
         return matched
 
+    def _set_startup_stage(self, stage: str) -> None:
+        with self._lock:
+            self._startup_stage = stage
+            self._startup_stage_ts = time.monotonic()
+
+    def _compute_startup_wait_sec(self) -> float:
+        total_attempts = 1 + max(0, int(self._startup_open_retries))
+        per_attempt = max(0.01, float(self._startup_per_attempt_timeout_sec))
+        retry_sleeps = sum(self._startup_retry_delay_sec * i for i in range(1, total_attempts))
+        guard = 1.0 if per_attempt >= 1.0 else 0.1
+        return max(0.05, total_attempts * per_attempt + retry_sleeps + guard)
+
+    def _emit_silence_chunk(self, target_sr: int, dev_name: str, chunk_frames: int) -> None:
+        if self._stop_event.is_set() or self._closing.is_set():
+            return
+        _ = (target_sr, dev_name)
+        frames = max(1, int(chunk_frames))
+        chunk = np.zeros((frames, self.audio_config.channels), dtype=np.float32)
+        self.queue.put_drop_oldest(chunk)
+        if self._stop_event.is_set() or self._closing.is_set():
+            return
+        self._stats.record_chunk(
+            chunk,
+            queue_size=len(self.queue),
+            overruns=self.queue.overruns,
+        )
+
     def _open_candidate_stream(
         self,
         pa: Any,
@@ -521,6 +616,7 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         *,
         attempt: int,
         pa_version_text: str,
+        timing_entry: Optional[dict[str, Any]] = None,
     ) -> tuple[Any, int, str]:
         src_rate = int(dev_info["defaultSampleRate"])
         raw_ch = int(dev_info.get("maxInputChannels") or 0) or int(
@@ -544,6 +640,11 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         dev_index = int(dev_info["index"])
         dev_name = str(dev_info.get("name", ""))
         is_loopback = dev_info.get("isLoopbackDevice")
+        if timing_entry is not None and dev_name:
+            timing_entry["device_name"] = dev_name
+
+        self._set_startup_stage("open_f32")
+        t_f32 = time.perf_counter()
         try:
             stream = pa.open(
                 format=pa_f32,
@@ -553,8 +654,18 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 input=True,
                 input_device_index=dev_index,
             )
+            if timing_entry is not None:
+                timing_entry["open_f32_ms"] = round(
+                    float(timing_entry.get("open_f32_ms", 0.0)) + (time.perf_counter() - t_f32) * 1000.0,
+                    3,
+                )
             return stream, frames_per_buffer, "float32"
         except Exception as f32_exc:
+            if timing_entry is not None:
+                timing_entry["open_f32_ms"] = round(
+                    float(timing_entry.get("open_f32_ms", 0.0)) + (time.perf_counter() - t_f32) * 1000.0,
+                    3,
+                )
             logger.info(
                 "WASAPI system loopback float32 open failed (attempt=%d pa=%s index=%s name=%r isLoopbackDevice=%r rate=%s ch=%s err=%s); falling back to int16",
                 attempt,
@@ -566,6 +677,8 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 src_channels,
                 f32_exc,
             )
+            self._set_startup_stage("open_i16")
+            t_i16 = time.perf_counter()
             try:
                 stream = pa.open(
                     format=pa_i16,
@@ -575,8 +688,18 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                     input=True,
                     input_device_index=dev_index,
                 )
+                if timing_entry is not None:
+                    timing_entry["open_i16_ms"] = round(
+                        float(timing_entry.get("open_i16_ms", 0.0)) + (time.perf_counter() - t_i16) * 1000.0,
+                        3,
+                    )
                 return stream, frames_per_buffer, "int16"
             except Exception as i16_exc:
+                if timing_entry is not None:
+                    timing_entry["open_i16_ms"] = round(
+                        float(timing_entry.get("open_i16_ms", 0.0)) + (time.perf_counter() - t_i16) * 1000.0,
+                        3,
+                    )
                 logger.warning(
                     "WASAPI system loopback open failed (attempt=%d pa=%s index=%s name=%r isLoopbackDevice=%r rate=%s ch=%s f32=%s i16=%s)",
                     attempt,
@@ -601,28 +724,51 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         total_attempts = max(1, int(max_attempts) if max_attempts is not None else (1 + self._startup_open_retries))
         base_delay = self._startup_retry_delay_sec if retry_delay_sec is None else max(0.0, float(retry_delay_sec))
         attempt_errors: list[str] = []
+        timings: list[dict[str, Any]] = []
         last_exc: Optional[BaseException] = None
         pa_version_text = ""
 
         for attempt in range(1, total_attempts + 1):
             if self._stop_event.is_set() or self._closing.is_set():
                 break
-            pa = self._create_pa()
-            if not pa_version_text:
-                pa_ver_fn = getattr(pa, "get_portaudio_version_text", None)
-                if callable(pa_ver_fn):
-                    try:
-                        raw_v = pa_ver_fn()
-                        pa_version_text = raw_v.decode("utf-8", errors="replace") if isinstance(raw_v, bytes) else str(raw_v or "")
-                    except Exception:
-                        pa_version_text = ""
-                if not pa_version_text:
-                    pa_version_text = str(get_portaudio_runtime_info().get("portaudio_version_text", ""))
+            attempt_t0 = time.perf_counter()
+            timing_entry: dict[str, Any] = {
+                "attempt": attempt,
+                "pa_init_ms": 0.0,
+                "enum_default_ms": 0.0,
+                "fallback_enum_ms": 0.0,
+                "open_f32_ms": 0.0,
+                "open_i16_ms": 0.0,
+                "terminate_ms": 0.0,
+                "total_ms": 0.0,
+                "status": "failed",
+                "device_name": "",
+                "error": "",
+            }
+            pa: Any = None
             opened_ok = False
             attempt_exc: Optional[BaseException] = None
             try:
+                self._set_startup_stage("pa_init")
+                t_init = time.perf_counter()
+                pa = self._create_pa()
+                timing_entry["pa_init_ms"] = round((time.perf_counter() - t_init) * 1000.0, 3)
+
+                if not pa_version_text:
+                    pa_ver_fn = getattr(pa, "get_portaudio_version_text", None)
+                    if callable(pa_ver_fn):
+                        try:
+                            raw_v = pa_ver_fn()
+                            pa_version_text = raw_v.decode("utf-8", errors="replace") if isinstance(raw_v, bytes) else str(raw_v or "")
+                        except Exception:
+                            pa_version_text = ""
+                    if not pa_version_text:
+                        pa_version_text = str(get_portaudio_runtime_info().get("portaudio_version_text", ""))
+
                 candidates: list[dict[str, Any]] = []
                 seen_indices: set[int] = set()
+                self._set_startup_stage("enum_default")
+                t_enum = time.perf_counter()
                 try:
                     default_loopback = pa.get_default_wasapi_loopback()
                     if isinstance(default_loopback, dict) and default_loopback.get("index") is not None:
@@ -638,6 +784,8 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                         pa_version_text or "unknown",
                         def_exc,
                     )
+                finally:
+                    timing_entry["enum_default_ms"] = round((time.perf_counter() - t_enum) * 1000.0, 3)
 
                 for cand in candidates:
                     try:
@@ -646,19 +794,30 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                             cand,
                             attempt=attempt,
                             pa_version_text=pa_version_text,
+                            timing_entry=timing_entry,
                         )
                         opened_ok = True
+                        timing_entry["status"] = "opened"
+                        timing_entry["error"] = ""
+                        timing_entry["total_ms"] = round((time.perf_counter() - attempt_t0) * 1000.0, 3)
+                        timings.append(timing_entry)
+                        with self._lock:
+                            self._last_open_timings = list(timings)
                         self._last_open_attempts = attempt
                         self._last_open_errors = tuple(attempt_errors)
+                        self._set_startup_stage("ready")
                         return pa, stream, cand, frames_per_buffer, src_dtype
                     except Exception as open_exc:
                         attempt_exc = open_exc
 
+                self._set_startup_stage("fallback_enum")
+                t_fb = time.perf_counter()
                 fallback_candidates = self._find_matching_default_loopbacks(
                     pa,
                     preferred_name=preferred_name,
                     seen_indices=seen_indices,
                 )
+                timing_entry["fallback_enum_ms"] = round((time.perf_counter() - t_fb) * 1000.0, 3)
                 for cand in fallback_candidates:
                     try:
                         stream, frames_per_buffer, src_dtype = self._open_candidate_stream(
@@ -666,10 +825,18 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                             cand,
                             attempt=attempt,
                             pa_version_text=pa_version_text,
+                            timing_entry=timing_entry,
                         )
                         opened_ok = True
+                        timing_entry["status"] = "opened"
+                        timing_entry["error"] = ""
+                        timing_entry["total_ms"] = round((time.perf_counter() - attempt_t0) * 1000.0, 3)
+                        timings.append(timing_entry)
+                        with self._lock:
+                            self._last_open_timings = list(timings)
                         self._last_open_attempts = attempt
                         self._last_open_errors = tuple(attempt_errors)
+                        self._set_startup_stage("ready")
                         return pa, stream, cand, frames_per_buffer, src_dtype
                     except Exception as open_exc:
                         attempt_exc = open_exc
@@ -677,20 +844,31 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                 if attempt_exc is None:
                     attempt_exc = RuntimeError("未找到默认 WASAPI Loopback 输出设备。")
                 last_exc = attempt_exc
+                timing_entry["error"] = str(attempt_exc)
                 attempt_errors.append(f"attempt {attempt}: {attempt_exc}")
             except Exception as exc:
                 last_exc = exc
+                timing_entry["error"] = str(exc)
                 attempt_errors.append(f"attempt {attempt}: {exc}")
             finally:
                 if not opened_ok:
-                    try:
-                        pa.terminate()
-                    except Exception:
-                        pass
+                    if pa is not None:
+                        self._set_startup_stage("terminate")
+                        t_term = time.perf_counter()
+                        try:
+                            pa.terminate()
+                        except Exception:
+                            pass
+                        timing_entry["terminate_ms"] = round((time.perf_counter() - t_term) * 1000.0, 3)
+                    timing_entry["total_ms"] = round((time.perf_counter() - attempt_t0) * 1000.0, 3)
+                    timings.append(timing_entry)
+                    with self._lock:
+                        self._last_open_timings = list(timings)
 
             self._last_open_attempts = attempt
             self._last_open_errors = tuple(attempt_errors)
             if attempt < total_attempts and base_delay > 0.0:
+                self._set_startup_stage("retry_sleep")
                 if self._stop_event.wait(timeout=base_delay * attempt):
                     break
 
@@ -751,8 +929,11 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
             self._watcher_observed_name = ""
         self._startup_ready.clear()
         self._startup_error = None
+        self._set_startup_stage("idle")
         self._last_open_attempts = 0
         self._last_open_errors = ()
+        with self._lock:
+            self._last_open_timings = []
         self._unexpected_disconnect_attempts = 0
         self._proactive_switch_attempts = 0
         self._proactive_switch_success_count = 0
@@ -765,11 +946,20 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
             daemon=True,
         )
         self._thread.start()
-        startup_wait_sec = max(
-            5.0,
-            5.0 + sum(self._startup_retry_delay_sec * i for i in range(1, self._startup_open_retries + 1)),
-        )
+        startup_wait_sec = self._compute_startup_wait_sec()
         if not self._startup_ready.wait(timeout=startup_wait_sec):
+            with self._lock:
+                stalled_stage = self._startup_stage
+                stalled_ts = self._startup_stage_ts
+                attempts_so_far = self._last_open_attempts
+            stage_elapsed_ms = max(0.0, (time.monotonic() - stalled_ts) * 1000.0) if stalled_ts > 0.0 else 0.0
+            logger.warning(
+                "WASAPI system loopback startup timed out after %.2fs (stage=%s stage_elapsed_ms=%.1f attempts=%d)",
+                startup_wait_sec,
+                stalled_stage,
+                stage_elapsed_ms,
+                attempts_so_far,
+            )
             self.stop()
             raise RuntimeError("系统 WASAPI Loopback 启动超时。")
         if self._startup_error is not None:
@@ -909,7 +1099,7 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         raw_ch = int(dev_info.get("maxInputChannels") or 0) or int(dev_info.get("maxOutputChannels") or 0)
         src_channels = max(1, raw_ch)
         current_dev_index: Optional[int] = int(dev_info["index"]) if "index" in dev_info and dev_info["index"] is not None else None
-        current_dev_name: str = str(dev_info.get("name", self._device_name))
+        current_dev_name: str = str(dev_info.get("name") or "").strip() or self._device_name
         with self._lock:
             self._active_dev_index = current_dev_index
             self._active_dev_name = current_dev_name
@@ -918,12 +1108,15 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
         self._stats.set_device_switch_message(None)
         self._stats.set_error(None)
         self._stats.set_running(True)
+        self._set_startup_stage("ready")
         self._startup_ready.set()
 
         self._unexpected_disconnect_attempts = 0
         self._proactive_switch_attempts = 0
         clean_chunks_since_reconnect = 0
         has_transient_reconnect_notice = False
+        keepalive_frames = max(256, int(round(self.audio_config.sample_rate * 0.02)))
+        keepalive_step_sec = keepalive_frames / float(max(1, self.audio_config.sample_rate))
         resampler: Optional[StreamingResampler] = (
             StreamingResampler(src_rate, self.audio_config.sample_rate, self.audio_config.channels)
             if src_rate != self.audio_config.sample_rate
@@ -941,11 +1134,22 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                         raise RuntimeError("DEFAULT_DEVICE_CHANGED")
                     read_avail_fn = getattr(stream, "get_read_available", None)
                     if callable(read_avail_fn):
+                        idle_started_at = time.monotonic()
+                        next_keepalive_at: Optional[float] = None
                         while not self._stop_event.is_set() and not self._closing.is_set():
                             if self._follow_default_device and self._device_switch_requested.is_set():
                                 raise RuntimeError("DEFAULT_DEVICE_CHANGED")
                             if int(read_avail_fn()) >= frames_per_buffer:
                                 break
+                            now = time.monotonic()
+                            if (now - idle_started_at) >= self._idle_silence_grace_sec:
+                                if next_keepalive_at is None or now >= next_keepalive_at:
+                                    self._emit_silence_chunk(
+                                        self.audio_config.sample_rate,
+                                        current_dev_name,
+                                        keepalive_frames,
+                                    )
+                                    next_keepalive_at = now + keepalive_step_sec
                             if self._stop_event.wait(timeout=0.01):
                                 break
                         if self._closing.is_set() or self._stop_event.is_set():
@@ -1012,38 +1216,28 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                     if resampler is not None:
                         resampler.reset()
 
+                    keepalive: Optional[_SwitchSilenceKeepalive] = None
+
+                    def _ensure_keepalive() -> None:
+                        nonlocal keepalive
+                        if keepalive is None and not self._stop_event.is_set() and not self._closing.is_set():
+                            ka = _SwitchSilenceKeepalive(
+                                self,
+                                target_sr=self.audio_config.sample_rate,
+                                dev_name=current_dev_name,
+                                chunk_frames=keepalive_frames,
+                            )
+                            with self._lock:
+                                self._active_keepalive = ka
+                            ka.start()
+                            keepalive = ka
+
                     reconnected = False
                     self._proactive_switch_attempts = 0
-                    while not self._stop_event.is_set() and not self._closing.is_set():
-                        with self._wakeup_cond:
-                            if self._device_switch_requested.is_set() or self._switch_generation != target_gen:
-                                target_gen = self._switch_generation
-                                target_name = self._watcher_observed_name
-                                self._device_switch_requested.clear()
-                                is_device_switch = True
-                                self._unexpected_disconnect_attempts = 0
-                                self._proactive_switch_attempts = 0
-
+                    try:
                         if is_device_switch:
-                            self._proactive_switch_attempts += 1
-                            wait_sec = self._compute_switch_backoff_sec(self._proactive_switch_attempts)
-                            if self._wait_interruptible(wait_sec, target_gen):
-                                break
-                            with self._wakeup_cond:
-                                if self._device_switch_requested.is_set() or self._switch_generation != target_gen:
-                                    target_gen = self._switch_generation
-                                    target_name = self._watcher_observed_name
-                                    self._device_switch_requested.clear()
-                                    self._proactive_switch_attempts = 0
-                                    continue
-                        else:
-                            if self._unexpected_disconnect_attempts >= self._max_device_reconnects:
-                                break
-                            self._unexpected_disconnect_attempts += 1
-                            self._unexpected_disconnect_retry_total += 1
-                            wait_sec = 0.35 * self._unexpected_disconnect_attempts
-                            if self._wait_interruptible(wait_sec, target_gen):
-                                break
+                            _ensure_keepalive()
+                        while not self._stop_event.is_set() and not self._closing.is_set():
                             with self._wakeup_cond:
                                 if self._device_switch_requested.is_set() or self._switch_generation != target_gen:
                                     target_gen = self._switch_generation
@@ -1052,104 +1246,142 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
                                     is_device_switch = True
                                     self._unexpected_disconnect_attempts = 0
                                     self._proactive_switch_attempts = 0
-                                    continue
 
-                        try:
-                            new_pa, new_stream, new_dev, frames_per_buffer, src_dtype = self._invoke_open_default_loopback(
-                                preferred_name=target_name,
-                                max_attempts=1,
-                                retry_delay_sec=0.0,
-                            )
-                            with self._wakeup_cond:
-                                if self._stop_event.is_set() or self._closing.is_set():
-                                    self._close_pa_pair(new_pa, new_stream)
-                                    break
-                                if self._device_switch_requested.is_set() or self._switch_generation != target_gen:
-                                    self._close_pa_pair(new_pa, new_stream)
-                                    target_gen = self._switch_generation
-                                    target_name = self._watcher_observed_name
-                                    self._device_switch_requested.clear()
-                                    is_device_switch = True
-                                    self._unexpected_disconnect_attempts = 0
-                                    self._proactive_switch_attempts = 0
-                                    continue
-
-                            src_rate = int(new_dev["defaultSampleRate"])
-                            new_ch = int(new_dev.get("maxInputChannels") or 0) or int(new_dev.get("maxOutputChannels") or 0)
-                            src_channels = max(1, new_ch)
-                            current_dev_index = int(new_dev["index"]) if "index" in new_dev and new_dev["index"] is not None else None
-                            current_dev_name = str(new_dev.get("name") or target_name or self._device_name)
-                            with self._lock:
-                                if self._stop_event.is_set() or self._closing.is_set():
-                                    self._close_pa_pair(new_pa, new_stream)
-                                    break
-                                self._pa = new_pa
-                                self._stream = new_stream
-                                self._active_dev_index = current_dev_index
-                                self._active_dev_name = current_dev_name
-                            if src_rate != self.audio_config.sample_rate:
-                                if resampler is not None and resampler.src_rate == src_rate:
-                                    resampler.reset()
-                                else:
-                                    resampler = StreamingResampler(
-                                        src_rate, self.audio_config.sample_rate, self.audio_config.channels
-                                    )
-                            else:
-                                resampler = None
-                            self._device_name = current_dev_name
-                            self._stats.set_process_name(self._device_name)
                             if is_device_switch:
-                                self._stats.set_error(None)
-                                self._stats.set_device_switch_message(
-                                    f"已切换到 {self._device_name}",
-                                    ttl_sec=self._device_switch_ttl_sec,
-                                )
-                                self._proactive_switch_attempts = 0
-                                self._proactive_switch_success_count += 1
-                                has_transient_reconnect_notice = False
-                                logger.info("loopback default device changed old=%s new=%s", old_dev_name, self._device_name)
+                                _ensure_keepalive()
+                                self._proactive_switch_attempts += 1
+                                wait_sec = self._compute_switch_backoff_sec(self._proactive_switch_attempts)
+                                if self._wait_interruptible(wait_sec, target_gen):
+                                    break
+                                with self._wakeup_cond:
+                                    if self._device_switch_requested.is_set() or self._switch_generation != target_gen:
+                                        target_gen = self._switch_generation
+                                        target_name = self._watcher_observed_name
+                                        self._device_switch_requested.clear()
+                                        self._proactive_switch_attempts = 0
+                                        continue
                             else:
-                                self._stats.set_error(f"检测到播放设备切换，已重连至: {self._device_name}")
-                                has_transient_reconnect_notice = True
-                                if current_dev_name != old_dev_name:
+                                if self._unexpected_disconnect_attempts >= self._max_device_reconnects:
+                                    break
+                                self._unexpected_disconnect_attempts += 1
+                                self._unexpected_disconnect_retry_total += 1
+                                wait_sec = 0.35 * self._unexpected_disconnect_attempts
+                                if self._wait_interruptible(wait_sec, target_gen):
+                                    break
+                                with self._wakeup_cond:
+                                    if self._device_switch_requested.is_set() or self._switch_generation != target_gen:
+                                        target_gen = self._switch_generation
+                                        target_name = self._watcher_observed_name
+                                        self._device_switch_requested.clear()
+                                        is_device_switch = True
+                                        self._unexpected_disconnect_attempts = 0
+                                        self._proactive_switch_attempts = 0
+                                        continue
+
+                            try:
+                                new_pa, new_stream, new_dev, frames_per_buffer, src_dtype = self._invoke_open_default_loopback(
+                                    preferred_name=target_name,
+                                    max_attempts=1,
+                                    retry_delay_sec=0.0,
+                                )
+                                with self._wakeup_cond:
+                                    if self._stop_event.is_set() or self._closing.is_set():
+                                        self._close_pa_pair(new_pa, new_stream)
+                                        break
+                                    if self._device_switch_requested.is_set() or self._switch_generation != target_gen:
+                                        self._close_pa_pair(new_pa, new_stream)
+                                        target_gen = self._switch_generation
+                                        target_name = self._watcher_observed_name
+                                        self._device_switch_requested.clear()
+                                        is_device_switch = True
+                                        self._unexpected_disconnect_attempts = 0
+                                        self._proactive_switch_attempts = 0
+                                        continue
+
+                                src_rate = int(new_dev["defaultSampleRate"])
+                                new_ch = int(new_dev.get("maxInputChannels") or 0) or int(new_dev.get("maxOutputChannels") or 0)
+                                src_channels = max(1, new_ch)
+                                current_dev_index = int(new_dev["index"]) if "index" in new_dev and new_dev["index"] is not None else None
+                                resolved_name = str(new_dev.get("name") or "").strip() or target_name.strip() or current_dev_name or self._device_name
+                                current_dev_name = resolved_name
+                                with self._lock:
+                                    if self._stop_event.is_set() or self._closing.is_set():
+                                        self._close_pa_pair(new_pa, new_stream)
+                                        break
+                                    self._pa = new_pa
+                                    self._stream = new_stream
+                                    self._active_dev_index = current_dev_index
+                                    self._active_dev_name = current_dev_name
+                                if src_rate != self.audio_config.sample_rate:
+                                    if resampler is not None and resampler.src_rate == src_rate:
+                                        resampler.reset()
+                                    else:
+                                        resampler = StreamingResampler(
+                                            src_rate, self.audio_config.sample_rate, self.audio_config.channels
+                                        )
+                                else:
+                                    resampler = None
+                                self._device_name = current_dev_name
+                                self._stats.set_process_name(self._device_name)
+                                if is_device_switch:
+                                    self._stats.set_error(None)
                                     self._stats.set_device_switch_message(
                                         f"已切换到 {self._device_name}",
                                         ttl_sec=self._device_switch_ttl_sec,
                                     )
+                                    self._proactive_switch_attempts = 0
+                                    self._proactive_switch_success_count += 1
+                                    has_transient_reconnect_notice = False
                                     logger.info("loopback default device changed old=%s new=%s", old_dev_name, self._device_name)
-                            clean_chunks_since_reconnect = 0
-                            reconnected = True
-                            break
-                        except Exception as rec_exc:
-                            has_transient_reconnect_notice = False
-                            if is_device_switch:
-                                self._proactive_switch_retry_total += 1
-                                target_label = target_name or self._device_name
-                                self._stats.set_device_switch_message(
-                                    f"正在切换默认播放设备至 {target_label}，等待设备就绪 (第 {self._proactive_switch_attempts} 次尝试)...",
-                                    ttl_sec=max(self._device_switch_ttl_sec, 3.0),
-                                )
-                                if self._proactive_switch_attempts <= 5 or self._proactive_switch_attempts % 10 == 0:
-                                    logger.warning(
-                                        "默认播放设备切换重连尚未就绪 (第 %d 次, target=%s): %s",
-                                        self._proactive_switch_attempts,
-                                        target_label,
-                                        rec_exc,
-                                    )
                                 else:
-                                    logger.debug(
-                                        "默认播放设备切换重连等待中 (第 %d 次, target=%s): %s",
-                                        self._proactive_switch_attempts,
-                                        target_label,
+                                    self._stats.set_error(f"检测到播放设备切换，已重连至: {self._device_name}")
+                                    has_transient_reconnect_notice = True
+                                    if current_dev_name != old_dev_name:
+                                        self._stats.set_device_switch_message(
+                                            f"已切换到 {self._device_name}",
+                                            ttl_sec=self._device_switch_ttl_sec,
+                                        )
+                                        logger.info("loopback default device changed old=%s new=%s", old_dev_name, self._device_name)
+                                clean_chunks_since_reconnect = 0
+                                reconnected = True
+                                break
+                            except Exception as rec_exc:
+                                has_transient_reconnect_notice = False
+                                if is_device_switch:
+                                    self._proactive_switch_retry_total += 1
+                                    target_label = target_name or self._device_name
+                                    self._stats.set_device_switch_message(
+                                        f"正在切换默认播放设备至 {target_label}，等待设备就绪 (第 {self._proactive_switch_attempts} 次尝试)...",
+                                        ttl_sec=max(self._device_switch_ttl_sec, 3.0),
+                                    )
+                                    if self._proactive_switch_attempts <= 5 or self._proactive_switch_attempts % 10 == 0:
+                                        logger.warning(
+                                            "默认播放设备切换重连尚未就绪 (第 %d 次, target=%s): %s",
+                                            self._proactive_switch_attempts,
+                                            target_label,
+                                            rec_exc,
+                                        )
+                                    else:
+                                        logger.debug(
+                                            "默认播放设备切换重连等待中 (第 %d 次, target=%s): %s",
+                                            self._proactive_switch_attempts,
+                                            target_label,
+                                            rec_exc,
+                                        )
+                                else:
+                                    logger.warning(
+                                        "播放设备重连尝试失败 (%d/%d): %s",
+                                        self._unexpected_disconnect_attempts,
+                                        self._max_device_reconnects,
                                         rec_exc,
                                     )
-                            else:
-                                logger.warning(
-                                    "播放设备重连尝试失败 (%d/%d): %s",
-                                    self._unexpected_disconnect_attempts,
-                                    self._max_device_reconnects,
-                                    rec_exc,
-                                )
+                    finally:
+                        if keepalive is not None:
+                            keepalive.stop(timeout=0.25)
+                            with self._lock:
+                                if self._active_keepalive is keepalive:
+                                    self._active_keepalive = None
+                            keepalive = None
 
                     if self._stop_event.is_set() or self._closing.is_set():
                         break
@@ -1168,6 +1400,10 @@ class WasapiSystemLoopbackBackend(AudioCaptureBackend):
     def stop(self) -> None:
         self._closing.set()
         self._stop_event.set()
+        with self._lock:
+            ka = self._active_keepalive
+        if ka is not None:
+            ka.signal_stop()
         with self._wakeup_cond:
             self._wakeup_cond.notify_all()
         self.queue.close()
