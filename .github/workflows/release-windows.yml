@@ -230,6 +230,102 @@ jobs:
           }
           Copy-Item -Path $setupSrc -Destination "dist\release\ListenScope-Setup-Windows-x64.exe" -Force
 
+      - name: Smoke test silently installed Setup build and PortAudio parity
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "listenscope-installed-smoke"
+          $smokeJson = Join-Path $env:RUNNER_TEMP "listenscope-loopback-smoke.json"
+          if (Test-Path $installDir) {
+            Remove-Item -Recurse -Force $installDir
+          }
+          if (Test-Path $smokeJson) {
+            Remove-Item -Force $smokeJson
+          }
+          try {
+            $setupExe = (Resolve-Path "dist\installer\ListenScope-Setup-Windows-x64.exe").Path
+            $dirArg = '/DIR="' + $installDir + '"'
+            $instProc = Start-Process -FilePath $setupExe -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CURRENTUSER", $dirArg) -PassThru
+            if (-not $instProc.WaitForExit(120000)) {
+              Stop-Process -Id $instProc.Id -Force -ErrorAction SilentlyContinue
+              throw "Silent installer timed out after 120s"
+            }
+            if ($instProc.ExitCode -ne 0) {
+              throw "Silent installer failed with exit code $($instProc.ExitCode)"
+            }
+
+            $distBase = (Resolve-Path "dist\ListenScopeCore").Path
+            $distPyds = @(Get-ChildItem -Path (Join-Path $distBase "_internal") -Recurse -Filter "_portaudiowpatch*.pyd")
+            if ($distPyds.Count -eq 0) {
+              throw "Missing _portaudiowpatch*.pyd in dist\ListenScopeCore\_internal"
+            }
+            $sdRel = "_internal\_sounddevice_data\portaudio-binaries\libportaudio64bit.dll"
+            $distSdDll = Join-Path $distBase $sdRel
+            if (-not (Test-Path $distSdDll)) {
+              throw "Missing $sdRel in dist\ListenScopeCore"
+            }
+            $filesToVerify = @()
+            foreach ($f in $distPyds) {
+              $filesToVerify += $f.FullName.Substring($distBase.Length + 1)
+            }
+            $filesToVerify += $sdRel
+            foreach ($relPath in $filesToVerify) {
+              $srcFile = Get-Item (Join-Path $distBase $relPath)
+              $dstPath = Join-Path $installDir $relPath
+              if (-not (Test-Path $dstPath)) {
+                throw "Installed build missing PortAudio binary: $dstPath"
+              }
+              $dstFile = Get-Item $dstPath
+              $srcHash = (Get-FileHash -Path $srcFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              $dstHash = (Get-FileHash -Path $dstFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              Write-Host "PortAudio parity [$relPath]: size=$($dstFile.Length) sha256=$dstHash"
+              if ($srcFile.Length -ne $dstFile.Length -or $srcHash -ne $dstHash) {
+                throw "PortAudio binary mismatch for $relPath (dist: $($srcFile.Length)/$srcHash vs installed: $($dstFile.Length)/$dstHash)"
+              }
+            }
+
+            $installedExe = Join-Path $installDir "ListenScope.exe"
+            if (-not (Test-Path $installedExe)) {
+              throw "Missing installed executable: $installedExe"
+            }
+            $smokeProc = Start-Process -FilePath $installedExe -ArgumentList @("--loopback-smoke", ('"' + $smokeJson + '"')) -WorkingDirectory $installDir -PassThru
+            if (-not $smokeProc.WaitForExit(45000)) {
+              Stop-Process -Id $smokeProc.Id -Force -ErrorAction SilentlyContinue
+              throw "Installed ListenScope.exe --loopback-smoke timed out after 45s"
+            }
+            if ($smokeProc.ExitCode -ne 0) {
+              throw "Installed ListenScope.exe --loopback-smoke exited with code $($smokeProc.ExitCode)"
+            }
+            if (-not (Test-Path $smokeJson)) {
+              throw "Loopback smoke JSON report missing: $smokeJson"
+            }
+            $smokeRaw = Get-Content -Path $smokeJson -Raw -Encoding utf8
+            Write-Host "Installed loopback smoke JSON:`n$smokeRaw"
+            $smoke = $smokeRaw | ConvertFrom-Json
+            Write-Host "PortAudio version text: $($smoke.portaudio_version_text) (PyAudioWPatch=$($smoke.pyaudiowpatch_version))"
+            if ([string]::IsNullOrWhiteSpace($smoke.portaudio_version_text)) {
+              throw "Expected non-empty portaudio_version_text in installed loopback smoke report"
+            }
+            $openedOk = ($smoke.opened -eq $true)
+            $retriedOnFail = ($smoke.opened -eq $false) -and ([int]$smoke.attempts -ge 2)
+            if (-not ($openedOk -or $retriedOnFail)) {
+              throw "Expected opened=true or retried attempts>=2 when opened=false, got opened=$($smoke.opened) attempts=$($smoke.attempts) error=$($smoke.error)"
+            }
+          } finally {
+            Get-Process -Name "ListenScope" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            $uninst = Join-Path $installDir "unins000.exe"
+            if (Test-Path $uninst) {
+              $uProc = Start-Process -FilePath $uninst -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru
+              if (-not $uProc.WaitForExit(30000)) {
+                Stop-Process -Id $uProc.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
+            if (Test-Path $installDir) {
+              Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+            }
+            if (Test-Path $smokeJson) {
+              Remove-Item -Force $smokeJson -ErrorAction SilentlyContinue
+            }
+          }
+
       - name: Generate SHA256SUMS.txt
         run: |
           $files = @(

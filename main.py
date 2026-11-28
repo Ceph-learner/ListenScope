@@ -62,6 +62,7 @@ from audio.system_loopback import (
     SYSTEM_LOOPBACK_WARNING,
     SyntheticSimulationBackend,
     WasapiSystemLoopbackBackend,
+    get_portaudio_runtime_info,
 )
 from core.bootstrap_manager import get_bootstrap_manager
 from core.config import AIConfig, AnalysisConfig, AudioConfig, ResourceLimits
@@ -2505,6 +2506,109 @@ class ListenScopeController:
             self.window.deleteLater()
 
 
+def _run_loopback_smoke(json_path: str) -> int:
+    """Inspect bundled PortAudio binaries and run a single WasapiSystemLoopbackBackend start/stop smoke."""
+    log_dir = resolve_log_dir(default_work_dir())
+    setup_application_file_logging(log_dir)
+    smoke_logger = logging.getLogger("listenscope.loopback_smoke")
+    try:
+        pa_info = get_portaudio_runtime_info()
+        exe_dir = Path(sys.executable).resolve().parent
+        meipass_raw = getattr(sys, "_MEIPASS", None)
+        search_roots: list[Path] = []
+        for cand in (
+            exe_dir / "_internal",
+            Path(str(meipass_raw)).resolve() if meipass_raw else None,
+            ROOT,
+            exe_dir,
+        ):
+            if cand is not None and cand not in search_roots:
+                search_roots.append(cand)
+
+        portaudio_pyd_path = str(pa_info.get("portaudio_pyd_path", "") or "")
+        portaudio_pyd_size = int(pa_info.get("portaudio_pyd_size", 0) or 0)
+        if not portaudio_pyd_path:
+            for base in search_roots:
+                matches = sorted(base.rglob("_portaudiowpatch*.pyd"))
+                if matches:
+                    portaudio_pyd_path = str(matches[0].resolve())
+                    portaudio_pyd_size = int(matches[0].stat().st_size)
+                    break
+
+        sounddevice_dll_path = ""
+        sounddevice_dll_size = 0
+        sd_candidates: list[Path] = [
+            base / "_sounddevice_data" / "portaudio-binaries" / "libportaudio64bit.dll"
+            for base in search_roots
+        ]
+        try:
+            import _sounddevice_data  # type: ignore[import-not-found]
+
+            if getattr(_sounddevice_data, "__file__", None):
+                sd_candidates.insert(
+                    0,
+                    Path(str(_sounddevice_data.__file__)).resolve().parent / "portaudio-binaries" / "libportaudio64bit.dll",
+                )
+        except Exception:
+            pass
+        for sd_cand in sd_candidates:
+            try:
+                if sd_cand.is_file():
+                    resolved = sd_cand.resolve()
+                    sounddevice_dll_path = str(resolved)
+                    sounddevice_dll_size = int(resolved.stat().st_size)
+                    break
+            except Exception:
+                pass
+
+        backend = WasapiSystemLoopbackBackend(audio_config=AudioConfig())
+        opened = False
+        err_text = ""
+        try:
+            backend.start()
+            opened = True
+        except Exception as exc:
+            err_text = str(exc)
+        finally:
+            try:
+                backend.stop()
+            except Exception:
+                pass
+
+        payload: dict[str, Any] = {
+            "opened": opened,
+            "attempts": int(backend.last_open_attempts),
+            "attempt_errors": list(backend.last_open_errors),
+            "timings": list(getattr(backend, "last_open_timings", [])),
+            "error": err_text,
+            "pyaudiowpatch_version": str(pa_info.get("pyaudiowpatch_version", "") or ""),
+            "portaudio_version_text": str(pa_info.get("portaudio_version_text", "") or ""),
+            "portaudio_pyd_path": portaudio_pyd_path,
+            "portaudio_pyd_size": portaudio_pyd_size,
+            "sounddevice_dll_path": sounddevice_dll_path,
+            "sounddevice_dll_size": sounddevice_dll_size,
+        }
+        smoke_logger.info(
+            "Loopback smoke result: opened=%s attempts=%d portaudio=%r pyaudiowpatch=%r pyd=%s (%d B) sd_dll=%s (%d B) error=%r",
+            payload["opened"],
+            payload["attempts"],
+            payload["portaudio_version_text"],
+            payload["pyaudiowpatch_version"],
+            payload["portaudio_pyd_path"],
+            payload["portaudio_pyd_size"],
+            payload["sounddevice_dll_path"],
+            payload["sounddevice_dll_size"],
+            payload["error"],
+        )
+        out_path = Path(json_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+        return 0
+    finally:
+        teardown_application_file_logging()
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     multiprocessing.freeze_support()
     ensure_current_process_in_kill_job()
@@ -2514,7 +2618,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--midi-python", type=str, default=None, help="独立 CPU Basic Pitch MIDI 虚拟环境 python.exe 路径")
     parser.add_argument("--settings", type=str, default=None, help="自定义持久化 settings.json 路径")
     parser.add_argument("--headless-smoke", action="store_true", help="短时运行后干净退出（测试用途）")
+    parser.add_argument("--loopback-smoke", type=str, default=None, help="执行系统环回冒烟检测并写出结构化 JSON 报告后退出")
     args = parser.parse_args(argv)
+    if args.loopback_smoke:
+        return _run_loopback_smoke(args.loopback_smoke)
 
     from core.updater import acquire_app_mutex, release_app_mutex
 

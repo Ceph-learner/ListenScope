@@ -25,7 +25,7 @@ extra_binaries = []
 extra_datas = []
 extra_hiddenimports = []
 if collect_dynamic_libs is not None:
-    for pkg_name in ("proctap", "soundfile", "_soundfile_data"):
+    for pkg_name in ("proctap", "soundfile", "_soundfile_data", "pyaudiowpatch"):
         try:
             extra_binaries.extend(collect_dynamic_libs(pkg_name))
         except Exception:

@@ -1407,5 +1407,32 @@ P2H_DYNAMIC_REGEX_RULES: tuple[tuple[_re.Pattern[str], dict[str, str]], ...] = (
     ),
 )
 
+P2I_DYNAMIC_REGEX_RULES: tuple[tuple[_re.Pattern[str], dict[str, str]], ...] = (
+    (
+        _re.compile(r"^正在切换默认播放设备至\s+(.+?)，等待设备就绪\s*\(第\s*(\d+)\s*次尝试\)\.\.\.$"),
+        {
+            "en": r"Switching default playback device to \1, waiting for device ready (attempt \2)...",
+            "ko": r"기본 재생 장치를 \1(으)로 전환 중, 장치 준비 대기 중 (\2회차 시도)...",
+            "ja": r"既定の再生デバイスを \1 へ切替中、準備待機中（\2 回目の試行）...",
+        },
+    ),
+    (
+        _re.compile(r"^播放设备中断且重连超过\s*(\d+)\s*次:\s*(.+)$"),
+        {
+            "en": r"Playback device interrupted and reconnection exceeded \1 attempts: \2",
+            "ko": r"재생 장치가 중단되었으며 재연결이 \1회를 초과했습니다: \2",
+            "ja": r"再生デバイスが中断され、再接続が \1 回を超えました: \2",
+        },
+    ),
+    (
+        _re.compile(r"^检测到播放设备切换，已重连至:\s*(.+)$"),
+        {
+            "en": r"Playback device change detected; reconnected to: \1",
+            "ko": r"재생 장치 변경 감지됨, 재연결 대상: \1",
+            "ja": r"再生デバイスの切替を検出し、再接続しました: \1",
+        },
+    ),
+)
+
 P2G_PHRASE_MAP.update(P2H_PHRASE_MAP)
-P2G_DYNAMIC_REGEX_RULES = P2G_DYNAMIC_REGEX_RULES + P2H_DYNAMIC_REGEX_RULES
+P2G_DYNAMIC_REGEX_RULES = P2G_DYNAMIC_REGEX_RULES + P2H_DYNAMIC_REGEX_RULES + P2I_DYNAMIC_REGEX_RULES
