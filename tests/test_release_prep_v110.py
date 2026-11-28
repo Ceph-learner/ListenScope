@@ -56,24 +56,24 @@ def _extract_run_blocks(workflow_text: str) -> list[str]:
 
 
 def test_r4_1_version_unified_to_1_1_0_rc1() -> None:
-    """All version sources, HUD footer, issue template, and READMEs are aligned to 1.1.0-rc.1."""
+    """All version sources, HUD footer, issue template, and READMEs are aligned to 1.1.0-rc.2."""
     pyproj = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text("utf-8"))
-    assert pyproj["project"]["version"] == "1.1.0-rc.1"
+    assert pyproj["project"]["version"] == "1.1.0-rc.2"
 
     iss_txt = (REPO_ROOT / "scripts" / "installer.iss").read_text("utf-8")
-    assert '#define MyAppVersion "1.1.0-rc.1"' in iss_txt
-    assert '#define MyAppNumericVersion "1.1.0.1"' in iss_txt
+    assert '#define MyAppVersion "1.1.0-rc.2"' in iss_txt
+    assert '#define MyAppNumericVersion "1.1.0.2"' in iss_txt
     assert "VersionInfoVersion={#MyAppNumericVersion}" in iss_txt
     assert "AppId={{D92B6E14-9F1A-4D7E-A78A-3F6F49B8C201}" in iss_txt
     assert not re.search(r"(?<!\d\.)1\.0\.1\b", iss_txt)
 
     from core import version as ver_mod
 
-    assert ver_mod._FALLBACK_BASE_VERSION == "1.1.0-rc.1"
+    assert ver_mod._FALLBACK_BASE_VERSION == "1.1.0-rc.2"
     ver_mod.get_base_version.cache_clear()
     ver_mod.get_app_version_display.cache_clear()
-    assert ver_mod.get_base_version() == "1.1.0-rc.1"
-    assert ver_mod.get_app_version_display().startswith("1.1.0-rc.1")
+    assert ver_mod.get_base_version() == "1.1.0-rc.2"
+    assert ver_mod.get_app_version_display().startswith("1.1.0-rc.2")
 
     bug_yml = (REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text("utf-8")
     assert "v1.1.0" in bug_yml
@@ -84,7 +84,7 @@ def test_r4_1_version_unified_to_1_1_0_rc1() -> None:
 
     footer = AcidBarcodeFooter()
     try:
-        assert "v1.1.0-rc.1" in footer.status_lbl.text()
+        assert "v1.1.0-rc.2" in footer.status_lbl.text()
     finally:
         footer.close()
 
@@ -94,14 +94,14 @@ def test_r4_1_version_unified_to_1_1_0_rc1() -> None:
 
 
 def test_frozen_build_info_displays_exact_rc1_without_dev_or_sha(monkeypatch) -> None:
-    """Packaged _build_info must surface exact '1.1.0-rc.1' with zero '-dev' or '+sha'."""
+    """Packaged _build_info must surface exact '1.1.0-rc.2' with zero '-dev' or '+sha'."""
     import sys
     from types import ModuleType
     from core import version as ver_mod
 
     fake_bi = ModuleType("core._build_info")
-    fake_bi.BASE_VERSION = "1.1.0-rc.1"
-    fake_bi.BUILD_VERSION = "1.1.0-rc.1"
+    fake_bi.BASE_VERSION = "1.1.0-rc.2"
+    fake_bi.BUILD_VERSION = "1.1.0-rc.2"
     fake_bi.GIT_SHA = "deadbee"
 
     monkeypatch.delenv("LISTENSCOPE_BUILD_VERSION", raising=False)
@@ -112,7 +112,7 @@ def test_frozen_build_info_displays_exact_rc1_without_dev_or_sha(monkeypatch) ->
     ver_mod.get_app_version_display.cache_clear()
     try:
         disp = ver_mod.get_app_version_display()
-        assert disp == "1.1.0-rc.1"
+        assert disp == "1.1.0-rc.2"
         assert "-dev" not in disp and "+" not in disp
     finally:
         ver_mod.get_base_version.cache_clear()
