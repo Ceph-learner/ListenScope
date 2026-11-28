@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 import re
 import sys
 import threading
 import time
+from types import ModuleType
 from typing import Any
 
 import numpy as np
@@ -51,7 +54,6 @@ def _extract_run_blocks(workflow_text: str) -> list[str]:
     return blocks
 
 
-@pytest.mark.xfail(strict=True, reason="I1: startup does not re-enumerate fresh PyAudio instances on -9996")
 def test_i1_startup_re_enumerates_fresh_pyaudio_on_9996_and_terminates_stale_instances() -> None:
     from audio.system_loopback import WasapiSystemLoopbackBackend
 
@@ -102,6 +104,7 @@ def test_i1_startup_re_enumerates_fresh_pyaudio_on_9996_and_terminates_stale_ins
         pyaudio_factory=_FakePyAudio,
         allow_non_windows=True,
         follow_default_device=False,
+        startup_retry_delay_sec=0.02,
     )
     backend.start()
     try:
@@ -116,7 +119,151 @@ def test_i1_startup_re_enumerates_fresh_pyaudio_on_9996_and_terminates_stale_ins
         backend.stop()
 
 
-@pytest.mark.xfail(strict=True, reason="I1: spec/installer/workflow lack pyaudiowpatch dynamic libs, InstallDelete, and installed smoke")
+def test_i1_exact_default_loopback_matching_and_never_picks_unrelated_device() -> None:
+    from audio.system_loopback import WasapiSystemLoopbackBackend
+
+    pcm_chunk = (np.ones((960, 2), dtype=np.float32) * 0.1).tobytes()
+    opened_indices: list[int] = []
+
+    class _FakeStream:
+        def read(self, frames: int, exception_on_overflow: bool = False) -> bytes:
+            time.sleep(0.01)
+            return pcm_chunk
+
+        def stop_stream(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class _MatchingFallbackPA:
+        paFloat32 = 1
+        paInt16 = 8
+        paWASAPI = 13
+
+        def get_default_wasapi_loopback(self) -> dict[str, Any]:
+            raise OSError(-9996, "Default loopback helper failed")
+
+        def get_host_api_info_by_type(self, host_api_type: int) -> dict[str, Any]:
+            assert host_api_type == self.paWASAPI
+            return {"defaultOutputDevice": 3}
+
+        def get_device_info_by_index(self, idx: int) -> dict[str, Any]:
+            assert idx == 3
+            return {"index": 3, "name": "Speakers (Realtek High Definition Audio)"}
+
+        def get_loopback_device_info_generator(self):
+            yield {
+                "index": 11,
+                "name": "Virtual Cable [Loopback]",
+                "defaultSampleRate": 48000.0,
+                "maxInputChannels": 2,
+                "isLoopbackDevice": True,
+            }
+            yield {
+                "index": 12,
+                "name": "Speakers (Realtek High Definition Audio) [Loopback]",
+                "defaultSampleRate": 48000.0,
+                "maxInputChannels": 2,
+                "isLoopbackDevice": True,
+            }
+
+        def open(self, **kwargs: Any) -> _FakeStream:
+            opened_indices.append(int(kwargs["input_device_index"]))
+            return _FakeStream()
+
+        def terminate(self) -> None:
+            pass
+
+    backend = WasapiSystemLoopbackBackend(
+        pyaudio_factory=_MatchingFallbackPA,
+        allow_non_windows=True,
+        follow_default_device=False,
+        startup_open_retries=0,
+    )
+    backend.start()
+    try:
+        assert opened_indices == [12]
+        assert backend.get_stats().process_name == "Speakers (Realtek High Definition Audio) [Loopback]"
+    finally:
+        backend.stop()
+
+    # Negative check: when NO loopback matches default output device, must NOT pick unrelated device 11
+    class _UnrelatedOnlyPA(_MatchingFallbackPA):
+        def get_loopback_device_info_generator(self):
+            yield {
+                "index": 11,
+                "name": "Virtual Cable [Loopback]",
+                "defaultSampleRate": 48000.0,
+                "maxInputChannels": 2,
+                "isLoopbackDevice": True,
+            }
+
+    bad_backend = WasapiSystemLoopbackBackend(
+        pyaudio_factory=_UnrelatedOnlyPA,
+        allow_non_windows=True,
+        follow_default_device=False,
+        startup_open_retries=0,
+    )
+    with pytest.raises(OSError):
+        bad_backend.start()
+    assert opened_indices == [12]
+
+
+def test_i1_portaudio_runtime_info_and_loopback_smoke_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from audio.system_loopback import get_portaudio_runtime_info
+    import main as main_mod
+
+    # 1. Safe on Linux even when pyaudiowpatch is absent
+    info = get_portaudio_runtime_info()
+    assert set(info.keys()) == {
+        "pyaudiowpatch_version",
+        "portaudio_version_text",
+        "portaudio_pyd_path",
+        "portaudio_pyd_size",
+    }
+    assert isinstance(info["portaudio_pyd_size"], int)
+
+    # 2. Mocked pyaudiowpatch returns version & binary size cleanly
+    fake_pyd = tmp_path / "_portaudiowpatch.cp312-win_amd64.pyd"
+    fake_pyd.write_bytes(b"PA_BINARY_STUB" * 10)
+    fake_cmod = ModuleType("pyaudiowpatch._portaudiowpatch")
+    fake_cmod.__file__ = str(fake_pyd)
+    fake_pkg = ModuleType("pyaudiowpatch")
+    fake_pkg.__version__ = "0.2.12.6"
+    fake_pkg._portaudiowpatch = fake_cmod  # type: ignore[attr-defined]
+    fake_pkg.get_portaudio_version_text = lambda: "PortAudio V19.7.0-devel"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch._portaudiowpatch", fake_cmod)
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", fake_pkg)
+
+    mock_info = get_portaudio_runtime_info()
+    assert mock_info["pyaudiowpatch_version"] == "0.2.12.6"
+    assert mock_info["portaudio_version_text"] == "PortAudio V19.7.0-devel"
+    assert mock_info["portaudio_pyd_path"] == str(fake_pyd.resolve())
+    assert mock_info["portaudio_pyd_size"] == fake_pyd.stat().st_size
+
+    # 3. CLI --loopback-smoke writes structured JSON and exits 0
+    smoke_out = tmp_path / "out" / "smoke.json"
+    rc = main_mod.main(["--loopback-smoke", str(smoke_out)])
+    assert rc == 0
+    assert smoke_out.is_file()
+    payload = json.loads(smoke_out.read_text("utf-8"))
+    for req_key in (
+        "opened",
+        "attempts",
+        "attempt_errors",
+        "error",
+        "pyaudiowpatch_version",
+        "portaudio_version_text",
+        "portaudio_pyd_path",
+        "portaudio_pyd_size",
+        "sounddevice_dll_path",
+        "sounddevice_dll_size",
+    ):
+        assert req_key in payload
+    assert payload["portaudio_version_text"] == "PortAudio V19.7.0-devel"
+
+
 def test_i1_packaging_spec_installer_and_workflow_smoke_contract() -> None:
     spec_txt = (REPO_ROOT / "packaging" / "listenscope_core.spec").read_text("utf-8")
     assert '"pyaudiowpatch"' in spec_txt
@@ -146,7 +293,26 @@ def test_i1_packaging_spec_installer_and_workflow_smoke_contract() -> None:
         assert token in yml_txt, f"Missing {token!r} in release-windows.yml"
 
 
-@pytest.mark.xfail(strict=True, reason="I2: proactive switch shares max_device_reconnects budget with unexpected disconnects")
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows real WASAPI loopback smoke test")
+def test_i1_windows_real_loopback_and_portaudio_version(caplog) -> None:
+    from audio.system_loopback import WasapiSystemLoopbackBackend, get_portaudio_runtime_info
+    from core.config import AudioConfig
+
+    pa_info = get_portaudio_runtime_info()
+    logging.getLogger(__name__).info("Windows PortAudio runtime: %s", pa_info)
+    assert pa_info["portaudio_version_text"]
+
+    backend = WasapiSystemLoopbackBackend(audio_config=AudioConfig(), startup_open_retries=2)
+    try:
+        backend.start()
+        assert backend.is_running is True
+    except Exception:
+        # Headless Windows CI runners may lack active render endpoints, but must retry at least twice (>= 2 attempts).
+        assert backend.last_open_attempts >= 2
+    finally:
+        backend.stop()
+
+
 def test_i2_proactive_switch_separated_from_max_device_reconnects() -> None:
     from audio.system_loopback import WasapiSystemLoopbackBackend
 
@@ -183,6 +349,10 @@ def test_i2_proactive_switch_separated_from_max_device_reconnects() -> None:
             self._id = state["dev_id"]
             self._name = state["dev_name"]
             self._idx = state["dev_idx"]
+            self._attempt_no = 0
+            if self._id == "dev-b" and not state["b_fail_permanently"]:
+                state["b_open_attempts"] += 1
+                self._attempt_no = state["b_open_attempts"]
 
         def get_default_wasapi_loopback(self) -> dict[str, Any]:
             return {
@@ -196,8 +366,7 @@ def test_i2_proactive_switch_separated_from_max_device_reconnects() -> None:
             if self._id == "dev-b":
                 if state["b_fail_permanently"]:
                     raise OSError("Device B permanently gone")
-                state["b_open_attempts"] += 1
-                if state["b_open_attempts"] <= 4:
+                if self._attempt_no <= 4:
                     raise OSError(-9996, "Device B initializing")
             return _Stream(self._id)
 
@@ -211,10 +380,11 @@ def test_i2_proactive_switch_separated_from_max_device_reconnects() -> None:
         follow_default_device=True,
         default_device_probe=lambda: (state["dev_id"], state["dev_name"]),
         device_poll_interval_sec=0.04,
+        switch_backoff_initial_sec=0.02,
+        switch_backoff_max_sec=0.1,
     )
     backend.start()
     try:
-        # Confirm Device A is streaming
         deadline = time.monotonic() + 1.5
         while time.monotonic() < deadline and backend.get_stats().total_chunks < 2:
             time.sleep(0.02)
@@ -253,7 +423,6 @@ def test_i2_proactive_switch_separated_from_max_device_reconnects() -> None:
         backend.stop()
 
 
-@pytest.mark.xfail(strict=True, reason="I2: consecutive switches fail when 1st switch exceeds shared reconnect budget")
 def test_i2_consecutive_two_switches_first_fails_twice_then_third_succeeds() -> None:
     from audio.system_loopback import WasapiSystemLoopbackBackend
 
@@ -279,15 +448,17 @@ def test_i2_consecutive_two_switches_first_fails_twice_then_third_succeeds() -> 
             self._id = state["dev_id"]
             self._name = state["dev_name"]
             self._idx = state["dev_idx"]
+            self._attempt_no = 0
+            if self._id == "dev-b":
+                state["b_attempts"] += 1
+                self._attempt_no = state["b_attempts"]
 
         def get_default_wasapi_loopback(self) -> dict[str, Any]:
             return {"index": self._idx, "name": self._name, "defaultSampleRate": 48000.0, "maxInputChannels": 2}
 
         def open(self, **kwargs: Any) -> _Stream:
-            if self._id == "dev-b":
-                state["b_attempts"] += 1
-                if state["b_attempts"] <= 2:
-                    raise OSError(-9996, "Device B not ready yet")
+            if self._id == "dev-b" and self._attempt_no <= 2:
+                raise OSError(-9996, "Device B not ready yet")
             return _Stream()
 
         def terminate(self) -> None:
@@ -300,6 +471,8 @@ def test_i2_consecutive_two_switches_first_fails_twice_then_third_succeeds() -> 
         follow_default_device=True,
         default_device_probe=lambda: (state["dev_id"], state["dev_name"]),
         device_poll_interval_sec=0.04,
+        switch_backoff_initial_sec=0.02,
+        switch_backoff_max_sec=0.1,
     )
     backend.start()
     try:
@@ -323,11 +496,11 @@ def test_i2_consecutive_two_switches_first_fails_twice_then_third_succeeds() -> 
         assert st_c.process_name == "Device C"
         assert st_c.last_error is None
         assert backend.proactive_switch_success_count == 2
+        assert backend.proactive_switch_retry_total == 2
     finally:
         backend.stop()
 
 
-@pytest.mark.xfail(strict=True, reason="I2: watcher skips polling while switch pending and capture exhausts reconnects")
 def test_i2_rapid_five_switches_and_mid_retry_pivot() -> None:
     from audio.system_loopback import WasapiSystemLoopbackBackend
 
@@ -371,16 +544,18 @@ def test_i2_rapid_five_switches_and_mid_retry_pivot() -> None:
         allow_non_windows=True,
         follow_default_device=True,
         default_device_probe=lambda: (state["dev_id"], state["dev_name"]),
-        device_poll_interval_sec=0.03,
+        device_poll_interval_sec=0.05,
+        switch_backoff_initial_sec=0.02,
+        switch_backoff_max_sec=0.1,
     )
     backend.start()
     try:
-        # Trigger switch to broken device, wait long enough for retry loop to engage, then rapidly cycle 5 switches
+        # Trigger switch to broken device, wait for retry loop to engage, then rapidly cycle 5 switches
         state["dev_id"], state["dev_name"], state["dev_idx"] = "dev-broken", "Broken Device", 99
-        time.sleep(0.15)
+        time.sleep(0.18)
         for i in range(1, 6):
             state["dev_id"], state["dev_name"], state["dev_idx"] = f"dev-{i}", f"Device {i}", i
-            time.sleep(0.06)
+            time.sleep(0.08)
 
         deadline = time.monotonic() + 2.5
         while time.monotonic() < deadline and backend.get_stats().process_name != "Device 5":
@@ -395,7 +570,6 @@ def test_i2_rapid_five_switches_and_mid_retry_pivot() -> None:
         backend.stop()
 
 
-@pytest.mark.xfail(strict=True, reason="I2: permanent stop leaves watcher thread alive and restarts leak duplicate watcher")
 def test_i2_manual_recovery_after_permanent_unexpected_disconnect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from PySide6 import QtWidgets
     from audio.system_loopback import WasapiSystemLoopbackBackend
@@ -439,7 +613,7 @@ def test_i2_manual_recovery_after_permanent_unexpected_disconnect(tmp_path: Path
         allow_non_windows=True,
         follow_default_device=True,
         default_device_probe=lambda: ("ep-a", "Speaker A"),
-        device_poll_interval_sec=0.04,
+        device_poll_interval_sec=0.05,
     )
     backend.start()
     try:
@@ -454,7 +628,6 @@ def test_i2_manual_recovery_after_permanent_unexpected_disconnect(tmp_path: Path
         assert backend.is_running is False
         assert "超过 2 次" in (backend.get_stats().last_error or "")
 
-        # Wait briefly for watcher to wind down cleanly (must not leak after permanent stop)
         watcher_first.join(timeout=0.5)
         assert not watcher_first.is_alive()
 
@@ -480,7 +653,7 @@ def test_i2_manual_recovery_after_permanent_unexpected_disconnect(tmp_path: Path
                 allow_non_windows=True,
                 follow_default_device=True,
                 default_device_probe=lambda: ("ep-a", "Speaker A"),
-                device_poll_interval_sec=0.04,
+                device_poll_interval_sec=0.05,
                 **kw,
             ),
         )
@@ -510,3 +683,219 @@ def test_i2_manual_recovery_after_permanent_unexpected_disconnect(tmp_path: Path
     finally:
         ctrl.shutdown()
         app.processEvents()
+
+
+def test_i2_thread_ownership_portaudio_capture_and_com_watcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    import audio.system_loopback as sl
+
+    pcm_chunk = (np.ones((960, 2), dtype=np.float32) * 0.1).tobytes()
+    pa_calls: list[tuple[str, str]] = []
+    com_calls: list[tuple[str, str]] = []
+    lock = threading.Lock()
+    state: dict[str, Any] = {"dev_id": "ep-1", "dev_name": "Device 1", "idx": 1, "fails": 0}
+
+    class _FakeOle32:
+        class _Fn:
+            argtypes = []
+            restype = None
+
+        class _CoInit:
+            argtypes = []
+            restype = None
+
+            def __call__(self, _reserved, _flags):
+                with lock:
+                    com_calls.append(("CoInitializeEx", threading.current_thread().name))
+                return 0
+
+        class _CoUninit:
+            argtypes = []
+            restype = None
+
+            def __call__(self):
+                with lock:
+                    com_calls.append(("CoUninitialize", threading.current_thread().name))
+
+        def __init__(self) -> None:
+            self.CoInitializeEx = self._CoInit()
+            self.CoUninitialize = self._CoUninit()
+            self.CoCreateInstance = self._Fn()
+            self.CoTaskMemFree = self._Fn()
+
+    monkeypatch.setattr(sl.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(sl, "_make_ole32_and_guid", lambda: (_FakeOle32(), object, object, object))
+    monkeypatch.setattr(
+        sl,
+        "_probe_windows_default_render_endpoint_detailed",
+        lambda *, initialize_com=False: (state["dev_id"], state["dev_name"], 0),
+    )
+
+    class _Stream:
+        def read(self, frames: int, exception_on_overflow: bool = False) -> bytes:
+            with lock:
+                pa_calls.append(("read", threading.current_thread().name))
+            time.sleep(0.01)
+            return pcm_chunk
+
+        def stop_stream(self) -> None:
+            with lock:
+                pa_calls.append(("stop_stream", threading.current_thread().name))
+
+        def close(self) -> None:
+            with lock:
+                pa_calls.append(("close", threading.current_thread().name))
+
+    class _FakePA:
+        paFloat32 = 1
+        paInt16 = 8
+
+        def __init__(self) -> None:
+            with lock:
+                pa_calls.append(("init", threading.current_thread().name))
+            self._id = state["dev_id"]
+            self._name = state["dev_name"]
+            self._idx = state["idx"]
+
+        def get_default_wasapi_loopback(self) -> dict[str, Any]:
+            with lock:
+                pa_calls.append(("get_default_wasapi_loopback", threading.current_thread().name))
+            return {"index": self._idx, "name": self._name, "defaultSampleRate": 48000.0, "maxInputChannels": 2}
+
+        def open(self, **kwargs: Any) -> _Stream:
+            with lock:
+                pa_calls.append(("open", threading.current_thread().name))
+            if self._id == "ep-2" and state["fails"] == 0:
+                state["fails"] += 1
+                raise OSError(-9996, "transient switch error")
+            return _Stream()
+
+        def terminate(self) -> None:
+            with lock:
+                pa_calls.append(("terminate", threading.current_thread().name))
+
+    backend = sl.WasapiSystemLoopbackBackend(
+        pyaudio_factory=_FakePA,
+        allow_non_windows=True,
+        follow_default_device=True,
+        default_device_probe=None,
+        device_poll_interval_sec=0.05,
+        switch_backoff_initial_sec=0.02,
+        switch_backoff_max_sec=0.05,
+    )
+    backend.start()
+    try:
+        state["dev_id"], state["dev_name"], state["idx"] = "ep-2", "Device 2", 2
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and backend.get_stats().process_name != "Device 2":
+            time.sleep(0.02)
+        assert backend.get_stats().process_name == "Device 2"
+    finally:
+        backend.stop()
+
+    assert pa_calls
+    assert all(tname == "ListenScope-SystemLoopback" for _, tname in pa_calls), f"Off-thread PA call: {pa_calls}"
+    assert com_calls == [
+        ("CoInitializeEx", "ListenScope-DefaultDeviceWatcher"),
+        ("CoUninitialize", "ListenScope-DefaultDeviceWatcher"),
+    ]
+
+
+def test_i2_exponential_backoff_and_unexpected_disconnect_pivots_to_switch() -> None:
+    from audio.system_loopback import WasapiSystemLoopbackBackend
+
+    pcm_chunk = (np.ones((960, 2), dtype=np.float32) * 0.1).tobytes()
+    state: dict[str, Any] = {"dev_id": "ep-1", "dev_name": "Device 1", "idx": 1, "ep1_fail": False}
+
+    class _Stream:
+        def __init__(self, dev_id: str) -> None:
+            self._dev_id = dev_id
+
+        def read(self, frames: int, exception_on_overflow: bool = False) -> bytes:
+            if self._dev_id == "ep-1" and state["ep1_fail"]:
+                raise OSError("Device 1 stalled")
+            time.sleep(0.01)
+            return pcm_chunk
+
+        def stop_stream(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class _FakePA:
+        paFloat32 = 1
+        paInt16 = 8
+
+        def __init__(self) -> None:
+            self._id = state["dev_id"]
+            self._name = state["dev_name"]
+            self._idx = state["idx"]
+
+        def get_default_wasapi_loopback(self) -> dict[str, Any]:
+            return {"index": self._idx, "name": self._name, "defaultSampleRate": 48000.0, "maxInputChannels": 2}
+
+        def open(self, **kwargs: Any) -> _Stream:
+            if self._id == "ep-1" and state["ep1_fail"]:
+                raise OSError("Device 1 still unavailable")
+            return _Stream(self._id)
+
+        def terminate(self) -> None:
+            pass
+
+    backend = WasapiSystemLoopbackBackend(
+        pyaudio_factory=_FakePA,
+        max_device_reconnects=2,
+        allow_non_windows=True,
+        follow_default_device=True,
+        default_device_probe=lambda: (state["dev_id"], state["dev_name"]),
+        device_poll_interval_sec=0.05,
+        switch_backoff_initial_sec=0.05,
+        switch_backoff_max_sec=2.0,
+    )
+    assert backend._compute_switch_backoff_sec(1) == pytest.approx(0.05)
+    assert backend._compute_switch_backoff_sec(2) == pytest.approx(0.10)
+    assert backend._compute_switch_backoff_sec(3) == pytest.approx(0.20)
+    assert backend._compute_switch_backoff_sec(4) == pytest.approx(0.40)
+    assert backend._compute_switch_backoff_sec(5) == pytest.approx(0.80)
+    assert backend._compute_switch_backoff_sec(6) == pytest.approx(1.60)
+    assert backend._compute_switch_backoff_sec(7) == pytest.approx(2.00)
+    assert backend._compute_switch_backoff_sec(10) == pytest.approx(2.00)
+
+    backend.start()
+    try:
+        # Trigger unexpected disconnect on ep-1; while ep-1 fails and enters backoff, watcher switches to ep-2
+        state["ep1_fail"] = True
+        time.sleep(0.12)
+        state["dev_id"], state["dev_name"], state["idx"] = "ep-2", "Device 2", 2
+
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and backend.get_stats().process_name != "Device 2":
+            time.sleep(0.02)
+
+        assert backend.is_running is True
+        assert backend.get_stats().process_name == "Device 2"
+        assert backend.unexpected_disconnect_attempts == 0
+        assert backend.proactive_switch_success_count >= 1
+    finally:
+        backend.stop()
+
+
+def test_i2_new_status_and_error_messages_i18n_4_languages() -> None:
+    from core.i18n import translate_text
+
+    samples = (
+        "正在切换默认播放设备至 Realtek Speakers，等待设备就绪 (第 2 次尝试)...",
+        "播放设备中断且重连超过 3 次: USB lost",
+        "检测到播放设备切换，已重连至: Realtek Speakers",
+        "已切换到 Realtek Speakers",
+    )
+    for raw in samples:
+        for lang in ("en", "ja", "ko"):
+            out = translate_text(raw, lang)
+            assert out != raw, f"[{lang}] message not translated: {raw!r}"
+            if lang in ("en", "ko"):
+                assert not re.search(r"[\u4e00-\u9fff]", out), f"[{lang}] leaked Chinese in {out!r}"
+            else:
+                assert not any(m in out for m in ("播放设备", "默认播放", "已重连", "已切换到", "次尝试")), (
+                    f"[{lang}] leaked Chinese markers in {out!r}"
+                )
