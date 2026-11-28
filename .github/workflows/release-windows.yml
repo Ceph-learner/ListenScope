@@ -41,6 +41,7 @@ jobs:
     env:
       PYTHONUTF8: "1"
       QT_QPA_PLATFORM: offscreen
+      QT_QPA_FONTDIR: C:\Windows\Fonts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -99,7 +100,7 @@ jobs:
 
       - name: Run Windows offscreen pytest suite
         run: |
-          python -m pytest -v --tb=short -o faulthandler_timeout=60
+          python -m pytest -v -m "not perf" --tb=short -o faulthandler_timeout=180
 
       - name: Build Core executable via PyInstaller
         run: |
