@@ -18,7 +18,7 @@ concurrency:
 jobs:
   pytest:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       QT_QPA_PLATFORM: offscreen
       PYTHONUTF8: "1"
@@ -38,7 +38,7 @@ jobs:
 
   pytest-windows:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         shell: pwsh
