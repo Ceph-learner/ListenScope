@@ -899,3 +899,333 @@ def test_i2_new_status_and_error_messages_i18n_4_languages() -> None:
                 assert not any(m in out for m in ("播放设备", "默认播放", "已重连", "已切换到", "次尝试")), (
                     f"[{lang}] leaked Chinese markers in {out!r}"
                 )
+
+
+@pytest.mark.xfail(strict=True, reason="I1-R2: startup timeout not scaled by retries and last_open_timings missing")
+def test_i1_r2_startup_timeout_scales_with_retries_logs_timings_and_10_restarts() -> None:
+    from audio.system_loopback import WasapiSystemLoopbackBackend
+
+    default_backend = WasapiSystemLoopbackBackend(allow_non_windows=True, follow_default_device=False)
+    assert default_backend._compute_startup_wait_sec() >= 15.0
+
+    pcm_chunk = (np.ones((960, 2), dtype=np.float32) * 0.1).tobytes()
+    required_timing_keys = {
+        "pa_init_ms",
+        "enum_default_ms",
+        "fallback_enum_ms",
+        "open_f32_ms",
+        "open_i16_ms",
+        "terminate_ms",
+        "total_ms",
+        "status",
+        "device_name",
+        "error",
+    }
+
+    for run_idx in range(10):
+        attempts = {"n": 0}
+
+        class _Stream:
+            def read(self, frames: int, exception_on_overflow: bool = False) -> bytes:
+                time.sleep(0.01)
+                return pcm_chunk
+
+            def stop_stream(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        class _FakePA:
+            paFloat32 = 1
+            paInt16 = 8
+
+            def __init__(self) -> None:
+                attempts["n"] += 1
+                self._attempt = attempts["n"]
+
+            def get_default_wasapi_loopback(self) -> dict[str, Any]:
+                return {
+                    "index": 1,
+                    "name": "Speaker [Loopback]",
+                    "defaultSampleRate": 48000.0,
+                    "maxInputChannels": 2,
+                    "isLoopbackDevice": True,
+                }
+
+            def open(self, **kwargs: Any) -> _Stream:
+                if self._attempt <= 2:
+                    # Two slow failures (>0.35s single-attempt budget combined) before 3rd succeeds
+                    time.sleep(0.11)
+                    raise OSError(-9996, "Invalid device during WASAPI settle")
+                return _Stream()
+
+            def terminate(self) -> None:
+                pass
+
+        backend = WasapiSystemLoopbackBackend(
+            pyaudio_factory=_FakePA,
+            allow_non_windows=True,
+            follow_default_device=False,
+            startup_open_retries=2,
+            startup_retry_delay_sec=0.05,
+            startup_per_attempt_timeout_sec=0.35,
+        )
+        t0 = time.monotonic()
+        backend.start()
+        try:
+            elapsed = time.monotonic() - t0
+            assert elapsed > 0.35, f"Run {run_idx} finished too fast ({elapsed:.3f}s) to test multi-attempt budget"
+            assert backend.is_running is True
+            assert backend.last_open_attempts == 3
+            timings = backend.last_open_timings
+            assert len(timings) == 3
+            for item in timings:
+                assert required_timing_keys.issubset(item.keys())
+            assert timings[0]["status"] == "failed"
+            assert timings[1]["status"] == "failed"
+            assert timings[2]["status"] == "opened"
+            assert timings[2]["device_name"] == "Speaker [Loopback]"
+            assert timings[2]["error"] == ""
+            # Shallow-copy safety check
+            timings[0]["status"] = "mutated"
+            assert backend.last_open_timings[0]["status"] == "failed"
+        finally:
+            backend.stop()
+
+
+@pytest.mark.xfail(strict=True, reason="I2-R2: switch/idle silence keepalive and UI device name preservation not implemented")
+def test_i2_r2_four_real_switches_buffer_monotonic_no_1s_stall_and_device_name_preserved() -> None:
+    from PySide6 import QtWidgets
+    from audio.playback import StemMixerEngine
+    from audio.ring_buffer import FixedRingBuffer
+    from audio.system_loopback import WasapiSystemLoopbackBackend
+    from core.config import AIConfig, AudioConfig, ResourceLimits
+    from core.models import CaptureMode, CaptureStats
+    from core.system_probe import probe_system
+    from ui.main_window import ListenScopeMainWindow
+
+    pcm_chunk = (np.ones((960, 2), dtype=np.float32) * 0.1).tobytes()
+    pa_threads: list[tuple[str, str]] = []
+    lock = threading.Lock()
+    state: dict[str, Any] = {
+        "dev_id": "ep-a",
+        "dev_name": "XIBERIA USB Audio",
+        "idx": 1,
+        "b_fails_remaining": 0,
+        "slow_open_sec": 0.0,
+        "idle_zero_until": 0.0,
+    }
+
+    class _Stream:
+        def __init__(self, dev_name: str) -> None:
+            self._dev_name = dev_name
+
+        def get_read_available(self) -> int:
+            with lock:
+                pa_threads.append(("get_read_available", threading.current_thread().name))
+            if time.monotonic() < state["idle_zero_until"]:
+                return 0
+            return 960
+
+        def read(self, frames: int, exception_on_overflow: bool = False) -> bytes:
+            with lock:
+                pa_threads.append(("read", threading.current_thread().name))
+            time.sleep(0.015)
+            return pcm_chunk
+
+        def stop_stream(self) -> None:
+            with lock:
+                pa_threads.append(("stop_stream", threading.current_thread().name))
+
+        def close(self) -> None:
+            with lock:
+                pa_threads.append(("close", threading.current_thread().name))
+
+    class _FakePA:
+        paFloat32 = 1
+        paInt16 = 8
+
+        def __init__(self) -> None:
+            with lock:
+                pa_threads.append(("init", threading.current_thread().name))
+            self._id = state["dev_id"]
+            self._name = state["dev_name"]
+            self._idx = state["idx"]
+
+        def get_default_wasapi_loopback(self) -> dict[str, Any]:
+            with lock:
+                pa_threads.append(("get_default_wasapi_loopback", threading.current_thread().name))
+            return {
+                "index": self._idx,
+                "name": self._name,
+                "defaultSampleRate": 48000.0,
+                "maxInputChannels": 2,
+            }
+
+        def open(self, **kwargs: Any) -> _Stream:
+            with lock:
+                pa_threads.append(("open", threading.current_thread().name))
+            if state["slow_open_sec"] > 0.0:
+                time.sleep(state["slow_open_sec"])
+            if state["b_fails_remaining"] > 0 and self._id == "ep-b":
+                state["b_fails_remaining"] -= 1
+                raise OSError(-9996, "Device B warming up")
+            return _Stream(self._name)
+
+        def terminate(self) -> None:
+            with lock:
+                pa_threads.append(("terminate", threading.current_thread().name))
+
+    ring = FixedRingBuffer(audio_config=AudioConfig())
+    backend = WasapiSystemLoopbackBackend(
+        pyaudio_factory=_FakePA,
+        max_device_reconnects=2,
+        allow_non_windows=True,
+        follow_default_device=True,
+        default_device_probe=lambda: (state["dev_id"], state["dev_name"]),
+        device_poll_interval_sec=0.04,
+        switch_backoff_initial_sec=0.08,
+        switch_backoff_max_sec=0.25,
+        idle_silence_grace_sec=0.08,
+    )
+
+    drain_stop = threading.Event()
+    stall_info = {"max_gap_sec": 0.0, "last_growth_ts": time.monotonic(), "saw_unverified_name": False}
+
+    def _drain() -> None:
+        while not drain_stop.is_set():
+            ch = backend.read_chunk(timeout=0.03)
+            if ch is not None and ch.shape[0] > 0:
+                ring.write(ch)
+                now = time.monotonic()
+                gap = now - stall_info["last_growth_ts"]
+                if gap > stall_info["max_gap_sec"]:
+                    stall_info["max_gap_sec"] = gap
+                stall_info["last_growth_ts"] = now
+
+    drain_thread = threading.Thread(target=_drain, name="Test-Drain", daemon=True)
+    backend.start()
+    drain_thread.start()
+    try:
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline and ring.total_written_frames < 1920:
+            time.sleep(0.02)
+        assert ring.total_written_frames >= 1920
+        stall_info["last_growth_ts"] = time.monotonic()
+        stall_info["max_gap_sec"] = 0.0
+
+        # 4 real proactive switches: A -> B -> A -> B -> A
+        transitions = [
+            ("ep-b", "Realtek High Definition Audio", 2, 2, 0.15, True),
+            ("ep-a", "XIBERIA USB Audio", 1, 0, 0.25, False),
+            ("ep-b", "Realtek High Definition Audio", 2, 2, 0.12, False),
+            ("ep-a", "XIBERIA USB Audio", 1, 0, 0.20, False),
+        ]
+        for ep_id, ep_name, idx, fails, slow_s, check_unverified in transitions:
+            state["b_fails_remaining"] = fails * 2  # f32 + i16 per open attempt
+            state["slow_open_sec"] = slow_s
+            state["dev_id"], state["dev_name"], state["idx"] = ep_id, ep_name, idx
+            if check_unverified:
+                # Before B opens, process_name must not prematurely claim Realtek
+                time.sleep(0.08)
+                if backend.get_stats().process_name == ep_name and state["b_fails_remaining"] > 0:
+                    stall_info["saw_unverified_name"] = True
+            deadline = time.monotonic() + 4.0
+            while time.monotonic() < deadline and backend.get_stats().process_name != ep_name:
+                time.sleep(0.02)
+            assert backend.get_stats().process_name == ep_name
+            # Also exercise idle silence window > idle_silence_grace_sec after opening
+            state["idle_zero_until"] = time.monotonic() + 0.30
+            time.sleep(0.32)
+
+        assert stall_info["saw_unverified_name"] is False
+        assert backend.is_running is True
+        assert backend.proactive_switch_success_count == 4
+        assert backend.unexpected_disconnect_attempts == 0
+        assert backend.get_stats().process_name == "XIBERIA USB Audio"
+        assert stall_info["max_gap_sec"] < 1.0, f"Detected buffer stall >= 1.0s: {stall_info['max_gap_sec']:.3f}s"
+
+        # Verify keepalive silence emission never resets _unexpected_disconnect_attempts
+        backend._unexpected_disconnect_attempts = 2
+        backend._emit_silence_chunk(48000, "XIBERIA USB Audio", 960)
+        assert backend.unexpected_disconnect_attempts == 2
+    finally:
+        drain_stop.set()
+        t_stop = time.monotonic()
+        backend.stop()
+        stop_elapsed = time.monotonic() - t_stop
+        drain_thread.join(timeout=1.0)
+
+    assert stop_elapsed < 0.5, f"backend.stop() took {stop_elapsed:.3f}s >= 0.5s"
+    assert pa_threads
+    assert all(tname == "ListenScope-SystemLoopback" for _, tname in pa_threads), f"Off-thread PA call: {pa_threads}"
+    assert not any(t.name == "ListenScope-SwitchSilenceKeepalive" and t.is_alive() for t in threading.enumerate())
+
+    # Verify UI preserves _loopback_device_name when stats.process_name is transiently empty
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    mixer = StemMixerEngine(sample_rate=48000, channels=2)
+    win = ListenScopeMainWindow(
+        hardware_report=probe_system(),
+        resource_limits=ResourceLimits(),
+        ai_config=AIConfig(),
+        mixer_engine=mixer,
+    )
+    try:
+        win.update_capture_stats(
+            CaptureStats(
+                mode=CaptureMode.SYSTEM_LOOPBACK,
+                pid=None,
+                process_name="XIBERIA USB Audio",
+                sample_rate=48000,
+                channels=2,
+                dtype="float32",
+                is_running=True,
+            ),
+            4.0,
+        )
+        assert win._loopback_device_name == "XIBERIA USB Audio"
+        assert "XIBERIA" in win._acid_footer.status_lbl.text()
+
+        win.update_capture_stats(
+            CaptureStats(
+                mode=CaptureMode.SYSTEM_LOOPBACK,
+                pid=None,
+                process_name="",
+                sample_rate=48000,
+                channels=2,
+                dtype="float32",
+                is_running=True,
+            ),
+            4.2,
+        )
+        assert win._loopback_device_name == "XIBERIA USB Audio"
+        assert "XIBERIA" in win._acid_footer.status_lbl.text()
+    finally:
+        win.close()
+        mixer.close()
+        app.processEvents()
+
+
+@pytest.mark.xfail(strict=True, reason="I2-R2: scripts/rapid_switch.ps1 not added yet")
+def test_i2_r2_rapid_switch_ps1_substring_and_regex_matching_contract() -> None:
+    ps1_path = REPO_ROOT / "scripts" / "rapid_switch.ps1"
+    assert ps1_path.is_file(), "scripts/rapid_switch.ps1 missing"
+    text = ps1_path.read_text("utf-8")
+
+    for required in (
+        "IMMDeviceEnumerator",
+        "IPolicyConfig",
+        "SetDefaultEndpoint",
+        "$Devices",
+        "XIBERIA",
+        "Realtek",
+        "$Rounds",
+        "$IntervalSeconds",
+        "$Regex",
+        "OrdinalIgnoreCase",
+        "NO_MATCH",
+        "exit 1",
+    ):
+        assert required in text, f"Missing {required!r} in scripts/rapid_switch.ps1"
+
